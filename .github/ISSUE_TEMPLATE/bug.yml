@@ -1,0 +1,15 @@
+name: "Bug"
+description: "버그가 생겼어요 👾"
+labels: ["버그"]
+body:
+  - type: textarea
+    attributes:
+      label: Describe
+      description: 버그에 관한 설명과 재현 방법을 적어주세요.
+      placeholder: 특정 요청에서 예상한 응답 대신 500 오류가 발생합니다.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional
+      description: 별도로 알려줘야 할 사항이나 추가사항을 작성해주세요.

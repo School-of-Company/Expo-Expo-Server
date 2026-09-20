@@ -1,0 +1,15 @@
+name: "Todo"
+description: "해야할 것이 있나요??🤔"
+labels: ["할일"]
+body:
+  - type: textarea
+    attributes:
+      label: Describe
+      description: 할 일의 설명을 작성해주세요.
+      placeholder: 행사 등록 API 구현
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional
+      description: 별도로 알려줘야 할 사항이나 추가사항을 작성해주세요.
