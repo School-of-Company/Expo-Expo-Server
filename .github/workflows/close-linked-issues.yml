@@ -23,17 +23,26 @@ jobs:
             while ((match = regex.exec(body)) !== null) {
               numbers.add(Number(match[2]));
             }
+            const failures = [];
             for (const number of numbers) {
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: number,
-                state: 'closed',
-              });
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: number,
-                body: `#${context.payload.pull_request.number} 머지로 자동 종료되었습니다.`,
-              });
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  state: 'closed',
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  body: `#${context.payload.pull_request.number} 머지로 자동 종료되었습니다.`,
+                });
+              } catch (error) {
+                failures.push(number);
+                core.error(`#${number} 자동 종료 실패: ${error.message}`);
+              }
+            }
+            if (failures.length > 0) {
+              core.setFailed(`자동 종료에 실패한 이슈: ${failures.map(number => `#${number}`).join(', ')}`);
             }
