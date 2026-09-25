@@ -44,6 +44,3 @@ out/
 .env
 .env.*
 !.env.example
-
-### Local planning and verification ###
-/.omo/
