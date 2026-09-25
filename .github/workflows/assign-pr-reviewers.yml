@@ -1,22 +1,22 @@
-name: Assign PR Assignees
+name: Assign PR Reviewers
 
 on:
   pull_request:
     types: [opened]
 
 jobs:
-  assign-assignees:
+  assign-reviewers:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
     steps:
-      - name: PR 담당자 지정
+      - name: PR 리뷰어 지정
         uses: actions/github-script@v7
         with:
           script: |
-            await github.rest.issues.addAssignees({
+            await github.rest.pulls.requestReviewers({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              assignees: ['suuuuuuminnnnnn', 'jyx-07'],
+              pull_number: context.payload.pull_request.number,
+              reviewers: ['suuuuuuminnnnnn', 'jyx-07'],
             });
