@@ -141,6 +141,16 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `실제 HTTP 목록은 최신 박람회부터 반환한다`() {
+        val olderId = createExpo()
+        val newerId = createExpo()
+
+        val listResponse = request("/expo", "GET")
+
+        objectMapper.readTree(listResponse.body()).toList().map { it.get("id").asString() } shouldBe listOf(newerId, olderId)
+    }
+
+    @Test
     fun `실제 HTTP 생성은 빈 프로그램 목록을 허용한다`() {
         val emptyProgramsRequest = objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode
         emptyProgramsRequest.putArray("addStandardProRequestDto")

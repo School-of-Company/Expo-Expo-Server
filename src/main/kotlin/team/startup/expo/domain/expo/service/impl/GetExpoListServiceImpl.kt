@@ -1,5 +1,6 @@
 package team.startup.expo.domain.expo.service.impl
 
+import org.springframework.data.domain.Sort
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoSummaryResponse
@@ -12,7 +13,7 @@ class GetExpoListServiceImpl(
 ) : GetExpoListService {
     @Transactional(readOnly = true)
     override fun execute(): List<ExpoSummaryResponse> =
-        expoRepository.findAll().map { expo ->
+        expoRepository.findAll(Sort.by(Sort.Direction.DESC, "id")).map { expo ->
             ExpoSummaryResponse(
                 id = expo.id,
                 title = expo.title,
