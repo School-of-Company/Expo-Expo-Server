@@ -1,35 +1,27 @@
 package team.startup.expo.global.common.id
 
 import org.springframework.stereotype.Component
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.security.SecureRandom
 import java.time.Instant
+import java.util.UUID
 
+// UUIDv7 (RFC 9562): 48비트 unix millis + version 7 + variant 10
 @Component
 class ExpoIdGenerator {
     private val random = SecureRandom()
 
     fun generate(): String {
-        val bytes = ByteArray(16)
-        ByteBuffer
-            .wrap(bytes)
-            .order(ByteOrder.BIG_ENDIAN)
-            .putLong(Instant.now().toEpochMilli())
-            .putLong(random.nextLong())
+        val millis = Instant.now().toEpochMilli()
+        val msb = (millis shl 16) or VERSION_7 or (random.nextLong() and RAND_A_MASK)
+        val lsb = (random.nextLong() and RAND_B_MASK) or VARIANT_RFC
 
-        return buildString(36) {
-            bytes.forEachIndexed { index, byte ->
-                if (index == 6 || index == 8 || index == 10 || index == 12) {
-                    append('-')
-                }
-                append(HEX_DIGITS[(byte.toInt() ushr 4) and 0x0F])
-                append(HEX_DIGITS[byte.toInt() and 0x0F])
-            }
-        }
+        return UUID(msb, lsb).toString()
     }
 
     private companion object {
-        const val HEX_DIGITS = "0123456789abcdef"
+        const val VERSION_7 = 0x7000L
+        const val RAND_A_MASK = 0x0FFFL
+        const val RAND_B_MASK = 0x3FFFFFFFFFFFFFFFL
+        const val VARIANT_RFC = Long.MIN_VALUE
     }
 }

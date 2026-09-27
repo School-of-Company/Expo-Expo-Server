@@ -437,7 +437,7 @@ class ExpoApiPostgresHttpTests {
 
     companion object {
         private const val TEST_AUTHORITY_HEADER = "X-Test-Authority"
-        private const val ID_PATTERN = "^[0-9a-f]{12}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{8}$"
+        private const val ID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         private const val STANDARD_PROGRAM_JSON =
             """{
                   "title": "일반 프로그램",
