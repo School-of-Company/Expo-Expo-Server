@@ -9,12 +9,17 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
+import team.startup.expo.global.exception.ErrorResponse
+import tools.jackson.databind.ObjectMapper
 
 @Configuration
 @EnableWebSecurity
 class SecurityConfig {
     @Bean
-    fun securityFilterChain(http: HttpSecurity): SecurityFilterChain {
+    fun securityFilterChain(
+        http: HttpSecurity,
+        objectMapper: ObjectMapper,
+    ): SecurityFilterChain {
         http
             .csrf { it.disable() }
             .cors { it.disable() }
@@ -24,12 +29,14 @@ class SecurityConfig {
             .exceptionHandling { exceptions ->
                 exceptions
                     .authenticationEntryPoint { _, response, _ ->
-                        writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
+                        writeError(objectMapper, response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
                     }.accessDeniedHandler { _, response, _ ->
-                        writeError(response, HttpServletResponse.SC_FORBIDDEN, "접근 권한이 없습니다.")
+                        writeError(objectMapper, response, HttpServletResponse.SC_FORBIDDEN, "접근 권한이 없습니다.")
                     }
             }.authorizeHttpRequests { requests ->
                 requests
+                    .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
+                    .permitAll()
                     .requestMatchers(HttpMethod.POST, "/expo")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/expo", "/expo/{expo_id}")
@@ -44,6 +51,7 @@ class SecurityConfig {
     }
 
     private fun writeError(
+        objectMapper: ObjectMapper,
         response: HttpServletResponse,
         status: Int,
         message: String,
@@ -51,7 +59,7 @@ class SecurityConfig {
         response.status = status
         response.characterEncoding = Charsets.UTF_8.name()
         response.contentType = MediaType.APPLICATION_JSON_VALUE
-        response.writer.write("{\"status\":$status,\"message\":\"$message\"}")
+        objectMapper.writeValue(response.writer, ErrorResponse(status = status, message = message))
     }
 
     private companion object {

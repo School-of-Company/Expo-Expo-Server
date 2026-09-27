@@ -123,6 +123,24 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `Spring 기본 예외는 원래 상태 코드를 유지하고 health는 인증 없이 열린다`() {
+        val unsupportedMediaType =
+            httpClient.send(
+                HttpRequest
+                    .newBuilder(URI.create("http://localhost:$port/expo"))
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_PLAIN_VALUE)
+                    .header(TEST_AUTHORITY_HEADER, "ROLE_ADMIN")
+                    .POST(HttpRequest.BodyPublishers.ofString(VALID_REQUEST_JSON))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+        val health = request("/actuator/health", "GET", authority = null)
+
+        assertError(unsupportedMediaType, expectedStatus = 415, expectedMessage = "요청을 처리할 수 없습니다.")
+        health.statusCode() shouldBe 200
+    }
+
+    @Test
     fun `실제 HTTP 생성은 빈 프로그램 목록을 허용한다`() {
         val emptyProgramsRequest = objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode
         emptyProgramsRequest.putArray("addStandardProRequestDto")
