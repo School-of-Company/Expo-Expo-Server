@@ -1,5 +1,6 @@
 package team.startup.expo.domain.expo.presentation
 
+import io.swagger.v3.oas.annotations.Operation
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -44,6 +45,10 @@ class ExpoController(
         @PathVariable("expo_id") expoId: String,
     ): ResponseEntity<ExpoDetailResponse> = ResponseEntity.ok(getExpoDetailService.execute(expoId))
 
+    @Operation(
+        summary = "박람회 수정",
+        description = "모든 필드를 필수로 받아 전체 교체합니다. 기존 프로그램은 id와 함께 모두 보내야 하며, 누락되면 409를 반환합니다.",
+    )
     @PatchMapping("/{expo_id}")
     fun updateExpo(
         @PathVariable("expo_id") expoId: String,
