@@ -12,6 +12,7 @@ import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.global.common.id.ExpoIdGenerator
+import team.startup.expo.global.common.time.toProgramDateTime
 
 @Service
 class CreateExpoServiceImpl(
@@ -42,8 +43,8 @@ class CreateExpoServiceImpl(
             request.addStandardProRequestDto.map { program ->
                 StandardProgram(
                     title = program.title,
-                    startedAt = program.startedAt.toString(),
-                    endedAt = program.endedAt.toString(),
+                    startedAt = program.startedAt.toProgramDateTime(),
+                    endedAt = program.endedAt.toProgramDateTime(),
                     expo = expo,
                 )
             },
@@ -52,8 +53,8 @@ class CreateExpoServiceImpl(
             request.addTrainingProRequestDto.map { program ->
                 TrainingProgram(
                     title = program.title,
-                    startedAt = program.startedAt.toString(),
-                    endedAt = program.endedAt.toString(),
+                    startedAt = program.startedAt.toProgramDateTime(),
+                    endedAt = program.endedAt.toProgramDateTime(),
                     category = program.category,
                     expo = expo,
                 )

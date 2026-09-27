@@ -11,6 +11,7 @@ import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.global.common.time.toProgramDateTime
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
@@ -63,8 +64,8 @@ class UpdateExpoServiceImpl(
                 StandardProgram(
                     id = program.id,
                     title = program.title,
-                    startedAt = program.startedAt.toString(),
-                    endedAt = program.endedAt.toString(),
+                    startedAt = program.startedAt.toProgramDateTime(),
+                    endedAt = program.endedAt.toProgramDateTime(),
                     expo = updatedExpo,
                 )
             },
@@ -74,8 +75,8 @@ class UpdateExpoServiceImpl(
                 TrainingProgram(
                     id = program.id,
                     title = program.title,
-                    startedAt = program.startedAt.toString(),
-                    endedAt = program.endedAt.toString(),
+                    startedAt = program.startedAt.toProgramDateTime(),
+                    endedAt = program.endedAt.toProgramDateTime(),
                     category = program.category,
                     expo = updatedExpo,
                 )

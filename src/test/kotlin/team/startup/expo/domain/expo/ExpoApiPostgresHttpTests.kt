@@ -97,14 +97,14 @@ class ExpoApiPostgresHttpTests {
         expo.yesterdayApplicationPerson shouldBe 0L
         standardProgramRepository.findByExpo(expo).single().let { program ->
             program.title shouldBe "일반 프로그램"
-            program.startedAt shouldBe "2026-09-24T09:00"
-            program.endedAt shouldBe "2026-09-24T10:00"
+            program.startedAt shouldBe "2026-09-24 09:00"
+            program.endedAt shouldBe "2026-09-24 10:00"
             program.expo?.id shouldBe expoId
         }
         trainingProgramRepository.findByExpo(expo).single().let { program ->
             program.title shouldBe "연수 프로그램"
-            program.startedAt shouldBe "2026-09-24T10:00"
-            program.endedAt shouldBe "2026-09-24T11:00"
+            program.startedAt shouldBe "2026-09-24 10:00"
+            program.endedAt shouldBe "2026-09-24 11:00"
             program.category.name shouldBe "ESSENTIAL"
             program.expo?.id shouldBe expoId
         }
