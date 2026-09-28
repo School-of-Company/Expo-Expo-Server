@@ -9,6 +9,8 @@ interface StandardProgramRepository : JpaRepository<StandardProgram, Long> {
 
     fun findByExpo(expo: Expo): List<StandardProgram>
 
+    fun findByExpoIdOrderByIdAsc(expoId: String): List<StandardProgram>
+
     fun findByIdAndExpoId(
         id: Long,
         expoId: String,

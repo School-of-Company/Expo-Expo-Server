@@ -41,6 +41,8 @@ class SecurityConfig {
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/expo", "/expo/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
+                    .requestMatchers(HttpMethod.GET, "/standard/program/{expo_id}", "/training/program/{expo_id}")
+                    .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.PATCH, "/expo/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .anyRequest()
