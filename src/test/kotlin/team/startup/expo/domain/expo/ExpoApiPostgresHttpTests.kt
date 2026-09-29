@@ -153,6 +153,39 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `페이지 목록은 전체 건수와 정렬된 일부 결과를 반환한다`() {
+        val ids = (1..5).map { createExpo() }
+
+        val first = objectMapper.readTree(request("/expo?page=0&size=2", "GET").body())
+        val last = objectMapper.readTree(request("/expo?page=2&size=2", "GET").body())
+        val pastEnd = objectMapper.readTree(request("/expo?page=3&size=2", "GET").body())
+
+        first.get("content").toList().map { it.get("id").asString() } shouldBe ids.sortedDescending().take(2)
+        first.get("totalElements").asLong() shouldBe 5L
+        first.get("totalPages").asInt() shouldBe 3
+        first.get("hasNext").asBoolean() shouldBe true
+        last.get("content").size() shouldBe 1
+        last.get("hasNext").asBoolean() shouldBe false
+        pastEnd.get("content").isEmpty shouldBe true
+        pastEnd.get("totalElements").asLong() shouldBe 5L
+    }
+
+    @Test
+    fun `페이지 기본값 빈 결과 입력 오류와 권한을 구분한다`() {
+        val empty = objectMapper.readTree(request("/expo?size=2", "GET").body())
+        empty.get("page").asInt() shouldBe 0
+        empty.get("size").asInt() shouldBe 2
+        empty.get("totalPages").asInt() shouldBe 0
+        empty.get("content").isEmpty shouldBe true
+
+        listOf("page=-1", "size=0", "size=101", "page=abc", "page=", "size=").forEach { query ->
+            assertError(request("/expo?$query", "GET"), 400, "잘못된 요청입니다.")
+        }
+        assertError(request("/expo?page=0", "GET", authority = null), 401, "인증이 필요합니다.")
+        assertError(request("/expo?page=0", "GET", authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+    }
+
+    @Test
     fun `실제 HTTP 생성은 빈 프로그램 목록을 허용한다`() {
         val emptyProgramsRequest = objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode
         emptyProgramsRequest.putArray("addStandardProRequestDto")

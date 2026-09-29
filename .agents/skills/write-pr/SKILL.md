@@ -58,14 +58,13 @@ Read `.agents/skills/write-pr/references/commit-conventions.md` for type and sco
 
 **Title** — Generate 3 direct title options without bracketed prefixes:
 
-- Description: Korean, concise, no emojis, max 50 characters total
+- Description: Korean, concise, max 50 characters total
 - Do not add `[server]`, `[form]`, `[global]`, `[ci/cd]`, or similar prefixes
 - Wrap class names, method names, annotations, file names, and technical terms in backticks (e.g., `@Transactional`, `MemberService`, `SKILL.md`)
 
 **Body** — Follow the `.github/PULL_REQUEST_TEMPLATE.md` structure:
 
 - Korean 합쇼체: `~하였습니다`, `~되었습니다`, `~추가하였습니다`
-- No emojis
 - Max 2500 characters
 - Wrap all proper nouns and technical identifiers in backticks: class names, method names, annotations, file names, field names, config keys, module names, and agent names.
 
