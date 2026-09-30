@@ -2,9 +2,11 @@ package team.startup.expo.domain.expo
 
 import io.kotest.matchers.collections.shouldBeIn
 import io.kotest.matchers.shouldBe
+import jakarta.persistence.EntityManagerFactory
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.hibernate.SessionFactory
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -30,7 +32,10 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
+import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ObjectNode
@@ -46,6 +51,7 @@ import java.util.concurrent.TimeUnit
     properties = [
         "eureka.client.enabled=false",
         "spring.jpa.hibernate.ddl-auto=validate",
+        "spring.jpa.properties.hibernate.generate_statistics=true",
         "spring.flyway.enabled=true",
     ],
 )
@@ -70,6 +76,9 @@ class ExpoApiPostgresHttpTests {
 
     @Autowired
     private lateinit var jdbcTemplate: JdbcTemplate
+
+    @Autowired
+    private lateinit var entityManagerFactory: EntityManagerFactory
 
     private val httpClient = HttpClient.newHttpClient()
 
@@ -229,6 +238,110 @@ class ExpoApiPostgresHttpTests {
         listResponse.statusCode() shouldBe 200
         objectMapper.readTree(listResponse.body()).isEmpty shouldBe true
         assertError(detailResponse, expectedStatus = 404, expectedMessage = "박람회를 찾을 수 없습니다.")
+    }
+
+    @Test
+    fun `실제 HTTP 프로그램 목록은 Expo별 ID순으로 계약 필드만 반환한다`() {
+        val expoId = createExpo()
+        createExpo()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val standardId = standardProgramRepository.findByExpo(expo).single().id!!
+        val trainingId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val secondStandardId =
+            standardProgramRepository
+                .saveAndFlush(
+                    StandardProgram(
+                        title = "두 번째 일반",
+                        startedAt = "2026-09-24 12:00",
+                        endedAt = "2026-09-24 13:00",
+                        expo = expo,
+                    ),
+                ).id!!
+        val secondTrainingId =
+            trainingProgramRepository
+                .saveAndFlush(
+                    TrainingProgram(
+                        title = "두 번째 연수",
+                        startedAt = "2026-09-24 13:00",
+                        endedAt = "2026-09-24 14:00",
+                        category = Category.CHOICE,
+                        expo = expo,
+                    ),
+                ).id!!
+
+        val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
+        statistics.clear()
+        val standardResponse = request("/standard/program/$expoId", "GET")
+        statistics.prepareStatementCount shouldBe 2L
+        statistics.clear()
+        val trainingResponse = request("/training/program/$expoId", "GET")
+        statistics.prepareStatementCount shouldBe 2L
+
+        standardResponse.statusCode() shouldBe 200
+        trainingResponse.statusCode() shouldBe 200
+        objectMapper.readTree(standardResponse.body()) shouldBe
+            objectMapper.readTree(
+                """[
+                    {"id":$standardId,"title":"일반 프로그램","startedAt":"2026-09-24 09:00","endedAt":"2026-09-24 10:00"},
+                    {"id":$secondStandardId,"title":"두 번째 일반","startedAt":"2026-09-24 12:00","endedAt":"2026-09-24 13:00"}
+                ]""",
+            )
+        objectMapper.readTree(trainingResponse.body()) shouldBe
+            objectMapper.readTree(
+                """[
+                    {"id":$trainingId,"title":"연수 프로그램","startedAt":"2026-09-24 10:00","endedAt":"2026-09-24 11:00","category":"ESSENTIAL"},
+                    {"id":$secondTrainingId,"title":"두 번째 연수","startedAt":"2026-09-24 13:00","endedAt":"2026-09-24 14:00","category":"CHOICE"}
+                ]""",
+            )
+    }
+
+    @Test
+    fun `실제 HTTP 프로그램 조회는 빈 목록과 없는 Expo 및 권한 실패를 구분한다`() {
+        val emptyRequest = objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode
+        emptyRequest.putArray("addStandardProRequestDto")
+        emptyRequest.putArray("addTrainingProRequestDto")
+        val expoId = objectMapper.readTree(postExpo(emptyRequest.toString(), "ROLE_ADMIN").body()).get("expoId").asString()
+
+        for (path in listOf("/standard/program", "/training/program")) {
+            val empty = request("$path/$expoId", "GET")
+            empty.statusCode() shouldBe 200
+            objectMapper.readTree(empty.body()).isEmpty shouldBe true
+            assertError(request("$path/not-found", "GET"), 404, "박람회를 찾을 수 없습니다.")
+            assertError(request("$path/$expoId", "GET", authority = null), 401, "인증이 필요합니다.")
+            assertError(request("$path/$expoId", "GET", authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+        }
+    }
+
+    @Test
+    fun `실제 HTTP 프로그램 조회 ID로 수정한 뒤 신규 ID와 변경 값을 다시 조회한다`() {
+        val expoId = createExpo()
+        val standardId =
+            objectMapper
+                .readTree(request("/standard/program/$expoId", "GET").body())
+                .single()
+                .get("id")
+                .asLong()
+        val trainingId =
+            objectMapper
+                .readTree(request("/training/program/$expoId", "GET").body())
+                .single()
+                .get("id")
+                .asLong()
+
+        request("/expo/$expoId", "PATCH", updateRequest(standardId, trainingId)).statusCode() shouldBe 204
+
+        val standardPrograms = objectMapper.readTree(request("/standard/program/$expoId", "GET").body())
+        val trainingPrograms = objectMapper.readTree(request("/training/program/$expoId", "GET").body())
+        standardPrograms.size() shouldBe 2
+        standardPrograms[0].get("id").asLong() shouldBe standardId
+        standardPrograms[0].get("title").asString() shouldBe "수정 일반"
+        standardPrograms[1].get("id").asLong() shouldBe (standardId + 1)
+        standardPrograms[1].get("title").asString() shouldBe "신규 일반"
+        trainingPrograms.size() shouldBe 2
+        trainingPrograms[0].get("id").asLong() shouldBe trainingId
+        trainingPrograms[0].get("category").asString() shouldBe "CHOICE"
+        trainingPrograms[1].get("id").asLong() shouldBe (trainingId + 1)
+        trainingPrograms[1].get("title").asString() shouldBe "신규 연수"
     }
 
     @Test
