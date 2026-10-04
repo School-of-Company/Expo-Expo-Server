@@ -9,3 +9,5 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+expo:
+  form-service-url: ${FORM_SERVICE_URL:}

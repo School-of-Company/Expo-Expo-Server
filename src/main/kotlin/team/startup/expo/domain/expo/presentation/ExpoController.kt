@@ -20,9 +20,11 @@ import team.startup.expo.domain.expo.presentation.dto.request.ExpoPageRequest
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoDetailResponse
+import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationResponse
 import team.startup.expo.domain.expo.service.CreateExpoService
 import team.startup.expo.domain.expo.service.GetExpoDetailService
 import team.startup.expo.domain.expo.service.GetExpoListService
+import team.startup.expo.domain.expo.service.GetExpoValidationService
 import team.startup.expo.domain.expo.service.UpdateExpoService
 
 @RestController
@@ -32,6 +34,7 @@ class ExpoController(
     private val getExpoListService: GetExpoListService,
     private val getExpoDetailService: GetExpoDetailService,
     private val updateExpoService: UpdateExpoService,
+    private val getExpoValidationService: GetExpoValidationService,
 ) {
     @PostMapping
     fun createExpo(
@@ -68,9 +71,12 @@ class ExpoController(
         @PathVariable("expo_id") expoId: String,
     ): ResponseEntity<ExpoDetailResponse> = ResponseEntity.ok(getExpoDetailService.execute(expoId))
 
+    @GetMapping("/valid")
+    fun getExpoValidation(): ResponseEntity<ExpoValidationResponse> = ResponseEntity.ok(getExpoValidationService.execute())
+
     @Operation(
         summary = "박람회 수정",
-        description = "모든 필드를 필수로 받아 전체 교체합니다. 기존 프로그램은 id와 함께 모두 보내야 하며, 누락되면 409를 반환합니다.",
+        description = "모든 필드를 필수로 받아 전체 교체합니다. 목록에서 빠진 기존 프로그램은 삭제합니다.",
     )
     @PatchMapping("/{expo_id}")
     fun updateExpo(

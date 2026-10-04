@@ -1,5 +1,6 @@
 package team.startup.expo.domain.expo
 
+import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.collections.shouldBeIn
 import io.kotest.matchers.shouldBe
 import jakarta.persistence.EntityManagerFactory
@@ -27,11 +28,13 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository
+import org.springframework.test.util.ReflectionTestUtils
 import org.springframework.web.filter.OncePerRequestFilter
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.impl.GetExpoValidationServiceImpl
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
@@ -39,12 +42,15 @@ import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ObjectNode
+import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 @SpringBootTest(
     webEnvironment = RANDOM_PORT,
@@ -67,6 +73,9 @@ class ExpoApiPostgresHttpTests {
 
     @Autowired
     private lateinit var expoRepository: ExpoRepository
+
+    @Autowired
+    private lateinit var validationService: GetExpoValidationServiceImpl
 
     @Autowired
     private lateinit var standardProgramRepository: StandardProgramRepository
@@ -107,14 +116,14 @@ class ExpoApiPostgresHttpTests {
         expo.yesterdayApplicationPerson shouldBe 0L
         standardProgramRepository.findByExpo(expo).single().let { program ->
             program.title shouldBe "일반 프로그램"
-            program.startedAt shouldBe "2026-09-24 09:00"
-            program.endedAt shouldBe "2026-09-24 10:00"
+            program.startedAt shouldBe "2026-09-24T09:00"
+            program.endedAt shouldBe "2026-09-24T10:00"
             program.expo?.id shouldBe expoId
         }
         trainingProgramRepository.findByExpo(expo).single().let { program ->
             program.title shouldBe "연수 프로그램"
-            program.startedAt shouldBe "2026-09-24 10:00"
-            program.endedAt shouldBe "2026-09-24 11:00"
+            program.startedAt shouldBe "2026-09-24T10:00"
+            program.endedAt shouldBe "2026-09-24T11:00"
             program.category.name shouldBe "ESSENTIAL"
             program.expo?.id shouldBe expoId
         }
@@ -159,6 +168,52 @@ class ExpoApiPostgresHttpTests {
         val listResponse = request("/expo", "GET")
 
         objectMapper.readTree(listResponse.body()).toList().map { it.get("id").asString() } shouldBe listOf(newerId, olderId)
+    }
+
+    @Test
+    fun `실제 HTTP valid는 Form 서비스 상태와 기존 JSON 키를 반환한다`() {
+        val expoId = createExpo()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val serverExecutor = Executors.newCachedThreadPool()
+        val activeRequests = AtomicInteger()
+        val maxActiveRequests = AtomicInteger()
+        server.executor = serverExecutor
+        server.createContext("/") { exchange ->
+            val active = activeRequests.incrementAndGet()
+            maxActiveRequests.updateAndGet { maxOf(it, active) }
+            Thread.sleep(100)
+            val foundForm =
+                exchange.requestURI.path == "/forms/$expoId" &&
+                    exchange.requestURI.query in
+                    setOf("type=STANDARD&applicationType=PRE", "type=TRAINEE&applicationType=FIELD")
+            val foundSurvey = exchange.requestURI.path == "/surveys/$expoId" && exchange.requestURI.query == "type=STANDARD"
+            val found = foundForm || foundSurvey
+            exchange.sendResponseHeaders(if (found) 200 else 404, -1)
+            exchange.close()
+            activeRequests.decrementAndGet()
+        }
+        server.start()
+        try {
+            ReflectionTestUtils.setField(validationService, "formServiceUrl", "http://127.0.0.1:${server.address.port}")
+            val response = request("/expo/valid", "GET")
+            response.statusCode() shouldBe 200
+            objectMapper.readTree(response.body()) shouldBe
+                objectMapper.readTree(
+                    """{"expoValid":[{"expoId":"$expoId","preStandardFormCreatedStatus":true,"siteStandardFormCreatedStatus":false,"traineeFormCreatedStatus":true,"StandardSurveyCreatedStatus":true,"traineeSurveyCreatedStatus":false}]}""",
+                )
+            (maxActiveRequests.get() > 1) shouldBe true
+        } finally {
+            server.stop(0)
+            serverExecutor.shutdown()
+            ReflectionTestUtils.setField(validationService, "formServiceUrl", "")
+        }
+    }
+
+    @Test
+    fun `Form 서비스 URL 누락 시 valid는 빈 상태를 가장하지 않는다`() {
+        createExpo()
+
+        assertError(request("/expo/valid", "GET"), 503, "Form 서비스 연결이 설정되지 않았습니다.")
     }
 
     @Test
@@ -282,14 +337,14 @@ class ExpoApiPostgresHttpTests {
         objectMapper.readTree(standardResponse.body()) shouldBe
             objectMapper.readTree(
                 """[
-                    {"id":$standardId,"title":"일반 프로그램","startedAt":"2026-09-24 09:00","endedAt":"2026-09-24 10:00"},
+                    {"id":$standardId,"title":"일반 프로그램","startedAt":"2026-09-24T09:00","endedAt":"2026-09-24T10:00"},
                     {"id":$secondStandardId,"title":"두 번째 일반","startedAt":"2026-09-24 12:00","endedAt":"2026-09-24 13:00"}
                 ]""",
             )
         objectMapper.readTree(trainingResponse.body()) shouldBe
             objectMapper.readTree(
                 """[
-                    {"id":$trainingId,"title":"연수 프로그램","startedAt":"2026-09-24 10:00","endedAt":"2026-09-24 11:00","category":"ESSENTIAL"},
+                    {"id":$trainingId,"title":"연수 프로그램","startedAt":"2026-09-24T10:00","endedAt":"2026-09-24T11:00","category":"ESSENTIAL"},
                     {"id":$secondTrainingId,"title":"두 번째 연수","startedAt":"2026-09-24 13:00","endedAt":"2026-09-24 14:00","category":"CHOICE"}
                 ]""",
             )
@@ -371,16 +426,16 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `실제 HTTP 수정은 기존 프로그램 누락 시 쓰기 전에 409로 거부한다`() {
+    fun `실제 HTTP 수정은 누락된 기존 프로그램을 삭제한다`() {
         val expoId = createExpo()
         val updateRequest = objectMapper.readTree(EMPTY_UPDATE_REQUEST_JSON) as ObjectNode
 
         val response = request("/expo/$expoId", "PATCH", updateRequest.toString())
 
-        assertError(response, expectedStatus = 409, expectedMessage = "박람회 프로그램 정보가 충돌합니다.")
-        expoRepository.findById(expoId).orElseThrow().title shouldBe "2026 박람회"
-        standardProgramRepository.count() shouldBe 1L
-        trainingProgramRepository.count() shouldBe 1L
+        response.statusCode() shouldBe 204
+        expoRepository.findById(expoId).orElseThrow().title shouldBe "거부될 수정"
+        standardProgramRepository.count() shouldBe 0L
+        trainingProgramRepository.count() shouldBe 0L
     }
 
     @Test
