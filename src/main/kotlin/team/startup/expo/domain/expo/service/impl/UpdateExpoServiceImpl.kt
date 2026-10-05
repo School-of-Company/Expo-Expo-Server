@@ -11,7 +11,6 @@ import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
-import team.startup.expo.global.common.time.toProgramDateTime
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
@@ -42,6 +41,9 @@ class UpdateExpoServiceImpl(
             existingIds = existingTrainingPrograms.mapNotNull { it.id }.toSet(),
         )
 
+        standardProgramRepository.deleteAllInBatch(existingStandardPrograms.filter { it.id !in requestedStandardIds })
+        trainingProgramRepository.deleteAllInBatch(existingTrainingPrograms.filter { it.id !in requestedTrainingIds })
+
         val updatedRows =
             expoRepository.updateInfo(
                 id = expoId,
@@ -64,8 +66,8 @@ class UpdateExpoServiceImpl(
                 StandardProgram(
                     id = program.id,
                     title = program.title,
-                    startedAt = program.startedAt.toProgramDateTime(),
-                    endedAt = program.endedAt.toProgramDateTime(),
+                    startedAt = program.startedAt.toString(),
+                    endedAt = program.endedAt.toString(),
                     expo = updatedExpo,
                 )
             },
@@ -75,8 +77,8 @@ class UpdateExpoServiceImpl(
                 TrainingProgram(
                     id = program.id,
                     title = program.title,
-                    startedAt = program.startedAt.toProgramDateTime(),
-                    endedAt = program.endedAt.toProgramDateTime(),
+                    startedAt = program.startedAt.toString(),
+                    endedAt = program.endedAt.toString(),
                     category = program.category,
                     expo = updatedExpo,
                 )
@@ -88,10 +90,7 @@ class UpdateExpoServiceImpl(
         requestedIds: List<Long>,
         existingIds: Set<Long>,
     ) {
-        if (requestedIds.size != requestedIds.toSet().size ||
-            requestedIds.any { it !in existingIds } ||
-            existingIds.any { it !in requestedIds }
-        ) {
+        if (requestedIds.size != requestedIds.toSet().size || requestedIds.any { it !in existingIds }) {
             throw ExpectedException(HttpStatus.CONFLICT, "박람회 프로그램 정보가 충돌합니다.")
         }
     }
