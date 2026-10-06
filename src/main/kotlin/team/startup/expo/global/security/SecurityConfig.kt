@@ -1,6 +1,8 @@
 package team.startup.expo.global.security
 
 import jakarta.servlet.http.HttpServletResponse
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
@@ -9,6 +11,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import team.startup.expo.global.exception.ErrorResponse
 import tools.jackson.databind.ObjectMapper
 
@@ -19,7 +22,12 @@ class SecurityConfig {
     fun securityFilterChain(
         http: HttpSecurity,
         objectMapper: ObjectMapper,
+        @Value("\${EXPO_INTERNAL_TOKEN:}") internalToken: String,
     ): SecurityFilterChain {
+        if (internalToken.isBlank()) {
+            logger.warn("EXPO_INTERNAL_TOKEN is not configured; internal expo requests will be rejected")
+        }
+
         http
             .csrf { it.disable() }
             .cors { it.disable() }
@@ -37,6 +45,8 @@ class SecurityConfig {
                 requests
                     .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
                     .permitAll()
+                    .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/expo")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/expo", "/expo/{expo_id}")
@@ -57,6 +67,8 @@ class SecurityConfig {
                     .denyAll()
             }
 
+        http.addFilterBefore(InternalTokenFilter(internalToken, objectMapper), UsernamePasswordAuthenticationFilter::class.java)
+
         return http.build()
     }
 
@@ -74,5 +86,6 @@ class SecurityConfig {
 
     private companion object {
         const val ADMIN_AUTHORITY = "ROLE_ADMIN"
+        val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
     }
 }
