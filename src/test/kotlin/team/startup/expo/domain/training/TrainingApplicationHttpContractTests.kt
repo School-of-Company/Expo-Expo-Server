@@ -158,12 +158,128 @@ class TrainingApplicationHttpContractTests {
     }
 
     @Test
-    fun `본인 확인 전 공개 단건 신청은 차단하고 관리자 조회 삭제 권한을 검사한다`() {
-        request("POST", "/training/application/1", """{"trainingId":"training-1"}""", "ROLE_ADMIN").statusCode() shouldBe 403
+    fun `단건 신청은 무인증으로 201 빈 응답이며 실패는 상태를 보존한다`() {
+        val body = """{"trainingId":"training-1"}"""
+        val created = request("POST", "/training/application/1", body, authority = null)
+        created.statusCode() shouldBe 201
+        created.body() shouldBe ""
+        calls.map { it.path } shouldBe listOf("/internal/trainees/resolve", "/internal/training-program-applications")
+        calls.clear()
+        request("POST", "/training/application/999", body, authority = null).statusCode() shouldBe 404
         calls.isEmpty() shouldBe true
+        userResolveStatus = 404
+        request("POST", "/training/application/1", body, authority = null).statusCode() shouldBe 404
+        calls.none { it.path == "/internal/training-program-applications" } shouldBe true
+        userResolveStatus = 200
+        applicationCreateStatus = 409
+        request("POST", "/training/application/1", body, authority = null).statusCode() shouldBe 409
+        applicationCreateStatus = 500
+        request("POST", "/training/application/1", body, authority = null).statusCode() shouldBe 502
+        userResolveStatus = 500
+        request("POST", "/training/application/1", body, authority = null).statusCode() shouldBe 502
+    }
+
+    @Test
+    fun `다건 신청은 무인증으로 전체 프로그램을 한 번에 저장한다`() {
+        addProgram("2026-09-25T09:00", expoId)
+        val created =
+            request("POST", "/training/application/list", """{"trainingId":"training-1","trainingProIds":[2,1]}""", authority = null)
+        created.statusCode() shouldBe 201
+        created.body() shouldBe ""
+        val lookup = calls.single { it.path == "/internal/trainees/resolve" }
+        mapper.readTree(lookup.body).get("expoId").asString() shouldBe expoId
+        val save = calls.single { it.path == "/internal/training-program-applications" }
+        save.token shouldBe "test-training-internal-token"
+        val programs = mapper.readTree(save.body).get("programs")
+        programs.size() shouldBe 2
+        (0 until programs.size()).map { programs[it].get("id").asLong() }.toSet() shouldBe setOf(1L, 2L)
+        (0 until programs.size()).forEach { programs[it].get("expoId").asString() shouldBe expoId }
+    }
+
+    @Test
+    fun `다건 신청은 잘못된 프로그램이 하나라도 있으면 외부 저장을 호출하지 않는다`() {
+        val path = "/training/application/list"
+        request("POST", path, """{"trainingId":"training-1","trainingProIds":[1,999]}""", authority = null).statusCode() shouldBe 404
+        request("POST", path, """{"trainingId":"training-1","trainingProIds":[1,1]}""", authority = null).statusCode() shouldBe 400
+        request("POST", path, """{"trainingId":"training-1","trainingProIds":[]}""", authority = null).statusCode() shouldBe 400
+        request("POST", path, """{"trainingId":"training-1","trainingProIds":[1,null]}""", authority = null).statusCode() shouldBe 400
+        calls.isEmpty() shouldBe true
+        jdbc.update(
+            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            "other-expo",
+            "다른 박람회",
+            "설명",
+            "2026-09-24",
+            "2026-09-25",
+            "서울",
+            "127",
+            "37",
+            0,
+            0,
+        )
+        addProgram("2026-09-25T09:00", "other-expo")
+        request("POST", path, """{"trainingId":"training-1","trainingProIds":[1,2]}""", authority = null).statusCode() shouldBe 404
+        calls.isEmpty() shouldBe true
+    }
+
+    @Test
+    fun `삭제 중인 행사와 빈 연수 번호는 공개 신청에서 외부 호출 전에 거절한다`() {
+        request("POST", "/training/application/1", """{"trainingId":" "}""", authority = null).statusCode() shouldBe 400
+        calls.isEmpty() shouldBe true
+        jdbc.update("UPDATE tb_expo SET deleting_at = CURRENT_TIMESTAMP WHERE id = ?", expoId)
+        request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null).statusCode() shouldBe 409
+        request(
+            "POST",
+            "/training/application/list",
+            """{"trainingId":"training-1","trainingProIds":[1]}""",
+            authority = null,
+        ).statusCode() shouldBe
+            409
+        calls.isEmpty() shouldBe true
+    }
+
+    @Test
+    fun `다건 신청의 연수자 실패와 저장 실패는 전체 요청을 실패시킨다`() {
+        addProgram("2026-09-25T09:00", expoId)
+        val body = """{"trainingId":"training-1","trainingProIds":[1,2]}"""
+        userResolveStatus = 404
+        request("POST", "/training/application/list", body, authority = null).statusCode() shouldBe 404
+        calls.none { it.path == "/internal/training-program-applications" } shouldBe true
+        calls.clear()
+        userResolveStatus = 500
+        request("POST", "/training/application/list", body, authority = null).statusCode() shouldBe 502
+        calls.none { it.path == "/internal/training-program-applications" } shouldBe true
+        calls.clear()
+        userResolveStatus = 200
+        applicationCreateStatus = 409
+        request("POST", "/training/application/list", body, authority = null).statusCode() shouldBe 409
+        calls.count { it.path == "/internal/training-program-applications" } shouldBe 1
+        calls.clear()
+        applicationCreateStatus = 500
+        request("POST", "/training/application/list", body, authority = null).statusCode() shouldBe 502
+        calls.count { it.path == "/internal/training-program-applications" } shouldBe 1
+    }
+
+    @Test
+    fun `관리자 조회 삭제 권한을 검사한다`() {
         request("GET", "/training/1", authority = null).statusCode() shouldBe 401
         request("DELETE", "/training/1", authority = "ROLE_USER").statusCode() shouldBe 403
         calls.isEmpty() shouldBe true
+    }
+
+    private fun addProgram(
+        startedAt: String,
+        ownerExpoId: String,
+    ) {
+        jdbc.update(
+            """INSERT INTO tb_training_program (title,started_at,ended_at,category,expo_id) VALUES (?,?,?,?,?)""",
+            "추가 연수",
+            startedAt,
+            "2026-09-25T10:00",
+            "CHOICE",
+            ownerExpoId,
+        )
     }
 
     private fun request(

@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -47,13 +48,12 @@ class TrainingDependenciesClient(
     fun apply(
         expoId: String,
         traineeId: Long,
-        programId: Long,
-        category: Category,
+        programs: List<TrainingProgram>,
     ) {
         val body =
             ApplyProgramsCommand(
                 trainee = TraineeReference(traineeId, expoId),
-                programs = listOf(ProgramReference(programId, expoId, category)),
+                programs = programs.map { ProgramReference(requireNotNull(it.id), expoId, it.category) },
             )
         when (post(applicationServiceUrl, "/internal/training-program-applications", body).statusCode()) {
             201 -> Unit

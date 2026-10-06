@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import team.startup.expo.domain.training.presentation.dto.request.AddTrainingProgramRequest
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramRequest
+import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
 import team.startup.expo.domain.training.presentation.dto.request.UpdateTrainingProgramRequest
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramResponse
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramTraineeResponse
@@ -84,6 +85,14 @@ class TrainingController(
         @Valid @RequestBody request: ApplyTrainingProgramRequest,
     ): ResponseEntity<Void> {
         applyTrainingProgramService.execute(programId, request)
+        return ResponseEntity.status(HttpStatus.CREATED).build()
+    }
+
+    @PostMapping("/application/list")
+    fun applyList(
+        @Valid @RequestBody request: ApplyTrainingProgramsRequest,
+    ): ResponseEntity<Void> {
+        applyTrainingProgramService.executeList(request)
         return ResponseEntity.status(HttpStatus.CREATED).build()
     }
 }
