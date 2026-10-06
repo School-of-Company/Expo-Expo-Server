@@ -17,23 +17,31 @@ import team.startup.expo.domain.standard.presentation.dto.request.ApplyStandardP
 import team.startup.expo.domain.standard.presentation.dto.request.UpdateStandardProgramRequest
 import team.startup.expo.domain.standard.presentation.dto.response.StandardProgramParticipantResponse
 import team.startup.expo.domain.standard.presentation.dto.response.StandardProgramResponse
+import team.startup.expo.domain.standard.service.ApplyStandardProgramsService
+import team.startup.expo.domain.standard.service.CreateStandardProgramListService
+import team.startup.expo.domain.standard.service.CreateStandardProgramService
+import team.startup.expo.domain.standard.service.DeleteStandardProgramService
 import team.startup.expo.domain.standard.service.GetStandardProgramListService
-import team.startup.expo.domain.standard.service.StandardApplicationService
-import team.startup.expo.domain.standard.service.StandardProgramCommandService
+import team.startup.expo.domain.standard.service.GetStandardProgramParticipantsService
+import team.startup.expo.domain.standard.service.UpdateStandardProgramService
 
 @RestController
 @RequestMapping("/standard")
 class StandardController(
     private val getStandardProgramListService: GetStandardProgramListService,
-    private val commands: StandardProgramCommandService,
-    private val applications: StandardApplicationService,
+    private val createStandardProgramService: CreateStandardProgramService,
+    private val createStandardProgramListService: CreateStandardProgramListService,
+    private val updateStandardProgramService: UpdateStandardProgramService,
+    private val applyStandardProgramsService: ApplyStandardProgramsService,
+    private val getStandardProgramParticipantsService: GetStandardProgramParticipantsService,
+    private val deleteStandardProgramService: DeleteStandardProgramService,
 ) {
     @PostMapping("/{expo_id}")
     fun create(
         @PathVariable("expo_id") expoId: String,
         @Valid @RequestBody request: AddStandardProgramRequest,
     ): ResponseEntity<Void> {
-        commands.create(expoId, request)
+        createStandardProgramService.execute(expoId, request)
         return ResponseEntity.status(HttpStatus.CREATED).build()
     }
 
@@ -42,7 +50,7 @@ class StandardController(
         @PathVariable("expo_id") expoId: String,
         @RequestBody requests: List<@Valid AddStandardProgramRequest>,
     ): ResponseEntity<Void> {
-        commands.createAll(expoId, requests)
+        createStandardProgramListService.execute(expoId, requests)
         return ResponseEntity.status(HttpStatus.CREATED).build()
     }
 
@@ -51,7 +59,7 @@ class StandardController(
         @PathVariable("standardPro_id") programId: Long,
         @Valid @RequestBody request: UpdateStandardProgramRequest,
     ): ResponseEntity<Void> {
-        commands.update(programId, request)
+        updateStandardProgramService.execute(programId, request)
         return ResponseEntity.noContent().build()
     }
 
@@ -65,21 +73,22 @@ class StandardController(
     fun delete(
         @PathVariable("standardPro_id") programId: Long,
     ): ResponseEntity<Void> {
-        applications.delete(programId)
+        deleteStandardProgramService.execute(programId)
         return ResponseEntity.noContent().build()
     }
 
     @GetMapping("/{standardPro_id}")
     fun participants(
         @PathVariable("standardPro_id") programId: Long,
-    ): ResponseEntity<List<StandardProgramParticipantResponse>> = ResponseEntity.ok(applications.participants(programId))
+    ): ResponseEntity<List<StandardProgramParticipantResponse>> =
+        ResponseEntity.ok(getStandardProgramParticipantsService.execute(programId))
 
     @PostMapping("/application/{expo_id}")
     fun apply(
         @PathVariable("expo_id") expoId: String,
         @Valid @RequestBody request: ApplyStandardProgramsRequest,
     ): ResponseEntity<Void> {
-        applications.apply(expoId, request)
+        applyStandardProgramsService.execute(expoId, request)
         return ResponseEntity.status(HttpStatus.CREATED).build()
     }
 }
