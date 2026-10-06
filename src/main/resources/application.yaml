@@ -9,6 +9,18 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
+image:
+  public-base-url: ${IMAGE_PUBLIC_BASE_URL:http://localhost:8080}
+  storage:
+    active: ${IMAGE_STORAGE_PROVIDER:local}
+    local:
+      directory: ${IMAGE_STORAGE_DIRECTORY:./data/images}
+
 expo:
   form-service-url: ${FORM_SERVICE_URL:}
   delete-internal-token: ${EXPO_DELETE_INTERNAL_TOKEN:}
@@ -16,3 +28,7 @@ expo:
     user-service-url: ${USER_SERVICE_URL:}
     application-service-url: ${APPLICATION_SERVICE_URL:}
     internal-token: ${STANDARD_INTERNAL_TOKEN:}
+  training:
+    user-service-url: ${USER_SERVICE_URL:}
+    application-service-url: ${APPLICATION_SERVICE_URL:}
+    internal-token: ${TRAINING_INTERNAL_TOKEN:}

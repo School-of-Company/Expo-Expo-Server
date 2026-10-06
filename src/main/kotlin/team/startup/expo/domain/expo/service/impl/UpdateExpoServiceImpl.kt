@@ -1,11 +1,13 @@
 package team.startup.expo.domain.expo.service.impl
 
 import org.springframework.http.HttpStatus
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoRequest
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.UpdateExpoService
+import team.startup.expo.domain.image.service.AttachExpoImageService
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.TrainingProgram
@@ -17,6 +19,7 @@ class UpdateExpoServiceImpl(
     private val expoRepository: ExpoRepository,
     private val standardProgramRepository: StandardProgramRepository,
     private val trainingProgramRepository: TrainingProgramRepository,
+    private val attachExpoImageService: AttachExpoImageService,
 ) : UpdateExpoService {
     @Transactional
     override fun execute(
@@ -83,6 +86,15 @@ class UpdateExpoServiceImpl(
                     expo = updatedExpo,
                 )
             },
+        )
+        val uploadedBy =
+            SecurityContextHolder.getContext().authentication?.name
+                ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+        attachExpoImageService.execute(
+            request.coverImage,
+            uploadedBy,
+            expoId,
+            previousUrl = expo.coverImage,
         )
     }
 
