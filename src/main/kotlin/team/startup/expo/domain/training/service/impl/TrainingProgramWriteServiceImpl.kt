@@ -56,9 +56,13 @@ class TrainingProgramWriteServiceImpl(
         )
     }
 
-    private fun findExpo(expoId: String): Expo =
-        expoRepository.findByIdOrNull(expoId)
-            ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+    private fun findExpo(expoId: String): Expo {
+        val expo =
+            expoRepository.findLockedById(expoId)
+                ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+        if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
+        return expo
+    }
 
     private fun AddTrainingProgramRequest.toEntity(expo: Expo): TrainingProgram =
         TrainingProgram(

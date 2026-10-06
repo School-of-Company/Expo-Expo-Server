@@ -23,6 +23,7 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoDeletionClient
 import team.startup.expo.domain.expo.service.impl.GetExpoValidationServiceImpl
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
@@ -66,6 +67,9 @@ class ExpoApiPostgresHttpTests {
 
     @Autowired
     private lateinit var validationService: GetExpoValidationServiceImpl
+
+    @Autowired
+    private lateinit var deletionClient: ExpoDeletionClient
 
     @Autowired
     private lateinit var standardProgramRepository: StandardProgramRepository
@@ -205,6 +209,110 @@ class ExpoApiPostgresHttpTests {
         val listResponse = request("/expo", "GET")
 
         objectMapper.readTree(listResponse.body()).toList().map { it.get("id").asString() } shouldBe listOf(newerId, olderId)
+    }
+
+    @Test
+    fun `삭제는 세 소유 서비스를 순서대로 정리한 뒤 로컬 프로그램까지 삭제하고 빈 204를 반환한다`() {
+        val expoId = createExpo()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val standardId = standardProgramRepository.findByExpo(expo).single().id!!
+        val trainingId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val calls = mutableListOf<String>()
+
+        withDeletionServer { exchange ->
+            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-delete-token"
+            calls += "${exchange.requestMethod} ${exchange.requestURI.path}"
+            if (exchange.requestURI.path.endsWith("/purge")) {
+                objectMapper.readTree(exchange.requestBody.readAllBytes()) shouldBe
+                    objectMapper.readTree(
+                        """{"standardProgramIds":[$standardId],"trainingProgramIds":[$trainingId]}""",
+                    )
+            }
+            204
+        }.use {
+            val response = request("/expo/$expoId", "DELETE")
+            response.statusCode() shouldBe 204
+            response.body() shouldBe ""
+            calls shouldBe
+                listOf(
+                    "POST /application/internal/expos/$expoId/purge",
+                    "DELETE /form/internal/expos/$expoId",
+                    "DELETE /user/internal/expos/$expoId",
+                )
+            expoRepository.existsById(expoId) shouldBe false
+            standardProgramRepository.count() shouldBe 0L
+            trainingProgramRepository.count() shouldBe 0L
+            assertError(request("/expo/$expoId", "DELETE"), 404, "박람회를 찾지 못 했습니다.")
+        }
+    }
+
+    @Test
+    fun `소유 서비스 실패는 삭제를 중단하고 재시도 시 같은 프로그램 ID로 이어간다`() {
+        val expoId = createExpo()
+        val formAttempts = AtomicInteger()
+        val applicationBodies = mutableListOf<String>()
+        withDeletionServer { exchange ->
+            when {
+                exchange.requestURI.path.endsWith("/purge") -> {
+                    applicationBodies += String(exchange.requestBody.readAllBytes())
+                    204
+                }
+
+                formAttempts.getAndIncrement() == 0 -> {
+                    503
+                }
+
+                else -> {
+                    204
+                }
+            }
+        }.use {
+            assertError(request("/expo/$expoId", "DELETE"), 502, "Form 서비스 삭제 응답을 확인할 수 없습니다.")
+            expoRepository
+                .findById(expoId)
+                .orElseThrow()
+                .deletingAt
+                ?.let { true } shouldBe true
+            standardProgramRepository.count() shouldBe 1L
+            trainingProgramRepository.count() shouldBe 1L
+            assertError(request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON), 409, "삭제 중인 박람회입니다.")
+
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 204
+            applicationBodies.size shouldBe 2
+            applicationBodies[0] shouldBe applicationBodies[1]
+            expoRepository.existsById(expoId) shouldBe false
+        }
+    }
+
+    @Test
+    fun `삭제는 권한과 내부 연동 설정을 확인한다`() {
+        val expoId = createExpo()
+        assertError(request("/expo/not-found", "DELETE"), 404, "박람회를 찾지 못 했습니다.")
+        assertError(request("/expo/$expoId", "DELETE", authority = null), 401, "인증이 필요합니다.")
+        assertError(request("/expo/$expoId", "DELETE", authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+        assertError(request("/expo/$expoId", "DELETE"), 503, "박람회 삭제 내부 연동이 설정되지 않았습니다.")
+        expoRepository.findById(expoId).orElseThrow().deletingAt shouldBe null
+    }
+
+    private fun withDeletionServer(respond: (com.sun.net.httpserver.HttpExchange) -> Int): AutoCloseable {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            val status = respond(exchange)
+            exchange.sendResponseHeaders(status, -1)
+            exchange.close()
+        }
+        server.start()
+        val url = "http://127.0.0.1:${server.address.port}"
+        ReflectionTestUtils.setField(deletionClient, "applicationUrl", "$url/application")
+        ReflectionTestUtils.setField(deletionClient, "formUrl", "$url/form")
+        ReflectionTestUtils.setField(deletionClient, "userUrl", "$url/user")
+        ReflectionTestUtils.setField(deletionClient, "internalToken", "test-delete-token")
+        return AutoCloseable {
+            server.stop(0)
+            listOf("applicationUrl", "formUrl", "userUrl", "internalToken").forEach {
+                ReflectionTestUtils.setField(deletionClient, it, "")
+            }
+        }
     }
 
     @Test
@@ -687,7 +795,7 @@ class ExpoApiPostgresHttpTests {
         repeat(100) {
             val waiting =
                 jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE 'update tb_expo%'",
+                    "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%tb_expo%'",
                     Long::class.java,
                 ) ?: 0L
             if (waiting > 0L) {

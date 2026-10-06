@@ -1,6 +1,5 @@
 package team.startup.expo.domain.expo.service.impl
 
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -25,8 +24,9 @@ class UpdateExpoServiceImpl(
         request: UpdateExpoRequest,
     ) {
         val expo =
-            expoRepository.findByIdOrNull(expoId)
+            expoRepository.findLockedById(expoId)
                 ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+        if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
         val existingStandardPrograms = standardProgramRepository.findByExpo(expo)
         val existingTrainingPrograms = trainingProgramRepository.findByExpo(expo)
         val requestedStandardIds = request.updateStandardProRequestDto.mapNotNull { it.id }
