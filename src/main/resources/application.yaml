@@ -11,6 +11,7 @@ spring:
       ddl-auto: validate
 expo:
   form-service-url: ${FORM_SERVICE_URL:}
+  delete-internal-token: ${EXPO_DELETE_INTERNAL_TOKEN:}
   standard:
     user-service-url: ${USER_SERVICE_URL:}
     application-service-url: ${APPLICATION_SERVICE_URL:}
