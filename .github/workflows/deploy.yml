@@ -28,8 +28,9 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
-      - name: Build
-        run: ./gradlew bootJar --no-daemon
+      # build = 테스트·린트(ktlint/spotless) + bootJar. 테스트가 실패하면 업로드 전에 멈춘다.
+      - name: Build and test
+        run: ./gradlew build --no-daemon
 
       - name: Package
         run: |
