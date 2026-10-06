@@ -19,6 +19,8 @@ import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.annotation.DirtiesContext
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
 import org.springframework.transaction.annotation.Transactional
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -30,6 +32,7 @@ import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.support.TestJwt
 import java.sql.DriverManager
 
 @SpringBootTest(
@@ -446,6 +449,12 @@ class ExpoPersistenceTests {
     }
 
     companion object {
+        @JvmStatic
+        @DynamicPropertySource
+        fun jwtPublicKey(registry: DynamicPropertyRegistry) {
+            registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
+        }
+
         private const val EXPO_ID = "123456789012-1234-1234-1234-12345678"
         private const val EXPO_B_ID = "abcdefabcdef-abcd-abcd-abcd-abcdefab"
 

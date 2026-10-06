@@ -11,16 +11,15 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
-import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
-import team.startup.expo.domain.expo.HttpTestAuthenticationConfiguration
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramRequest
 import team.startup.expo.domain.training.service.ApplyTrainingProgramService
+import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
 import java.net.URI
@@ -34,7 +33,6 @@ import java.util.concurrent.ConcurrentLinkedQueue
     properties = ["eureka.client.enabled=false", "spring.jpa.hibernate.ddl-auto=validate"],
 )
 @EntityScan("team.startup.expo.domain")
-@Import(HttpTestAuthenticationConfiguration::class)
 @Testcontainers
 class TrainingApplicationHttpContractTests {
     @LocalServerPort
@@ -63,7 +61,7 @@ class TrainingApplicationHttpContractTests {
         userResolveBody = """{"traineeId":42}"""
         userNamesBody = """[{"traineeId":42,"name":"홍길동"}]"""
         applicationListBody = "[]"
-        jdbc.execute("TRUNCATE TABLE tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY")
+        jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY")
         jdbc.update(
             """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -178,7 +176,7 @@ class TrainingApplicationHttpContractTests {
             HttpRequest
                 .newBuilder(URI.create("http://localhost:$port$path"))
                 .header("Content-Type", "application/json")
-        authority?.let { builder.header("X-Test-Authority", it) }
+        authority?.let { builder.header("Authorization", "Bearer ${TestJwt.token(it)}") }
         val payload = body?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody()
         return http.send(builder.method(method, payload).build(), HttpResponse.BodyHandlers.ofString())
     }
@@ -210,6 +208,7 @@ class TrainingApplicationHttpContractTests {
         @DynamicPropertySource
         @JvmStatic
         fun dependencyProperties(registry: DynamicPropertyRegistry) {
+            registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
             registry.add("expo.training.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.internal-token") { "test-training-internal-token" }

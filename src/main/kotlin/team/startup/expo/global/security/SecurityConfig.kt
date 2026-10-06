@@ -10,14 +10,64 @@ import org.springframework.http.MediaType
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
+import org.springframework.security.core.authority.SimpleGrantedAuthority
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator
+import org.springframework.security.oauth2.core.OAuth2Error
+import org.springframework.security.oauth2.core.OAuth2TokenValidator
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult
+import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm
+import org.springframework.security.oauth2.jwt.Jwt
+import org.springframework.security.oauth2.jwt.JwtDecoder
+import org.springframework.security.oauth2.jwt.JwtValidators
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import team.startup.expo.global.exception.ErrorResponse
 import tools.jackson.databind.ObjectMapper
+import java.security.KeyFactory
+import java.security.interfaces.RSAPublicKey
+import java.security.spec.X509EncodedKeySpec
+import java.time.Duration
+import java.time.Instant
+import java.util.Base64
 
 @Configuration
 @EnableWebSecurity
 class SecurityConfig {
+    @Bean
+    fun jwtDecoder(
+        @Value("\${JWT_PUBLIC_KEY}") publicKeyPem: String,
+    ): JwtDecoder {
+        val pem = publicKeyPem.replace("\\n", "\n").replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "")
+        val key = KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(Base64.getMimeDecoder().decode(pem))) as RSAPublicKey
+        return NimbusJwtDecoder.withPublicKey(key).signatureAlgorithm(SignatureAlgorithm.RS256).build().apply {
+            setJwtValidator(
+                DelegatingOAuth2TokenValidator(
+                    JwtValidators.createDefault(),
+                    OAuth2TokenValidator<Jwt> { jwt ->
+                        val issuedAt = jwt.issuedAt
+                        val expiresAt = jwt.expiresAt
+                        if (
+                            jwt.subject?.toLongOrNull() != null &&
+                            issuedAt != null &&
+                            expiresAt != null &&
+                            Duration.between(issuedAt, expiresAt) > Duration.ZERO &&
+                            Duration.between(issuedAt, expiresAt) <= Duration.ofMinutes(15) &&
+                            !issuedAt.isAfter(Instant.now().plusSeconds(30)) &&
+                            expiresAt.isAfter(Instant.now()) &&
+                            jwt.getClaim<Any>("role") is String
+                        ) {
+                            OAuth2TokenValidatorResult.success()
+                        } else {
+                            OAuth2TokenValidatorResult.failure(OAuth2Error("invalid_token"))
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
     @Bean
     fun securityFilterChain(
         http: HttpSecurity,
@@ -84,6 +134,19 @@ class SecurityConfig {
                     .anyRequest()
                     .denyAll()
             }
+
+        val jwtConverter =
+            JwtAuthenticationConverter().apply {
+                setJwtGrantedAuthoritiesConverter { jwt ->
+                    listOf(SimpleGrantedAuthority(requireNotNull(jwt.getClaimAsString("role"))))
+                }
+            }
+        http.oauth2ResourceServer { resource ->
+            resource.jwt { it.jwtAuthenticationConverter(jwtConverter) }
+            resource.authenticationEntryPoint { _, response, _ ->
+                writeError(objectMapper, response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
+            }
+        }
 
         http.addFilterBefore(InternalTokenFilter(internalToken, objectMapper), UsernamePasswordAuthenticationFilter::class.java)
 
