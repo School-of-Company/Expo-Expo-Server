@@ -16,7 +16,7 @@ differ in wording, language, or the `name:설명` suffix style.
 
 | Change | Names to look for | Fallback |
 |---|---|---|
-| New feature, improvement, refactoring | `enhancement`, `feature`, `개선작업` | the repo's most-used PR label |
+| New feature, improvement, refactoring | `enhancement`, `feature`, `개선작업` | — |
 | Bug fix | `bug`, `fix`, `버그` | — |
 | Docs only (README, comments) | `documentation`, `docs`, `문서화` | — |
 | Release prep, version bump | `release`, `릴리즈` | — |
@@ -26,7 +26,6 @@ differ in wording, language, or the `name:설명` suffix style.
 
 These are assigned by people, not by this skill. Names vary; the reason is what matters.
 
-| Label                      | Reason                                                                     |
 | Label kind | Names to look for | Reason |
 |---|---|---|
 | Review state | `waiting for review`, `검토 대기`, `needs review` | The author applies it when the PR is ready |
