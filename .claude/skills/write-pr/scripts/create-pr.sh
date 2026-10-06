@@ -4,9 +4,15 @@ set -e
 TITLE="${1:?Error: PR title is required. Usage: create-pr.sh <title> <body-file> [label1,label2,...]}"
 BODY_FILE="${2:?Error: Body file is required. Usage: create-pr.sh <title> <body-file> [label1,label2,...]}"
 LABELS="${3:-}"
+BASE="${4:-}"
 
 if [ ! -f "$BODY_FILE" ]; then
   echo "ERROR: Body file not found: $BODY_FILE" >&2
+  exit 1
+fi
+
+if ! grep -Eiq '^[[:space:]]*-[[:space:]]*(Closes|Fixes|Resolves|Refs)[[:space:]]+([[:alnum:]_.-]+/[[:alnum:]_.-]+)?#[0-9]+([[:space:]]|$)' "$BODY_FILE"; then
+  echo "ERROR: PR body needs a concrete related issue (- Closes #123 or - Refs #123)." >&2
   exit 1
 fi
 
@@ -16,7 +22,7 @@ fi
 # trunk-based repos, and it picks the wrong one where the integration branch has another name. So reuse
 # the base of an existing PR for this branch, else prefer an integration branch if the remote has one,
 # else fall back to whatever GitHub reports as the default branch.
-BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || true)
+[ -n "$BASE" ] || BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || true)
 
 if [ -z "$BASE" ]; then
   DEFAULT=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main)

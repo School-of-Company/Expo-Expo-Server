@@ -78,7 +78,6 @@ change spans several scopes, use `global`; for build/CI-only changes, `ci`.
 
 ## PR Title Format
 
-`[scope] description`
+`description`
 
-- Same vocabulary as the commit scope, lowercase in brackets: `[member]`, `[expo]`, `[global]`
-- Description: Korean, concise, no emojis, max 50 characters total
+- Describe the change directly in Korean, without a `[scope]` prefix. Keep it concise, with no added emojis and at most 50 characters.
