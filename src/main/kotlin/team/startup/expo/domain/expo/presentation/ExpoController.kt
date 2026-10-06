@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.ModelAttribute
 import org.springframework.web.bind.annotation.PatchMapping
@@ -22,6 +23,7 @@ import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoRespons
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoDetailResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationResponse
 import team.startup.expo.domain.expo.service.CreateExpoService
+import team.startup.expo.domain.expo.service.DeleteExpoService
 import team.startup.expo.domain.expo.service.GetExpoDetailService
 import team.startup.expo.domain.expo.service.GetExpoListService
 import team.startup.expo.domain.expo.service.GetExpoValidationService
@@ -34,6 +36,7 @@ class ExpoController(
     private val getExpoListService: GetExpoListService,
     private val getExpoDetailService: GetExpoDetailService,
     private val updateExpoService: UpdateExpoService,
+    private val deleteExpoService: DeleteExpoService,
     private val getExpoValidationService: GetExpoValidationService,
 ) {
     @PostMapping
@@ -84,6 +87,14 @@ class ExpoController(
         @Valid @RequestBody request: UpdateExpoRequest,
     ): ResponseEntity<Void> {
         updateExpoService.execute(expoId, request)
+        return ResponseEntity.noContent().build()
+    }
+
+    @DeleteMapping("/{expo_id}")
+    fun deleteExpo(
+        @PathVariable("expo_id") expoId: String,
+    ): ResponseEntity<Void> {
+        deleteExpoService.execute(expoId)
         return ResponseEntity.noContent().build()
     }
 }
