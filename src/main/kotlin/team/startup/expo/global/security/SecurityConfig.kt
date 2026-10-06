@@ -101,6 +101,8 @@ class SecurityConfig {
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.PUT, "/internal/expo/{expo_id}/standard-registrations/{participant_id}")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/expo")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/expo", "/expo/{expo_id}")
