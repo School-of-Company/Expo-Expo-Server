@@ -4,6 +4,7 @@ import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import java.time.Instant
 
 @Entity
 @Table(name = "tb_expo")
@@ -46,6 +47,14 @@ class Expo(
     @field:Column(name = "yesterday_application_person", nullable = false)
     var yesterdayApplicationPerson: Long = yesterdayApplicationPerson
         protected set
+
+    @field:Column(name = "deleting_at")
+    var deletingAt: Instant? = null
+        protected set
+
+    fun markDeleting() {
+        if (deletingAt == null) deletingAt = Instant.now()
+    }
 
     fun plusApplicationPerson() {
         applicationPerson++

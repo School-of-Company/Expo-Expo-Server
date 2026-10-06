@@ -1,12 +1,20 @@
 package team.startup.expo.domain.expo.repository
 
+import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import team.startup.expo.domain.expo.entity.Expo
 
 interface ExpoRepository : JpaRepository<Expo, String> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select expo from Expo expo where expo.id = :id")
+    fun findLockedById(
+        @Param("id") id: String,
+    ): Expo?
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(
         """

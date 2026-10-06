@@ -9,5 +9,7 @@ interface TrainingProgramRepository : JpaRepository<TrainingProgram, Long> {
 
     fun findByExpo(expo: Expo): List<TrainingProgram>
 
+    fun findByExpoIdOrderByIdAsc(expoId: String): List<TrainingProgram>
+
     fun findAllByIdIn(ids: List<Long>): List<TrainingProgram>
 }

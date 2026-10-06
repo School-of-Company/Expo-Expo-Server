@@ -13,6 +13,9 @@ import java.time.Instant
 
 interface ExpoImageRepository : JpaRepository<ExpoImage, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByExpoId(expoId: String): List<ExpoImage>
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select image from ExpoImage image where image.publicUrl = :url")
     fun findByPublicUrlForUpdate(
         @Param("url") url: String,

@@ -1,6 +1,5 @@
 package team.startup.expo.domain.expo.service.impl
 
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
@@ -13,7 +12,6 @@ import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
-import team.startup.expo.global.common.time.toProgramDateTime
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
@@ -29,8 +27,9 @@ class UpdateExpoServiceImpl(
         request: UpdateExpoRequest,
     ) {
         val expo =
-            expoRepository.findByIdOrNull(expoId)
+            expoRepository.findLockedById(expoId)
                 ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+        if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
         val existingStandardPrograms = standardProgramRepository.findByExpo(expo)
         val existingTrainingPrograms = trainingProgramRepository.findByExpo(expo)
         val requestedStandardIds = request.updateStandardProRequestDto.mapNotNull { it.id }
@@ -44,6 +43,9 @@ class UpdateExpoServiceImpl(
             requestedIds = requestedTrainingIds,
             existingIds = existingTrainingPrograms.mapNotNull { it.id }.toSet(),
         )
+
+        standardProgramRepository.deleteAllInBatch(existingStandardPrograms.filter { it.id !in requestedStandardIds })
+        trainingProgramRepository.deleteAllInBatch(existingTrainingPrograms.filter { it.id !in requestedTrainingIds })
 
         val updatedRows =
             expoRepository.updateInfo(
@@ -67,8 +69,8 @@ class UpdateExpoServiceImpl(
                 StandardProgram(
                     id = program.id,
                     title = program.title,
-                    startedAt = program.startedAt.toProgramDateTime(),
-                    endedAt = program.endedAt.toProgramDateTime(),
+                    startedAt = program.startedAt.toString(),
+                    endedAt = program.endedAt.toString(),
                     expo = updatedExpo,
                 )
             },
@@ -78,8 +80,8 @@ class UpdateExpoServiceImpl(
                 TrainingProgram(
                     id = program.id,
                     title = program.title,
-                    startedAt = program.startedAt.toProgramDateTime(),
-                    endedAt = program.endedAt.toProgramDateTime(),
+                    startedAt = program.startedAt.toString(),
+                    endedAt = program.endedAt.toString(),
                     category = program.category,
                     expo = updatedExpo,
                 )
@@ -100,10 +102,7 @@ class UpdateExpoServiceImpl(
         requestedIds: List<Long>,
         existingIds: Set<Long>,
     ) {
-        if (requestedIds.size != requestedIds.toSet().size ||
-            requestedIds.any { it !in existingIds } ||
-            existingIds.any { it !in requestedIds }
-        ) {
+        if (requestedIds.size != requestedIds.toSet().size || requestedIds.any { it !in existingIds }) {
             throw ExpectedException(HttpStatus.CONFLICT, "박람회 프로그램 정보가 충돌합니다.")
         }
     }

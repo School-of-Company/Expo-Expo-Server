@@ -1,10 +1,13 @@
 package team.startup.expo.domain.expo
 
+import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.collections.shouldBeIn
 import io.kotest.matchers.shouldBe
+import jakarta.persistence.EntityManagerFactory
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.hibernate.SessionFactory
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -25,21 +28,28 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository
+import org.springframework.test.util.ReflectionTestUtils
 import org.springframework.web.filter.OncePerRequestFilter
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoDeletionClient
+import team.startup.expo.domain.expo.service.impl.GetExpoValidationServiceImpl
 import team.startup.expo.domain.image.entity.ExpoImage
 import team.startup.expo.domain.image.repository.ExpoImageRepository
 import team.startup.expo.domain.image.service.ImageCleanupService
 import team.startup.expo.domain.image.storage.impl.LocalImageStorage
+import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
+import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ObjectNode
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
+import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -50,7 +60,9 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 
 @SpringBootTest(
@@ -58,8 +70,10 @@ import javax.imageio.ImageIO
     properties = [
         "eureka.client.enabled=false",
         "spring.jpa.hibernate.ddl-auto=validate",
+        "spring.jpa.properties.hibernate.generate_statistics=true",
         "spring.flyway.enabled=true",
         "image.storage.local.directory=./build/test-images",
+        "EXPO_INTERNAL_TOKEN=test-internal-token",
     ],
 )
 @EntityScan("team.startup.expo.domain")
@@ -85,6 +99,12 @@ class ExpoApiPostgresHttpTests {
     private lateinit var localImageStorage: LocalImageStorage
 
     @Autowired
+    private lateinit var validationService: GetExpoValidationServiceImpl
+
+    @Autowired
+    private lateinit var deletionClient: ExpoDeletionClient
+
+    @Autowired
     private lateinit var standardProgramRepository: StandardProgramRepository
 
     @Autowired
@@ -92,6 +112,9 @@ class ExpoApiPostgresHttpTests {
 
     @Autowired
     private lateinit var jdbcTemplate: JdbcTemplate
+
+    @Autowired
+    private lateinit var entityManagerFactory: EntityManagerFactory
 
     private val httpClient = HttpClient.newHttpClient()
 
@@ -120,14 +143,14 @@ class ExpoApiPostgresHttpTests {
         expo.yesterdayApplicationPerson shouldBe 0L
         standardProgramRepository.findByExpo(expo).single().let { program ->
             program.title shouldBe "일반 프로그램"
-            program.startedAt shouldBe "2026-09-24 09:00"
-            program.endedAt shouldBe "2026-09-24 10:00"
+            program.startedAt shouldBe "2026-09-24T09:00"
+            program.endedAt shouldBe "2026-09-24T10:00"
             program.expo?.id shouldBe expoId
         }
         trainingProgramRepository.findByExpo(expo).single().let { program ->
             program.title shouldBe "연수 프로그램"
-            program.startedAt shouldBe "2026-09-24 10:00"
-            program.endedAt shouldBe "2026-09-24 11:00"
+            program.startedAt shouldBe "2026-09-24T10:00"
+            program.endedAt shouldBe "2026-09-24T11:00"
             program.category.name shouldBe "ESSENTIAL"
             program.expo?.id shouldBe expoId
         }
@@ -303,6 +326,193 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `삭제는 세 소유 서비스를 순서대로 정리한 뒤 로컬 프로그램까지 삭제하고 빈 204를 반환한다`() {
+        val expoId = createExpo()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val standardId = standardProgramRepository.findByExpo(expo).single().id!!
+        val trainingId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val calls = mutableListOf<String>()
+
+        withDeletionServer { exchange ->
+            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-delete-token"
+            calls += "${exchange.requestMethod} ${exchange.requestURI.path}"
+            if (exchange.requestURI.path.endsWith("/purge")) {
+                objectMapper.readTree(exchange.requestBody.readAllBytes()) shouldBe
+                    objectMapper.readTree(
+                        """{"standardProgramIds":[$standardId],"trainingProgramIds":[$trainingId]}""",
+                    )
+            }
+            204
+        }.use {
+            val response = request("/expo/$expoId", "DELETE")
+            response.statusCode() shouldBe 204
+            response.body() shouldBe ""
+            calls shouldBe
+                listOf(
+                    "POST /application/internal/expos/$expoId/purge",
+                    "DELETE /form/internal/expos/$expoId",
+                    "DELETE /user/internal/expos/$expoId",
+                )
+            expoRepository.existsById(expoId) shouldBe false
+            imageRepository.findAll().single().apply {
+                status shouldBe ExpoImage.ORPHAN
+                this.expoId shouldBe null
+            }
+            standardProgramRepository.count() shouldBe 0L
+            trainingProgramRepository.count() shouldBe 0L
+            assertError(request("/expo/$expoId", "DELETE"), 404, "박람회를 찾지 못 했습니다.")
+        }
+    }
+
+    @Test
+    fun `소유 서비스 실패는 삭제를 중단하고 재시도 시 같은 프로그램 ID로 이어간다`() {
+        val expoId = createExpo()
+        val formAttempts = AtomicInteger()
+        val applicationBodies = mutableListOf<String>()
+        withDeletionServer { exchange ->
+            when {
+                exchange.requestURI.path.endsWith("/purge") -> {
+                    applicationBodies += String(exchange.requestBody.readAllBytes())
+                    204
+                }
+
+                formAttempts.getAndIncrement() == 0 -> {
+                    503
+                }
+
+                else -> {
+                    204
+                }
+            }
+        }.use {
+            assertError(request("/expo/$expoId", "DELETE"), 502, "Form 서비스 삭제 응답을 확인할 수 없습니다.")
+            expoRepository
+                .findById(expoId)
+                .orElseThrow()
+                .deletingAt
+                ?.let { true } shouldBe true
+            standardProgramRepository.count() shouldBe 1L
+            trainingProgramRepository.count() shouldBe 1L
+            assertError(request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON), 409, "삭제 중인 박람회입니다.")
+
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 204
+            applicationBodies.size shouldBe 2
+            applicationBodies[0] shouldBe applicationBodies[1]
+            expoRepository.existsById(expoId) shouldBe false
+        }
+    }
+
+    @Test
+    fun `삭제는 권한과 내부 연동 설정을 확인한다`() {
+        val expoId = createExpo()
+        assertError(request("/expo/not-found", "DELETE"), 404, "박람회를 찾지 못 했습니다.")
+        assertError(request("/expo/$expoId", "DELETE", authority = null), 401, "인증이 필요합니다.")
+        assertError(request("/expo/$expoId", "DELETE", authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+        assertError(request("/expo/$expoId", "DELETE"), 503, "박람회 삭제 내부 연동이 설정되지 않았습니다.")
+        expoRepository.findById(expoId).orElseThrow().deletingAt shouldBe null
+    }
+
+    private fun withDeletionServer(respond: (com.sun.net.httpserver.HttpExchange) -> Int): AutoCloseable {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            val status = respond(exchange)
+            exchange.sendResponseHeaders(status, -1)
+            exchange.close()
+        }
+        server.start()
+        val url = "http://127.0.0.1:${server.address.port}"
+        ReflectionTestUtils.setField(deletionClient, "applicationUrl", "$url/application")
+        ReflectionTestUtils.setField(deletionClient, "formUrl", "$url/form")
+        ReflectionTestUtils.setField(deletionClient, "userUrl", "$url/user")
+        ReflectionTestUtils.setField(deletionClient, "internalToken", "test-delete-token")
+        return AutoCloseable {
+            server.stop(0)
+            listOf("applicationUrl", "formUrl", "userUrl", "internalToken").forEach {
+                ReflectionTestUtils.setField(deletionClient, it, "")
+            }
+        }
+    }
+
+    @Test
+    fun `실제 HTTP valid는 Form 서비스 상태와 기존 JSON 키를 반환한다`() {
+        val expoId = createExpo()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val serverExecutor = Executors.newCachedThreadPool()
+        val activeRequests = AtomicInteger()
+        val maxActiveRequests = AtomicInteger()
+        server.executor = serverExecutor
+        server.createContext("/") { exchange ->
+            val active = activeRequests.incrementAndGet()
+            maxActiveRequests.updateAndGet { maxOf(it, active) }
+            Thread.sleep(100)
+            val foundForm =
+                exchange.requestURI.path == "/forms/$expoId" &&
+                    exchange.requestURI.query in
+                    setOf("type=STANDARD&applicationType=PRE", "type=TRAINEE&applicationType=FIELD")
+            val foundSurvey = exchange.requestURI.path == "/surveys/$expoId" && exchange.requestURI.query == "type=STANDARD"
+            val found = foundForm || foundSurvey
+            exchange.sendResponseHeaders(if (found) 200 else 404, -1)
+            exchange.close()
+            activeRequests.decrementAndGet()
+        }
+        server.start()
+        try {
+            ReflectionTestUtils.setField(validationService, "formServiceUrl", "http://127.0.0.1:${server.address.port}")
+            val response = request("/expo/valid", "GET")
+            response.statusCode() shouldBe 200
+            objectMapper.readTree(response.body()) shouldBe
+                objectMapper.readTree(
+                    """{"expoValid":[{"expoId":"$expoId","preStandardFormCreatedStatus":true,"siteStandardFormCreatedStatus":false,"traineeFormCreatedStatus":true,"StandardSurveyCreatedStatus":true,"traineeSurveyCreatedStatus":false}]}""",
+                )
+            (maxActiveRequests.get() > 1) shouldBe true
+        } finally {
+            server.stop(0)
+            serverExecutor.shutdown()
+            ReflectionTestUtils.setField(validationService, "formServiceUrl", "")
+        }
+    }
+
+    @Test
+    fun `Form 서비스 URL 누락 시 valid는 빈 상태를 가장하지 않는다`() {
+        createExpo()
+
+        assertError(request("/expo/valid", "GET"), 503, "Form 서비스 연결이 설정되지 않았습니다.")
+    }
+
+    @Test
+    fun `페이지 목록은 전체 건수와 정렬된 일부 결과를 반환한다`() {
+        val ids = (1..5).map { createExpo() }
+
+        val first = objectMapper.readTree(request("/expo?page=0&size=2", "GET").body())
+        val last = objectMapper.readTree(request("/expo?page=2&size=2", "GET").body())
+        val pastEnd = objectMapper.readTree(request("/expo?page=3&size=2", "GET").body())
+
+        first.get("content").toList().map { it.get("id").asString() } shouldBe ids.sortedDescending().take(2)
+        first.get("totalElements").asLong() shouldBe 5L
+        first.get("totalPages").asInt() shouldBe 3
+        first.get("hasNext").asBoolean() shouldBe true
+        last.get("content").size() shouldBe 1
+        last.get("hasNext").asBoolean() shouldBe false
+        pastEnd.get("content").isEmpty shouldBe true
+        pastEnd.get("totalElements").asLong() shouldBe 5L
+    }
+
+    @Test
+    fun `페이지 기본값 빈 결과 입력 오류와 권한을 구분한다`() {
+        val empty = objectMapper.readTree(request("/expo?size=2", "GET").body())
+        empty.get("page").asInt() shouldBe 0
+        empty.get("size").asInt() shouldBe 2
+        empty.get("totalPages").asInt() shouldBe 0
+        empty.get("content").isEmpty shouldBe true
+
+        listOf("page=-1", "size=0", "size=101", "page=abc", "page=", "size=").forEach { query ->
+            assertError(request("/expo?$query", "GET"), 400, "잘못된 요청입니다.")
+        }
+        assertError(request("/expo?page=0", "GET", authority = null), 401, "인증이 필요합니다.")
+        assertError(request("/expo?page=0", "GET", authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+    }
+
+    @Test
     fun `실제 HTTP 생성은 빈 프로그램 목록을 허용한다`() {
         val emptyProgramsRequest = objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode
         emptyProgramsRequest.putArray("addStandardProRequestDto")
@@ -349,6 +559,140 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `내부 박람회 조회는 공유 토큰으로 날짜만 반환하고 없는 박람회는 404다`() {
+        val expoId = createExpo()
+
+        val response = request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token")
+        val period = objectMapper.readTree(response.body())
+
+        response.statusCode() shouldBe 200
+        period.size() shouldBe 2
+        period.get("startedDay").asString() shouldBe "2026-09-24"
+        period.get("finishedDay").asString() shouldBe "2026-09-25"
+        assertError(
+            request("/internal/expo/not-found", "GET", authority = null, internalToken = "test-internal-token"),
+            expectedStatus = 404,
+            expectedMessage = "박람회를 찾을 수 없습니다.",
+        )
+    }
+
+    @Test
+    fun `내부 박람회 조회는 토큰 누락과 불일치를 거부하고 외부 관리자 권한을 우회하지 못한다`() {
+        val expoId = createExpo()
+
+        assertError(request("/internal/expo/$expoId", "GET"), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo/$expoId", "GET", internalToken = "wrong-token"), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo/$expoId/", "GET", authority = null), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo/$expoId", "GET", authority = "ROLE_ADMIN"), 401, "인증이 필요합니다.")
+        assertError(request("/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token"), 401, "인증이 필요합니다.")
+        request("/expo/$expoId", "GET").statusCode() shouldBe 200
+    }
+
+    @Test
+    fun `실제 HTTP 프로그램 목록은 Expo별 ID순으로 계약 필드만 반환한다`() {
+        val expoId = createExpo()
+        createExpo()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val standardId = standardProgramRepository.findByExpo(expo).single().id!!
+        val trainingId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val secondStandardId =
+            standardProgramRepository
+                .saveAndFlush(
+                    StandardProgram(
+                        title = "두 번째 일반",
+                        startedAt = "2026-09-24 12:00",
+                        endedAt = "2026-09-24 13:00",
+                        expo = expo,
+                    ),
+                ).id!!
+        val secondTrainingId =
+            trainingProgramRepository
+                .saveAndFlush(
+                    TrainingProgram(
+                        title = "두 번째 연수",
+                        startedAt = "2026-09-24 13:00",
+                        endedAt = "2026-09-24 14:00",
+                        category = Category.CHOICE,
+                        expo = expo,
+                    ),
+                ).id!!
+
+        val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
+        statistics.clear()
+        val standardResponse = request("/standard/program/$expoId", "GET")
+        statistics.prepareStatementCount shouldBe 2L
+        statistics.clear()
+        val trainingResponse = request("/training/program/$expoId", "GET")
+        statistics.prepareStatementCount shouldBe 2L
+
+        standardResponse.statusCode() shouldBe 200
+        trainingResponse.statusCode() shouldBe 200
+        objectMapper.readTree(standardResponse.body()) shouldBe
+            objectMapper.readTree(
+                """[
+                    {"id":$standardId,"title":"일반 프로그램","startedAt":"2026-09-24T09:00","endedAt":"2026-09-24T10:00"},
+                    {"id":$secondStandardId,"title":"두 번째 일반","startedAt":"2026-09-24 12:00","endedAt":"2026-09-24 13:00"}
+                ]""",
+            )
+        objectMapper.readTree(trainingResponse.body()) shouldBe
+            objectMapper.readTree(
+                """[
+                    {"id":$trainingId,"title":"연수 프로그램","startedAt":"2026-09-24T10:00","endedAt":"2026-09-24T11:00","category":"ESSENTIAL"},
+                    {"id":$secondTrainingId,"title":"두 번째 연수","startedAt":"2026-09-24 13:00","endedAt":"2026-09-24 14:00","category":"CHOICE"}
+                ]""",
+            )
+    }
+
+    @Test
+    fun `실제 HTTP 프로그램 조회는 빈 목록과 없는 Expo 및 권한 실패를 구분한다`() {
+        val emptyRequest = objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode
+        emptyRequest.putArray("addStandardProRequestDto")
+        emptyRequest.putArray("addTrainingProRequestDto")
+        val expoId = objectMapper.readTree(postExpo(emptyRequest.toString(), "ROLE_ADMIN").body()).get("expoId").asString()
+
+        for (path in listOf("/standard/program", "/training/program")) {
+            val empty = request("$path/$expoId", "GET")
+            empty.statusCode() shouldBe 200
+            objectMapper.readTree(empty.body()).isEmpty shouldBe true
+            assertError(request("$path/not-found", "GET"), 404, "박람회를 찾을 수 없습니다.")
+            assertError(request("$path/$expoId", "GET", authority = null), 401, "인증이 필요합니다.")
+            assertError(request("$path/$expoId", "GET", authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+        }
+    }
+
+    @Test
+    fun `실제 HTTP 프로그램 조회 ID로 수정한 뒤 신규 ID와 변경 값을 다시 조회한다`() {
+        val expoId = createExpo()
+        val standardId =
+            objectMapper
+                .readTree(request("/standard/program/$expoId", "GET").body())
+                .single()
+                .get("id")
+                .asLong()
+        val trainingId =
+            objectMapper
+                .readTree(request("/training/program/$expoId", "GET").body())
+                .single()
+                .get("id")
+                .asLong()
+
+        request("/expo/$expoId", "PATCH", updateRequest(standardId, trainingId)).statusCode() shouldBe 204
+
+        val standardPrograms = objectMapper.readTree(request("/standard/program/$expoId", "GET").body())
+        val trainingPrograms = objectMapper.readTree(request("/training/program/$expoId", "GET").body())
+        standardPrograms.size() shouldBe 2
+        standardPrograms[0].get("id").asLong() shouldBe standardId
+        standardPrograms[0].get("title").asString() shouldBe "수정 일반"
+        standardPrograms[1].get("id").asLong() shouldBe (standardId + 1)
+        standardPrograms[1].get("title").asString() shouldBe "신규 일반"
+        trainingPrograms.size() shouldBe 2
+        trainingPrograms[0].get("id").asLong() shouldBe trainingId
+        trainingPrograms[0].get("category").asString() shouldBe "CHOICE"
+        trainingPrograms[1].get("id").asLong() shouldBe (trainingId + 1)
+        trainingPrograms[1].get("title").asString() shouldBe "신규 연수"
+    }
+
+    @Test
     fun `실제 HTTP 수정은 기존 프로그램 수정과 신규 추가 및 카운터 보존을 함께 처리한다`() {
         val expoId = createExpo()
         val expo = expoRepository.findById(expoId).orElseThrow()
@@ -375,16 +719,16 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `실제 HTTP 수정은 기존 프로그램 누락 시 쓰기 전에 409로 거부한다`() {
+    fun `실제 HTTP 수정은 누락된 기존 프로그램을 삭제한다`() {
         val expoId = createExpo()
         val updateRequest = objectMapper.readTree(EMPTY_UPDATE_REQUEST_JSON) as ObjectNode
 
         val response = request("/expo/$expoId", "PATCH", updateRequest.toString())
 
-        assertError(response, expectedStatus = 409, expectedMessage = "박람회 프로그램 정보가 충돌합니다.")
-        expoRepository.findById(expoId).orElseThrow().title shouldBe "2026 박람회"
-        standardProgramRepository.count() shouldBe 1L
-        trainingProgramRepository.count() shouldBe 1L
+        response.statusCode() shouldBe 204
+        expoRepository.findById(expoId).orElseThrow().title shouldBe "거부될 수정"
+        standardProgramRepository.count() shouldBe 0L
+        trainingProgramRepository.count() shouldBe 0L
     }
 
     @Test
@@ -536,6 +880,7 @@ class ExpoApiPostgresHttpTests {
         method: String,
         body: String? = null,
         authority: String? = "ROLE_ADMIN",
+        internalToken: String? = null,
     ): HttpResponse<String> {
         val requestBody =
             if (authority == "ROLE_ADMIN" && path.startsWith("/expo") && body != null) {
@@ -549,6 +894,7 @@ class ExpoApiPostgresHttpTests {
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .apply {
                     authority?.let { header(TEST_AUTHORITY_HEADER, it) }
+                    internalToken?.let { header("X-Internal-Token", it) }
                 }.method(
                     method,
                     requestBody?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody(),
@@ -615,7 +961,7 @@ class ExpoApiPostgresHttpTests {
         repeat(100) {
             val waiting =
                 jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE 'update tb_expo%'",
+                    "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%tb_expo%'",
                     Long::class.java,
                 ) ?: 0L
             if (waiting > 0L) {
