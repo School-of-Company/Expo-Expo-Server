@@ -6,3 +6,12 @@ data class StandardProgramResponse(
     val startedAt: String,
     val endedAt: String,
 )
+
+data class StandardProgramParticipantResponse(
+    val id: Long,
+    val name: String,
+    val programName: String,
+    val status: Boolean,
+    val entryTime: String?,
+    val leaveTime: String?,
+)
