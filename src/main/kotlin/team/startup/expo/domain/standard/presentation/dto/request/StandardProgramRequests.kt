@@ -25,3 +25,10 @@ data class UpdateStandardProgramRequest(
     @field:JsonFormat(pattern = "yyyy-MM-dd HH:mm")
     val endedAt: LocalDateTime,
 )
+
+data class ApplyStandardProgramsRequest(
+    @field:NotNull
+    val phoneNumber: String,
+    @field:NotNull
+    val standardProIds: List<Long>,
+)
