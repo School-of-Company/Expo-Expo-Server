@@ -61,7 +61,7 @@ class TrainingApplicationHttpContractTests {
         userResolveBody = """{"traineeId":42}"""
         userNamesBody = """[{"traineeId":42,"name":"홍길동"}]"""
         applicationListBody = "[]"
-        jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY")
+        jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
         jdbc.update(
             """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",

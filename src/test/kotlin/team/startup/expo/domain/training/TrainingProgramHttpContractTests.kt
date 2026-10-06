@@ -51,7 +51,7 @@ class TrainingProgramHttpContractTests {
 
     @BeforeEach
     fun setup() {
-        jdbcTemplate.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY")
+        jdbcTemplate.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
         expoRepository.saveAndFlush(
             Expo(
                 id = "training-test-expo",
