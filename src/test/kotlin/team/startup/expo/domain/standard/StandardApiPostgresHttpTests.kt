@@ -11,14 +11,13 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
-import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
-import team.startup.expo.domain.expo.HttpTestAuthenticationConfiguration
+import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
 import java.net.URI
@@ -35,7 +34,6 @@ import java.util.concurrent.ConcurrentLinkedQueue
     ],
 )
 @EntityScan("team.startup.expo.domain")
-@Import(HttpTestAuthenticationConfiguration::class)
 @Testcontainers
 class StandardApiPostgresHttpTests {
     @LocalServerPort
@@ -253,12 +251,18 @@ class StandardApiPostgresHttpTests {
             HttpRequest
                 .newBuilder(URI.create("http://localhost:$port$path"))
                 .header("Content-Type", "application/json")
-        authority?.let { builder.header("X-Test-Authority", it) }
+        authority?.let { builder.header("Authorization", "Bearer ${TestJwt.token(it)}") }
         val payload = body?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody()
         return http.send(builder.method(method, payload).build(), HttpResponse.BodyHandlers.ofString())
     }
 
     companion object {
+        @JvmStatic
+        @DynamicPropertySource
+        fun jwtPublicKey(registry: DynamicPropertyRegistry) {
+            registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
+        }
+
         private data class DependencyCall(
             val path: String,
             val method: String,

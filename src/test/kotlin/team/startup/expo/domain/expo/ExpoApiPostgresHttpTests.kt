@@ -4,9 +4,6 @@ import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.collections.shouldBeIn
 import io.kotest.matchers.shouldBe
 import jakarta.persistence.EntityManagerFactory
-import jakarta.servlet.FilterChain
-import jakarta.servlet.http.HttpServletRequest
-import jakarta.servlet.http.HttpServletResponse
 import org.hibernate.SessionFactory
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -14,22 +11,14 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.persistence.autoconfigure.EntityScan
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
-import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
-import org.springframework.boot.web.servlet.FilterRegistrationBean
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Import
-import org.springframework.core.Ordered
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
-import org.springframework.security.core.authority.SimpleGrantedAuthority
-import org.springframework.security.core.context.SecurityContextHolder
-import org.springframework.security.web.context.RequestAttributeSecurityContextRepository
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.util.ReflectionTestUtils
-import org.springframework.web.filter.OncePerRequestFilter
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
@@ -40,6 +29,7 @@ import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ObjectNode
 import java.net.InetSocketAddress
@@ -63,7 +53,6 @@ import java.util.concurrent.atomic.AtomicInteger
     ],
 )
 @EntityScan("team.startup.expo.domain")
-@Import(HttpTestAuthenticationConfiguration::class)
 @Testcontainers
 class ExpoApiPostgresHttpTests {
     @LocalServerPort
@@ -143,13 +132,60 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `X-User-Id만으로는 관리자 인증이 되지 않는다`() {
+        val response =
+            httpClient.send(
+                HttpRequest
+                    .newBuilder(URI.create("http://localhost:$port/expo"))
+                    .header("X-User-Id", "1")
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+        assertError(response, expectedStatus = 401, expectedMessage = "인증이 필요합니다.")
+    }
+
+    @Test
+    fun `변조된 Bearer 토큰은 거부한다`() {
+        val response =
+            httpClient.send(
+                HttpRequest
+                    .newBuilder(URI.create("http://localhost:$port/expo"))
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer ${TestJwt.token("ROLE_ADMIN")}x")
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+        assertError(response, expectedStatus = 401, expectedMessage = "인증이 필요합니다.")
+    }
+
+    @Test
+    fun `만료됐거나 15분보다 긴 Bearer 토큰은 거부한다`() {
+        listOf(
+            TestJwt.token("ROLE_ADMIN", ttlSeconds = 899, issuedAtOffsetSeconds = -900),
+            TestJwt.token("ROLE_ADMIN", ttlSeconds = 1800),
+        ).forEach { token ->
+            val response =
+                httpClient.send(
+                    HttpRequest
+                        .newBuilder(URI.create("http://localhost:$port/expo"))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer $token")
+                        .GET()
+                        .build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+            assertError(response, expectedStatus = 401, expectedMessage = "인증이 필요합니다.")
+        }
+    }
+
+    @Test
     fun `Spring 기본 예외는 원래 상태 코드를 유지하고 health는 인증 없이 열린다`() {
         val unsupportedMediaType =
             httpClient.send(
                 HttpRequest
                     .newBuilder(URI.create("http://localhost:$port/expo"))
                     .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_PLAIN_VALUE)
-                    .header(TEST_AUTHORITY_HEADER, "ROLE_ADMIN")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer ${TestJwt.token("ROLE_ADMIN")}")
                     .POST(HttpRequest.BodyPublishers.ofString(VALID_REQUEST_JSON))
                     .build(),
                 HttpResponse.BodyHandlers.ofString(),
@@ -599,7 +635,7 @@ class ExpoApiPostgresHttpTests {
                 .newBuilder(URI.create("http://localhost:$port$path"))
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .apply {
-                    authority?.let { header(TEST_AUTHORITY_HEADER, it) }
+                    authority?.let { header(HttpHeaders.AUTHORIZATION, "Bearer ${TestJwt.token(it)}") }
                     internalToken?.let { header("X-Internal-Token", it) }
                 }.method(
                     method,
@@ -700,7 +736,12 @@ class ExpoApiPostgresHttpTests {
     }
 
     companion object {
-        private const val TEST_AUTHORITY_HEADER = "X-Test-Authority"
+        @JvmStatic
+        @DynamicPropertySource
+        fun jwtPublicKey(registry: DynamicPropertyRegistry) {
+            registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
+        }
+
         private const val ID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         private const val STANDARD_PROGRAM_JSON =
             """{
@@ -752,36 +793,5 @@ class ExpoApiPostgresHttpTests {
               "updateTrainingProRequestDto": []
             }
             """.trimIndent()
-    }
-}
-
-@TestConfiguration(proxyBeanMethods = false)
-class HttpTestAuthenticationConfiguration {
-    @Bean
-    fun httpTestAuthenticationFilter(): FilterRegistrationBean<OncePerRequestFilter> {
-        val filter =
-            object : OncePerRequestFilter() {
-                override fun doFilterInternal(
-                    request: HttpServletRequest,
-                    response: HttpServletResponse,
-                    filterChain: FilterChain,
-                ) {
-                    request.getHeader("X-Test-Authority")?.let { authority ->
-                        val context = SecurityContextHolder.createEmptyContext()
-                        context.authentication =
-                            UsernamePasswordAuthenticationToken.authenticated(
-                                "http-test-user",
-                                null,
-                                listOf(SimpleGrantedAuthority(authority)),
-                            )
-                        request.setAttribute(RequestAttributeSecurityContextRepository.DEFAULT_REQUEST_ATTR_NAME, context)
-                    }
-                    filterChain.doFilter(request, response)
-                }
-            }
-
-        return FilterRegistrationBean<OncePerRequestFilter>(filter).apply {
-            order = Ordered.HIGHEST_PRECEDENCE
-        }
     }
 }

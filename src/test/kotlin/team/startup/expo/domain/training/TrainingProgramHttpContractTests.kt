@@ -9,15 +9,16 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
-import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
-import team.startup.expo.domain.expo.HttpTestAuthenticationConfiguration
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import java.net.URI
 import java.net.http.HttpClient
@@ -29,7 +30,6 @@ import java.net.http.HttpResponse
     properties = ["eureka.client.enabled=false", "spring.jpa.hibernate.ddl-auto=validate"],
 )
 @EntityScan("team.startup.expo.domain")
-@Import(HttpTestAuthenticationConfiguration::class)
 @Testcontainers
 class TrainingProgramHttpContractTests {
     @LocalServerPort
@@ -158,13 +158,19 @@ class TrainingProgramHttpContractTests {
         authority: String? = "ROLE_ADMIN",
     ): HttpResponse<String> {
         val builder = HttpRequest.newBuilder(URI.create("http://localhost:$port$path"))
-        authority?.let { builder.header("X-Test-Authority", it) }
+        authority?.let { builder.header("Authorization", "Bearer ${TestJwt.token(it)}") }
         val publisher = body?.let { HttpRequest.BodyPublishers.ofString(it) } ?: HttpRequest.BodyPublishers.noBody()
         body?.let { builder.header("Content-Type", "application/json") }
         return http.send(builder.method(method, publisher).build(), HttpResponse.BodyHandlers.ofString())
     }
 
     companion object {
+        @JvmStatic
+        @DynamicPropertySource
+        fun jwtPublicKey(registry: DynamicPropertyRegistry) {
+            registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
+        }
+
         private const val PROGRAM =
             """{"title":"연수","startedAt":"2026-09-24 10:00","endedAt":"2026-09-24 11:00","category":"ESSENTIAL"}"""
 
