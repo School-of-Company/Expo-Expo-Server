@@ -1,6 +1,7 @@
 package team.startup.expo.global.security
 
 import jakarta.servlet.http.HttpServletResponse
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
@@ -9,6 +10,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import team.startup.expo.global.exception.ErrorResponse
 import tools.jackson.databind.ObjectMapper
 
@@ -19,6 +21,7 @@ class SecurityConfig {
     fun securityFilterChain(
         http: HttpSecurity,
         objectMapper: ObjectMapper,
+        @Value("\${EXPO_INTERNAL_TOKEN:}") internalToken: String,
     ): SecurityFilterChain {
         http
             .csrf { it.disable() }
@@ -36,6 +39,8 @@ class SecurityConfig {
             }.authorizeHttpRequests { requests ->
                 requests
                     .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}")
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/expo")
                     .hasAuthority(ADMIN_AUTHORITY)
@@ -56,6 +61,8 @@ class SecurityConfig {
                     .anyRequest()
                     .denyAll()
             }
+
+        http.addFilterBefore(InternalTokenFilter(internalToken, objectMapper), UsernamePasswordAuthenticationFilter::class.java)
 
         return http.build()
     }

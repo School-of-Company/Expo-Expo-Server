@@ -59,6 +59,7 @@ import java.util.concurrent.atomic.AtomicInteger
         "spring.jpa.hibernate.ddl-auto=validate",
         "spring.jpa.properties.hibernate.generate_statistics=true",
         "spring.flyway.enabled=true",
+        "EXPO_INTERNAL_TOKEN=test-internal-token",
     ],
 )
 @EntityScan("team.startup.expo.domain")
@@ -293,6 +294,34 @@ class ExpoApiPostgresHttpTests {
         listResponse.statusCode() shouldBe 200
         objectMapper.readTree(listResponse.body()).isEmpty shouldBe true
         assertError(detailResponse, expectedStatus = 404, expectedMessage = "박람회를 찾을 수 없습니다.")
+    }
+
+    @Test
+    fun `내부 박람회 조회는 공유 토큰으로 날짜만 반환하고 없는 박람회는 404다`() {
+        val expoId = createExpo()
+
+        val response = request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token")
+        val period = objectMapper.readTree(response.body())
+
+        response.statusCode() shouldBe 200
+        period.size() shouldBe 2
+        period.get("startedDay").asString() shouldBe "2026-09-24"
+        period.get("finishedDay").asString() shouldBe "2026-09-25"
+        assertError(
+            request("/internal/expo/not-found", "GET", authority = null, internalToken = "test-internal-token"),
+            expectedStatus = 404,
+            expectedMessage = "박람회를 찾을 수 없습니다.",
+        )
+    }
+
+    @Test
+    fun `내부 박람회 조회는 토큰 누락과 불일치를 거부하고 외부 관리자 권한을 우회하지 못한다`() {
+        val expoId = createExpo()
+
+        assertError(request("/internal/expo/$expoId", "GET"), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo/$expoId", "GET", internalToken = "wrong-token"), 401, "인증이 필요합니다.")
+        assertError(request("/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token"), 401, "인증이 필요합니다.")
+        request("/expo/$expoId", "GET").statusCode() shouldBe 200
     }
 
     @Test
@@ -561,6 +590,7 @@ class ExpoApiPostgresHttpTests {
         method: String,
         body: String? = null,
         authority: String? = "ROLE_ADMIN",
+        internalToken: String? = null,
     ): HttpResponse<String> {
         val request =
             HttpRequest
@@ -568,6 +598,7 @@ class ExpoApiPostgresHttpTests {
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .apply {
                     authority?.let { header(TEST_AUTHORITY_HEADER, it) }
+                    internalToken?.let { header("X-Internal-Token", it) }
                 }.method(
                     method,
                     body?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody(),
