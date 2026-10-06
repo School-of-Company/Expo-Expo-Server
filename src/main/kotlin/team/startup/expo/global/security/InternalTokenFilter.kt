@@ -4,6 +4,9 @@ import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.http.MediaType
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
+import org.springframework.security.core.authority.SimpleGrantedAuthority
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.filter.OncePerRequestFilter
 import team.startup.expo.global.exception.ErrorResponse
 import tools.jackson.databind.ObjectMapper
@@ -15,8 +18,7 @@ class InternalTokenFilter(
 ) : OncePerRequestFilter() {
     private val expectedTokenBytes = expectedToken.toByteArray(Charsets.UTF_8)
 
-    override fun shouldNotFilter(request: HttpServletRequest): Boolean =
-        request.method != "GET" || !INTERNAL_EXPO_PATH.matches(request.servletPath)
+    override fun shouldNotFilter(request: HttpServletRequest): Boolean = !request.servletPath.startsWith("/internal/")
 
     override fun doFilterInternal(
         request: HttpServletRequest,
@@ -36,11 +38,19 @@ class InternalTokenFilter(
             return
         }
 
+        val context = SecurityContextHolder.createEmptyContext()
+        context.authentication =
+            UsernamePasswordAuthenticationToken.authenticated(
+                "internal-service",
+                null,
+                listOf(SimpleGrantedAuthority(INTERNAL_AUTHORITY)),
+            )
+        SecurityContextHolder.setContext(context)
         filterChain.doFilter(request, response)
     }
 
-    private companion object {
-        const val INTERNAL_TOKEN_HEADER = "X-Internal-Token"
-        val INTERNAL_EXPO_PATH = Regex("^/internal/expo/[^/]+$")
+    companion object {
+        const val INTERNAL_AUTHORITY = "ROLE_INTERNAL_SERVICE"
+        private const val INTERNAL_TOKEN_HEADER = "X-Internal-Token"
     }
 }

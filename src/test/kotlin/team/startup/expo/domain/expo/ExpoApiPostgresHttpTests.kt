@@ -320,6 +320,8 @@ class ExpoApiPostgresHttpTests {
 
         assertError(request("/internal/expo/$expoId", "GET"), 401, "인증이 필요합니다.")
         assertError(request("/internal/expo/$expoId", "GET", internalToken = "wrong-token"), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo/$expoId/", "GET", authority = null), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo/$expoId", "GET", authority = "ROLE_ADMIN"), 401, "인증이 필요합니다.")
         assertError(request("/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token"), 401, "인증이 필요합니다.")
         request("/expo/$expoId", "GET").statusCode() shouldBe 200
     }

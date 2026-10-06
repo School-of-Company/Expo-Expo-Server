@@ -1,6 +1,7 @@
 package team.startup.expo.global.security
 
 import jakarta.servlet.http.HttpServletResponse
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -23,6 +24,10 @@ class SecurityConfig {
         objectMapper: ObjectMapper,
         @Value("\${EXPO_INTERNAL_TOKEN:}") internalToken: String,
     ): SecurityFilterChain {
+        if (internalToken.isBlank()) {
+            logger.warn("EXPO_INTERNAL_TOKEN is not configured; internal expo requests will be rejected")
+        }
+
         http
             .csrf { it.disable() }
             .cors { it.disable() }
@@ -41,7 +46,7 @@ class SecurityConfig {
                     .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}")
-                    .permitAll()
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/expo")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/expo", "/expo/{expo_id}")
@@ -81,5 +86,6 @@ class SecurityConfig {
 
     private companion object {
         const val ADMIN_AUTHORITY = "ROLE_ADMIN"
+        val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
     }
 }
