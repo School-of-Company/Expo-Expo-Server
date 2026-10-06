@@ -595,14 +595,15 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `내부 박람회 조회는 공유 토큰으로 날짜만 반환하고 없는 박람회는 404다`() {
+    fun `내부 박람회 조회는 공유 토큰으로 제목과 날짜만 반환하고 없는 박람회는 404다`() {
         val expoId = createExpo()
 
         val response = request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token")
         val period = objectMapper.readTree(response.body())
 
         response.statusCode() shouldBe 200
-        period.size() shouldBe 2
+        period.size() shouldBe 3
+        period.get("title").asString() shouldBe "2026 박람회"
         period.get("startedDay").asString() shouldBe "2026-09-24"
         period.get("finishedDay").asString() shouldBe "2026-09-25"
         assertError(
@@ -622,6 +623,94 @@ class ExpoApiPostgresHttpTests {
         assertError(request("/internal/expo/$expoId", "GET", authority = "ROLE_ADMIN"), 401, "인증이 필요합니다.")
         assertError(request("/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token"), 401, "인증이 필요합니다.")
         request("/expo/$expoId", "GET").statusCode() shouldBe 200
+    }
+
+    @Test
+    fun `내부 연수 프로그램 일괄 조회는 중복을 합쳐 ID순으로 반환하고 시간을 yyyy-MM-dd HH mm으로 맞춘다`() {
+        val expoId = createExpo()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val firstId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val secondId =
+            trainingProgramRepository
+                .saveAndFlush(
+                    TrainingProgram(
+                        title = "두 번째 연수",
+                        startedAt = "2026-09-24 13:00",
+                        endedAt = "2026-09-24 14:00",
+                        category = Category.CHOICE,
+                        expo = expo,
+                    ),
+                ).id!!
+
+        val response = internalBatch(expoId, """{"programIds":[$secondId,$firstId,$secondId]}""")
+        val empty = internalBatch(expoId, """{"programIds":[]}""")
+
+        response.statusCode() shouldBe 200
+        objectMapper.readTree(response.body()) shouldBe
+            objectMapper.readTree(
+                """[
+                    {"id":$firstId,"title":"연수 프로그램","startedAt":"2026-09-24 10:00","endedAt":"2026-09-24 11:00","category":"ESSENTIAL"},
+                    {"id":$secondId,"title":"두 번째 연수","startedAt":"2026-09-24 13:00","endedAt":"2026-09-24 14:00","category":"CHOICE"}
+                ]""",
+            )
+        empty.statusCode() shouldBe 200
+        objectMapper.readTree(empty.body()).isEmpty shouldBe true
+    }
+
+    @Test
+    fun `내부 연수 프로그램 일괄 조회는 다른 박람회나 없는 ID와 잘못된 요청을 명시적으로 거부한다`() {
+        val expoId = createExpo()
+        val otherExpoId = createExpo()
+        val programId = trainingProgramRepository.findByExpo(expoRepository.findById(expoId).orElseThrow()).single().id!!
+        val otherProgramId = trainingProgramRepository.findByExpo(expoRepository.findById(otherExpoId).orElseThrow()).single().id!!
+
+        assertError(internalBatch(expoId, """{"programIds":[$programId,$otherProgramId]}"""), 404, "연수 프로그램을 찾지 못했습니다.")
+        assertError(internalBatch(expoId, """{"programIds":[$programId,999999]}"""), 404, "연수 프로그램을 찾지 못했습니다.")
+        assertError(internalBatch("not-found", """{"programIds":[$programId]}"""), 404, "박람회를 찾을 수 없습니다.")
+        assertError(internalBatch("not-found", """{"programIds":[]}"""), 404, "박람회를 찾을 수 없습니다.")
+        for (body in listOf("{}", """{"programIds":null}""", """{"programIds":[null]}""", """{"programIds":["a"]}""")) {
+            assertError(internalBatch(expoId, body), 400, "잘못된 요청입니다.")
+        }
+        val limit = (1..100).joinToString(",", "[", "]") { programId.toString() }
+        internalBatch(expoId, """{"programIds":$limit}""").statusCode() shouldBe 200
+        val overLimit = (1..101).joinToString(",", "[", "]") { programId.toString() }
+        assertError(internalBatch(expoId, """{"programIds":$overLimit}"""), 400, "잘못된 요청입니다.")
+    }
+
+    @Test
+    fun `내부 일반 프로그램 조회는 같은 박람회 소속일 때만 ID와 제목을 반환한다`() {
+        val expoId = createExpo()
+        val otherExpoId = createExpo()
+        val programId = standardProgramRepository.findByExpo(expoRepository.findById(expoId).orElseThrow()).single().id!!
+        val otherProgramId = standardProgramRepository.findByExpo(expoRepository.findById(otherExpoId).orElseThrow()).single().id!!
+
+        val response = internalStandard(expoId, programId.toString())
+
+        response.statusCode() shouldBe 200
+        objectMapper.readTree(response.body()) shouldBe objectMapper.readTree("""{"id":$programId,"title":"일반 프로그램"}""")
+        assertError(internalStandard(expoId, otherProgramId.toString()), 404, "일반 프로그램을 찾지 못 했습니다.")
+        assertError(internalStandard(expoId, "999999"), 404, "일반 프로그램을 찾지 못 했습니다.")
+        assertError(internalStandard("not-found", programId.toString()), 404, "박람회를 찾을 수 없습니다.")
+        assertError(internalStandard(expoId, "abc"), 400, "잘못된 요청입니다.")
+    }
+
+    @Test
+    fun `내부 프로그램 조회는 토큰 누락과 불일치를 거부하고 관리자 JWT로 대체되지 않는다`() {
+        val expoId = createExpo()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val trainingId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val standardId = standardProgramRepository.findByExpo(expo).single().id!!
+        val batch = "/internal/expo/$expoId/training-programs/batch" to """{"programIds":[$trainingId]}"""
+        val standard = "/internal/expo/$expoId/standard-programs/$standardId"
+
+        assertError(request(batch.first, "POST", batch.second, authority = null), 401, "인증이 필요합니다.")
+        assertError(request(batch.first, "POST", batch.second, authority = null, internalToken = "wrong-token"), 401, "인증이 필요합니다.")
+        assertError(request(batch.first, "POST", batch.second, authority = "ROLE_ADMIN"), 401, "인증이 필요합니다.")
+        assertError(request(standard, "GET", authority = null), 401, "인증이 필요합니다.")
+        assertError(request(standard, "GET", authority = null, internalToken = "wrong-token"), 401, "인증이 필요합니다.")
+        assertError(request(standard, "GET", authority = "ROLE_ADMIN"), 401, "인증이 필요합니다.")
+        assertError(request(batch.first, "GET", authority = null, internalToken = "test-internal-token"), 403, "접근 권한이 없습니다.")
+        assertError(request(standard, "POST", "{}", authority = null, internalToken = "test-internal-token"), 403, "접근 권한이 없습니다.")
     }
 
     @Test
@@ -879,6 +968,18 @@ class ExpoApiPostgresHttpTests {
             updated.yesterdayApplicationPerson shouldBe 1L
         }
     }
+
+    private fun internalBatch(
+        expoId: String,
+        body: String,
+    ): HttpResponse<String> =
+        request("/internal/expo/$expoId/training-programs/batch", "POST", body, authority = null, internalToken = "test-internal-token")
+
+    private fun internalStandard(
+        expoId: String,
+        programId: String,
+    ): HttpResponse<String> =
+        request("/internal/expo/$expoId/standard-programs/$programId", "GET", authority = null, internalToken = "test-internal-token")
 
     private fun postExpo(
         body: String,

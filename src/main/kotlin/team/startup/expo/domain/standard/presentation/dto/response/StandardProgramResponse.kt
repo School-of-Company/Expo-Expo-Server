@@ -15,3 +15,8 @@ data class StandardProgramParticipantResponse(
     val entryTime: String?,
     val leaveTime: String?,
 )
+
+data class StandardProgramTitleResponse(
+    val id: Long,
+    val title: String,
+)
