@@ -45,6 +45,10 @@ class SecurityConfig {
                 requests
                     .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
                     .permitAll()
+                    .requestMatchers(HttpMethod.GET, "/image/{id}")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/image")
+                    .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/expo")

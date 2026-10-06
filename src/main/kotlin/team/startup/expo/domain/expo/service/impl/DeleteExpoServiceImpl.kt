@@ -6,6 +6,7 @@ import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.DeleteExpoService
 import team.startup.expo.domain.expo.service.ExpoDeletionClient
+import team.startup.expo.domain.image.repository.ExpoImageRepository
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.global.exception.ExpectedException
@@ -15,6 +16,7 @@ class DeleteExpoServiceImpl(
     private val expos: ExpoRepository,
     private val standardPrograms: StandardProgramRepository,
     private val trainingPrograms: TrainingProgramRepository,
+    private val images: ExpoImageRepository,
     private val dependencies: ExpoDeletionClient,
     private val transactions: TransactionTemplate,
 ) : DeleteExpoService {
@@ -37,7 +39,10 @@ class DeleteExpoServiceImpl(
         dependencies.deleteUsers(expoId)
 
         transactions.executeWithoutResult {
-            expos.findLockedById(expoId)?.let(expos::delete)
+            expos.findLockedById(expoId)?.let { expo ->
+                images.findAllByExpoId(expoId).forEach { it.detach() }
+                expos.delete(expo)
+            }
         }
     }
 

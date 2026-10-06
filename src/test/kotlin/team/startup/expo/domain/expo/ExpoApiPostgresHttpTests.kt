@@ -36,6 +36,10 @@ import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.ExpoDeletionClient
 import team.startup.expo.domain.expo.service.impl.GetExpoValidationServiceImpl
+import team.startup.expo.domain.image.entity.ExpoImage
+import team.startup.expo.domain.image.repository.ExpoImageRepository
+import team.startup.expo.domain.image.service.ImageCleanupService
+import team.startup.expo.domain.image.storage.impl.LocalImageStorage
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
@@ -43,15 +47,23 @@ import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ObjectNode
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import javax.imageio.ImageIO
 
 @SpringBootTest(
     webEnvironment = RANDOM_PORT,
@@ -60,6 +72,7 @@ import java.util.concurrent.atomic.AtomicInteger
         "spring.jpa.hibernate.ddl-auto=validate",
         "spring.jpa.properties.hibernate.generate_statistics=true",
         "spring.flyway.enabled=true",
+        "image.storage.local.directory=./build/test-images",
         "EXPO_INTERNAL_TOKEN=test-internal-token",
     ],
 )
@@ -75,6 +88,15 @@ class ExpoApiPostgresHttpTests {
 
     @Autowired
     private lateinit var expoRepository: ExpoRepository
+
+    @Autowired
+    private lateinit var imageRepository: ExpoImageRepository
+
+    @Autowired
+    private lateinit var imageCleanupService: ImageCleanupService
+
+    @Autowired
+    private lateinit var localImageStorage: LocalImageStorage
 
     @Autowired
     private lateinit var validationService: GetExpoValidationServiceImpl
@@ -98,7 +120,7 @@ class ExpoApiPostgresHttpTests {
 
     @BeforeEach
     fun clearTables() {
-        jdbcTemplate.execute("TRUNCATE TABLE tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY")
+        jdbcTemplate.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY")
     }
 
     @Test
@@ -131,6 +153,134 @@ class ExpoApiPostgresHttpTests {
             program.endedAt shouldBe "2026-09-24T11:00"
             program.category.name shouldBe "ESSENTIAL"
             program.expo?.id shouldBe expoId
+        }
+    }
+
+    @Test
+    fun `이미지 업로드 URL은 공개 조회와 Expo 연결 후에도 유지된다`() {
+        val uploaded = uploadImage(pngBytes())
+        uploaded.statusCode() shouldBe 201
+        val url = objectMapper.readTree(uploaded.body()).get("imageURL").asString()
+        val id = url.substringAfterLast('/')
+        val imageResponse =
+            httpClient.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:$port/image/$id")).GET().build(),
+                HttpResponse.BodyHandlers.ofByteArray(),
+            )
+        imageResponse.statusCode() shouldBe 200
+        imageResponse.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow() shouldBe "image/png"
+        ImageIO.read(imageResponse.body().inputStream()).width shouldBe 750
+
+        val created = postExpo(VALID_REQUEST_JSON.replace("https://example.com/cover.png", url), "ROLE_ADMIN")
+        created.statusCode() shouldBe 201
+        val expoId = objectMapper.readTree(created.body()).get("expoId").asString()
+        expoRepository.findById(expoId).orElseThrow().coverImage shouldBe url
+        imageRepository.findById(id).orElseThrow().status shouldBe ExpoImage.ATTACHED
+
+        val reused = postExpo(VALID_REQUEST_JSON.replace("https://example.com/cover.png", url), "ROLE_ADMIN")
+        assertError(reused, 409, "이미지를 연결할 수 없습니다.")
+    }
+
+    @Test
+    fun `이미지 업로드는 관리자 권한과 파일 형식을 확인한다`() {
+        val png = pngBytes()
+        assertError(uploadImage(png, authority = null), 401, "인증이 필요합니다.")
+        assertError(uploadImage(png, authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+        assertError(uploadImage("not an image".toByteArray()), 400, "올바른 이미지가 아닙니다.")
+        assertError(uploadImage(png, contentType = "image/svg+xml"), 415, "JPEG 또는 PNG 이미지만 업로드할 수 있습니다.")
+        imageRepository.count() shouldBe 0L
+    }
+
+    @Test
+    fun `업로드되지 않은 URL과 다른 관리자 이미지는 Expo 생성에서 거부한다`() {
+        val unknown = postExpo(VALID_REQUEST_JSON.replace("https://example.com/cover.png", "https://example.com/other.png"), "ROLE_ADMIN")
+        assertError(unknown, 409, "업로드된 이미지를 찾을 수 없습니다.")
+
+        val id = UUID.randomUUID().toString()
+        val url = "http://localhost:8080/image/$id"
+        imageRepository.saveAndFlush(ExpoImage(id, "local", "img/$id.png", url, "image/png", "different-admin"))
+        val foreign = postExpo(VALID_REQUEST_JSON.replace("https://example.com/cover.png", url), "ROLE_ADMIN")
+        assertError(foreign, 409, "이미지를 연결할 수 없습니다.")
+        expoRepository.count() shouldBe 0L
+    }
+
+    @Test
+    fun `이미지 교체는 이전 자산을 미연결 상태로 바꾸고 새 자산을 연결한다`() {
+        val firstUrl = objectMapper.readTree(uploadImage(pngBytes()).body()).get("imageURL").asString()
+        val created = postExpo(VALID_REQUEST_JSON.replace("https://example.com/cover.png", firstUrl), "ROLE_ADMIN")
+        val expoId = objectMapper.readTree(created.body()).get("expoId").asString()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val standardId = standardProgramRepository.findByExpo(expo).single().id!!
+        val trainingId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val secondUrl = objectMapper.readTree(uploadImage(pngBytes()).body()).get("imageURL").asString()
+
+        val response =
+            request("/expo/$expoId", "PATCH", updateRequest(standardId, trainingId).replace("https://example.com/updated.png", secondUrl))
+
+        response.statusCode() shouldBe 204
+        expoRepository.findById(expoId).orElseThrow().coverImage shouldBe secondUrl
+        imageRepository.findById(firstUrl.substringAfterLast('/')).orElseThrow().status shouldBe ExpoImage.ORPHAN
+        imageRepository.findById(secondUrl.substringAfterLast('/')).orElseThrow().status shouldBe ExpoImage.ATTACHED
+    }
+
+    @Test
+    fun `오래된 미연결 이미지는 파일과 자산을 함께 정리한다`() {
+        val id = UUID.randomUUID().toString()
+        val key = "img/$id.png"
+        val file = Path.of("./build/test-images/$key")
+        localImageStorage.put(key, pngBytes(), "image/png")
+        imageRepository.saveAndFlush(
+            ExpoImage(
+                id,
+                "local",
+                key,
+                "http://localhost:8080/image/$id",
+                "image/png",
+                "http-test-user",
+                Instant.now().minus(25, ChronoUnit.HOURS),
+            ),
+        )
+
+        imageCleanupService.execute()
+
+        imageRepository.existsById(id) shouldBe false
+        Files.exists(file) shouldBe false
+    }
+
+    @Test
+    fun `업로드 제한을 넘은 파일은 413 오류 형식으로 응답한다`() {
+        val response = uploadImage(ByteArray(5 * 1024 * 1024 + 1))
+
+        response.statusCode() shouldBe 413
+        objectMapper.readTree(response.body()).get("status").asInt() shouldBe 413
+    }
+
+    @Test
+    fun `이미지 연결 DB 실패는 Expo 생성과 자산 상태를 함께 롤백한다`() {
+        jdbcTemplate.execute(
+            """
+            CREATE FUNCTION fail_image_attach() RETURNS trigger AS ${'$'}trigger${'$'}
+            BEGIN
+                IF NEW.status = 'ATTACHED' THEN
+                    RAISE EXCEPTION 'forced image attachment failure';
+                END IF;
+                RETURN NEW;
+            END;
+            ${'$'}trigger${'$'} LANGUAGE plpgsql
+            """.trimIndent(),
+        )
+        jdbcTemplate.execute(
+            "CREATE TRIGGER fail_image_attach BEFORE UPDATE ON tb_expo_image FOR EACH ROW EXECUTE FUNCTION fail_image_attach()",
+        )
+        try {
+            val response = postExpo(VALID_REQUEST_JSON, "ROLE_ADMIN")
+
+            assertError(response, 500, "서버 오류가 발생했습니다.")
+            expoRepository.count() shouldBe 0L
+            imageRepository.findAll().single().status shouldBe ExpoImage.PENDING
+        } finally {
+            jdbcTemplate.execute("DROP TRIGGER IF EXISTS fail_image_attach ON tb_expo_image")
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS fail_image_attach()")
         }
     }
 
@@ -204,6 +354,10 @@ class ExpoApiPostgresHttpTests {
                     "DELETE /user/internal/expos/$expoId",
                 )
             expoRepository.existsById(expoId) shouldBe false
+            imageRepository.findAll().single().apply {
+                status shouldBe ExpoImage.ORPHAN
+                this.expoId shouldBe null
+            }
             standardProgramRepository.count() shouldBe 0L
             trainingProgramRepository.count() shouldBe 0L
             assertError(request("/expo/$expoId", "DELETE"), 404, "박람회를 찾지 못 했습니다.")
@@ -695,6 +849,32 @@ class ExpoApiPostgresHttpTests {
         authority: String? = null,
     ): HttpResponse<String> = request("/expo", "POST", body, authority)
 
+    private fun uploadImage(
+        bytes: ByteArray,
+        contentType: String = "image/png",
+        authority: String? = "ROLE_ADMIN",
+    ): HttpResponse<String> {
+        val boundary = "image-test-boundary"
+        val header =
+            "--$boundary\r\nContent-Disposition: form-data; name=\"image\"; filename=\"cover.png\"\r\n" +
+                "Content-Type: $contentType\r\n\r\n"
+        val payload = header.toByteArray() + bytes + "\r\n--$boundary--\r\n".toByteArray()
+        val request =
+            HttpRequest
+                .newBuilder(URI.create("http://localhost:$port/image"))
+                .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=$boundary")
+                .apply { authority?.let { header(TEST_AUTHORITY_HEADER, it) } }
+                .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
+                .build()
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+    }
+
+    private fun pngBytes(): ByteArray =
+        ByteArrayOutputStream().use { output ->
+            ImageIO.write(BufferedImage(750, 360, BufferedImage.TYPE_INT_RGB), "png", output)
+            output.toByteArray()
+        }
+
     private fun request(
         path: String,
         method: String,
@@ -702,6 +882,12 @@ class ExpoApiPostgresHttpTests {
         authority: String? = "ROLE_ADMIN",
         internalToken: String? = null,
     ): HttpResponse<String> {
+        val requestBody =
+            if (authority == "ROLE_ADMIN" && path.startsWith("/expo") && body != null) {
+                Regex("https://example\\.com/(cover|updated)\\.png").replace(body) { imageFixtureUrl() }
+            } else {
+                body
+            }
         val request =
             HttpRequest
                 .newBuilder(URI.create("http://localhost:$port$path"))
@@ -711,10 +897,26 @@ class ExpoApiPostgresHttpTests {
                     internalToken?.let { header("X-Internal-Token", it) }
                 }.method(
                     method,
-                    body?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody(),
+                    requestBody?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody(),
                 ).build()
 
         return httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+    }
+
+    private fun imageFixtureUrl(): String {
+        val id = UUID.randomUUID().toString()
+        val url = "http://localhost:8080/image/$id"
+        imageRepository.saveAndFlush(
+            ExpoImage(
+                id = id,
+                storageProvider = "local",
+                objectKey = "img/$id.png",
+                publicUrl = url,
+                contentType = "image/png",
+                uploadedBy = "http-test-user",
+            ),
+        )
+        return url
     }
 
     private fun createExpo(): String {

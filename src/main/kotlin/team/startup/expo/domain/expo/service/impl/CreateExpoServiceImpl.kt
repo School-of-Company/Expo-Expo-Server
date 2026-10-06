@@ -1,5 +1,7 @@
 package team.startup.expo.domain.expo.service.impl
 
+import org.springframework.http.HttpStatus
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.entity.Expo
@@ -7,11 +9,13 @@ import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.CreateExpoService
+import team.startup.expo.domain.image.service.AttachExpoImageService
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.global.common.id.ExpoIdGenerator
+import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class CreateExpoServiceImpl(
@@ -19,6 +23,7 @@ class CreateExpoServiceImpl(
     private val standardProgramRepository: StandardProgramRepository,
     private val trainingProgramRepository: TrainingProgramRepository,
     private val expoIdGenerator: ExpoIdGenerator,
+    private val attachExpoImageService: AttachExpoImageService,
 ) : CreateExpoService {
     @Transactional
     override fun execute(request: CreateExpoRequest): CreateExpoResponse {
@@ -59,6 +64,11 @@ class CreateExpoServiceImpl(
                 )
             },
         )
+
+        val uploadedBy =
+            SecurityContextHolder.getContext().authentication?.name
+                ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+        attachExpoImageService.execute(request.coverImage, uploadedBy, expo.id)
 
         return CreateExpoResponse(expoId = expo.id)
     }
