@@ -32,7 +32,7 @@ class TrainingDependenciesClient(
     ): Long {
         val response = post(userServiceUrl, "/internal/trainees/resolve", ResolveTraineeRequest(expoId, trainingId))
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "연수자를 찾지 못 했습니다.")
-        if (response.statusCode() == 409) throw ExpectedException(HttpStatus.CONFLICT, "연수자 식별자가 중복됩니다.")
+        if (response.statusCode() == 409) throw ExpectedException(HttpStatus.CONFLICT, "연수자 정보가 중복되어 신청할 수 없습니다. 관리자에게 문의해 주세요.")
         if (response.statusCode() != 200) badResponse("User")
         val traineeId = decode(response.body(), ResolveTraineeResponse::class.java).traineeId
         if (traineeId <= 0) badResponse("User")
