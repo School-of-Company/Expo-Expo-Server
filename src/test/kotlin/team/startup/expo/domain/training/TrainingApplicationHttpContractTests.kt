@@ -660,6 +660,8 @@ class TrainingApplicationHttpContractTests {
             registry.add("expo.training.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.internal-token") { "test-training-internal-token" }
+            registry.add("expo.attention.service-url") { "http://127.0.0.1:${upstream.address.port}" }
+            registry.add("expo.attention.internal-token") { "test-attention-token" }
             registry.add("expo.form-service-url") { "http://127.0.0.1:${upstream.address.port}" }
         }
 
@@ -688,6 +690,7 @@ class TrainingApplicationHttpContractTests {
                     "/internal/trainees/names" -> userNamesStatus
                     "/internal/training-program-applications" -> applicationCreateStatus
                     "/internal/training-program-applications/program/1" -> programStatus
+                    "/internal/program-attendances/training/1" -> 204
                     "/internal/trainees/resolve-or-create" -> resolveOrCreateStatus
                     "/internal/training-program-applications/trainee/42" -> replaceStatus
                     else -> if (path.startsWith("/forms/")) formStatus else 404

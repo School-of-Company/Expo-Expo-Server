@@ -26,7 +26,6 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.concurrent.ConcurrentLinkedQueue
 
-// Attention 조회 API는 아직 공급자에 없다. 이 테스트의 경로·DTO는 Expo가 제안한 초안 계약을 모의한다.
 @SpringBootTest(
     webEnvironment = RANDOM_PORT,
     properties = ["eureka.client.enabled=false", "spring.jpa.hibernate.ddl-auto=validate"],
@@ -42,6 +41,9 @@ class ProgramAttendanceHttpContractTests {
 
     @Autowired
     private lateinit var mapper: ObjectMapper
+
+    @Autowired
+    private lateinit var attendances: ProgramAttendanceClient
 
     private val http = HttpClient.newHttpClient()
     private val expoId = "attendance-contract-expo"
@@ -62,6 +64,8 @@ class ProgramAttendanceHttpContractTests {
         attentionStatus = 200
         attentionBody = "[]"
         attentionDrop = false
+        remoteAttendances.clear()
+        remoteAttendances.addAll(listOf("standard/1", "training/1", "standard/2"))
         jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
         jdbc.update(
             """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
@@ -92,6 +96,48 @@ class ProgramAttendanceHttpContractTests {
             "CHOICE",
             expoId,
         )
+    }
+
+    @Test
+    fun `삭제는 종류별 ID 영역과 토큰을 보존하고 장애 후 재시도한다`() {
+        Kind.entries.forEach { kind ->
+            val table = "tb_${kind.path}_program"
+            listOf(200, 401, 403, 404, 500).forEach { status ->
+                attentionStatus = status
+                request("DELETE", "/${kind.path}/1").statusCode() shouldBe 502
+                jdbc.queryForObject("SELECT count(*) FROM $table WHERE id=1", Long::class.java) shouldBe 1L
+            }
+            attentionDrop = true
+            request("DELETE", "/${kind.path}/1").statusCode() shouldBe 503
+            jdbc.queryForObject("SELECT count(*) FROM $table WHERE id=1", Long::class.java) shouldBe 1L
+            attentionDrop = false
+            attentionStatus = 204
+            request("DELETE", "/${kind.path}/1").statusCode() shouldBe 204
+            remoteAttendances.contains("${kind.path}/1") shouldBe false
+            remoteAttendances.contains("standard/2") shouldBe true
+            if (kind == Kind.STANDARD) remoteAttendances.contains("training/1") shouldBe true
+            val cleanup = calls.last { it.path == "/internal/program-attendances/${kind.path}/1" }
+            cleanup.method shouldBe "DELETE"
+            cleanup.token shouldBe "test-attention-token"
+            if (kind == Kind.STANDARD) attendances.deleteStandard(1) else attendances.deleteTraining(1)
+            request("DELETE", "/${kind.path}/1").statusCode() shouldBe 404
+        }
+    }
+
+    @Test
+    fun `출석 설정 누락은 프로그램과 원격 신청을 보존한다`() {
+        org.springframework.test.util.ReflectionTestUtils
+            .setField(attendances, "internalToken", "")
+        try {
+            Kind.entries.forEach { kind ->
+                request("DELETE", "/${kind.path}/1").statusCode() shouldBe 503
+                jdbc.queryForObject("SELECT count(*) FROM tb_${kind.path}_program", Long::class.java) shouldBe 1L
+            }
+            calls.isEmpty() shouldBe true
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils
+                .setField(attendances, "internalToken", "test-attention-token")
+        }
     }
 
     @Test
@@ -209,6 +255,7 @@ class ProgramAttendanceHttpContractTests {
         )
 
         private val calls = ConcurrentLinkedQueue<DependencyCall>()
+        private val remoteAttendances = ConcurrentLinkedQueue<String>()
 
         @Volatile
         private var applicationBody = "[]"
@@ -255,7 +302,7 @@ class ProgramAttendanceHttpContractTests {
                 when (path) {
                     "/internal/standard-program-applications/program/1",
                     "/internal/training-program-applications/program/1",
-                    -> 200 to applicationBody
+                    -> if (exchange.requestMethod == "DELETE") 204 to "" else 200 to applicationBody
 
                     "/internal/standard-participants/names" -> 200 to names(requestBody, "participantIds", "participantId")
 
@@ -268,8 +315,13 @@ class ProgramAttendanceHttpContractTests {
                     else -> 404 to ""
                 }
             val bytes = body.toByteArray(Charsets.UTF_8)
-            exchange.sendResponseHeaders(status, if (bytes.isEmpty()) -1 else bytes.size.toLong())
-            if (bytes.isNotEmpty()) exchange.responseBody.write(bytes)
+            if (exchange.requestMethod == "DELETE" &&
+                status == 204
+            ) {
+                remoteAttendances.remove(path.removePrefix("/internal/program-attendances/"))
+            }
+            exchange.sendResponseHeaders(status, if (bytes.isEmpty() || status == 204) -1 else bytes.size.toLong())
+            if (bytes.isNotEmpty() && status != 204) exchange.responseBody.write(bytes)
             exchange.close()
         }
 

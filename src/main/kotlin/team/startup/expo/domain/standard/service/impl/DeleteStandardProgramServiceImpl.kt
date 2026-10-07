@@ -22,10 +22,9 @@ class DeleteStandardProgramServiceImpl(
             programs.findByIdOrNull(programId)
                 ?: throw ExpectedException(HttpStatus.NOT_FOUND, "일반 프로그램을 찾지 못 했습니다.")
         val expoId = program.expo?.id ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
-        val expo =
-            expos.findLockedById(expoId)
-                ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
-        if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
+        expos.findLockedById(expoId)
+            ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
+        if (expos.existsByIdAndDeletingAtIsNotNull(expoId)) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
         dependencies.deleteApplications(programId)
         programs.delete(program)
     }

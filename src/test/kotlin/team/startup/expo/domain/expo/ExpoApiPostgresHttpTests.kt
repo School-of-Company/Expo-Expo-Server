@@ -96,6 +96,9 @@ class ExpoApiPostgresHttpTests {
     private lateinit var deletionClient: ExpoDeletionClient
 
     @Autowired
+    private lateinit var attendances: team.startup.expo.global.attendance.ProgramAttendanceClient
+
+    @Autowired
     private lateinit var standardProgramRepository: StandardProgramRepository
 
     @Autowired
@@ -112,6 +115,8 @@ class ExpoApiPostgresHttpTests {
     @BeforeEach
     fun clearTables() {
         programDeletionCalls.clear()
+        attendanceDeletionCalls.clear()
+        remoteAttendances.clear()
         failedProgramDeletion = null
         remoteApplications.clear()
         jdbcTemplate.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
@@ -410,6 +415,9 @@ class ExpoApiPostgresHttpTests {
                     "POST /application/internal/expos/$expoId/purge",
                     "DELETE /form/internal/expos/$expoId",
                     "DELETE /user/internal/expos/$expoId",
+                    "DELETE /attendance/internal/program-attendances/standard/$standardId",
+                    "DELETE /attendance/internal/program-attendances/training/$trainingId",
+                    "DELETE /attendance/internal/expos/$expoId",
                 )
             expoRepository.existsById(expoId) shouldBe false
             imageRepository.findAll().single().apply {
@@ -419,6 +427,90 @@ class ExpoApiPostgresHttpTests {
             standardProgramRepository.count() shouldBe 0L
             trainingProgramRepository.count() shouldBe 0L
             assertError(request("/expo/$expoId", "DELETE"), 404, "박람회를 찾지 못 했습니다.")
+        }
+    }
+
+    @Test
+    fun `박람회 출석과 QR 실패는 삭제표식과 목록을 남겨 같은 ID로 재시도한다`() {
+        val expoId = createExpo()
+        val expected =
+            listOf(
+                "/attendance/internal/program-attendances/standard/1",
+                "/attendance/internal/program-attendances/training/1",
+                "/attendance/internal/expos/$expoId",
+            )
+        var failure = expected[1]
+        val calls = mutableListOf<String>()
+        withDeletionServer { exchange ->
+            val path = exchange.requestURI.path
+            calls.add(path)
+            if (path == failure) 500 else 204
+        }.use {
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 502
+            standardProgramRepository.existsById(1) shouldBe true
+            trainingProgramRepository.existsById(1) shouldBe true
+            (expoRepository.findById(expoId).orElseThrow().deletingAt != null) shouldBe true
+            request("/training/1", "DELETE").statusCode() shouldBe 409
+            request("/standard/1", "DELETE").statusCode() shouldBe 409
+            request("/standard/1", "PATCH", STANDARD_PROGRAM_JSON.replaceFirst("{", """{"id":1,""")).statusCode() shouldBe 409
+            request("/training/1", "PATCH", TRAINING_PROGRAM_JSON.replaceFirst("{", """{"id":1,""")).statusCode() shouldBe 409
+            request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 409
+            failure = expected[2]
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 502
+            standardProgramRepository.existsById(1) shouldBe true
+            trainingProgramRepository.existsById(1) shouldBe true
+            failure = ""
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 204
+            calls.filter { it.startsWith("/attendance") } shouldBe expected.take(2) + expected + expected
+        }
+    }
+
+    @Test
+    fun `박람회 삭제는 모든 프로그램 출석과 해당 박람회 QR만 요청한다`() {
+        val expoId = createExpo()
+        val otherExpoId = createExpo()
+        request("/standard/$expoId", "POST", STANDARD_PROGRAM_JSON).statusCode() shouldBe 201
+        request("/training/$expoId", "POST", TRAINING_PROGRAM_JSON).statusCode() shouldBe 201
+        val calls = mutableListOf<String>()
+        withDeletionServer { exchange ->
+            if (exchange.requestURI.path.startsWith("/attendance")) {
+                exchange.requestMethod shouldBe "DELETE"
+                exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-delete-token"
+                calls.add(exchange.requestURI.path)
+            }
+            204
+        }.use {
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 204
+        }
+        calls shouldBe
+            listOf(
+                "/attendance/internal/program-attendances/standard/1",
+                "/attendance/internal/program-attendances/standard/3",
+                "/attendance/internal/program-attendances/training/1",
+                "/attendance/internal/program-attendances/training/3",
+                "/attendance/internal/expos/$expoId",
+            )
+        expoRepository.existsById(otherExpoId) shouldBe true
+        standardProgramRepository.existsById(2) shouldBe true
+        trainingProgramRepository.existsById(2) shouldBe true
+    }
+
+    @Test
+    fun `박람회 출석 설정 누락과 네트워크 장애는 최종 로컬 삭제를 막는다`() {
+        val expoId = createExpo()
+        withDeletionServer { 204 }.use {
+            ReflectionTestUtils.setField(attendances, "internalToken", "")
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 503
+            expoRepository.findById(expoId).orElseThrow().deletingAt shouldBe null
+            ReflectionTestUtils.setField(attendances, "internalToken", "test-delete-token")
+            val closed = java.net.ServerSocket(0)
+            val closedPort = closed.localPort
+            closed.close()
+            ReflectionTestUtils.setField(attendances, "serviceUrl", "http://127.0.0.1:$closedPort")
+            request("/expo/$expoId", "DELETE").statusCode() shouldBe 503
+            (expoRepository.findById(expoId).orElseThrow().deletingAt != null) shouldBe true
+            standardProgramRepository.count() shouldBe 1L
+            trainingProgramRepository.count() shouldBe 1L
         }
     }
 
@@ -483,8 +575,12 @@ class ExpoApiPostgresHttpTests {
         ReflectionTestUtils.setField(deletionClient, "formUrl", "$url/form")
         ReflectionTestUtils.setField(deletionClient, "userUrl", "$url/user")
         ReflectionTestUtils.setField(deletionClient, "internalToken", "test-delete-token")
+        ReflectionTestUtils.setField(attendances, "serviceUrl", "$url/attendance")
+        ReflectionTestUtils.setField(attendances, "internalToken", "test-delete-token")
         return AutoCloseable {
             server.stop(0)
+            ReflectionTestUtils.setField(attendances, "serviceUrl", "http://127.0.0.1:${applicationServer.address.port}")
+            ReflectionTestUtils.setField(attendances, "internalToken", "test-program-token")
             listOf("applicationUrl", "formUrl", "userUrl", "internalToken").forEach {
                 ReflectionTestUtils.setField(deletionClient, it, "")
             }
@@ -899,6 +995,8 @@ class ExpoApiPostgresHttpTests {
         trainingProgramRepository.count() shouldBe 0L
         programDeletionCalls.toList() shouldBe
             listOf("/internal/standard-program-applications/program/1", "/internal/training-program-applications/program/1")
+        attendanceDeletionCalls.toList() shouldBe
+            listOf("/internal/program-attendances/standard/1", "/internal/program-attendances/training/1")
     }
 
     @Test
@@ -984,6 +1082,26 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `PATCH 출석 정리 일부 성공은 로컬을 보존하고 재시도하며 다른 ID 영역을 유지한다`() {
+        val expoId = createExpo()
+        request("/standard/$expoId", "POST", STANDARD_PROGRAM_JSON).statusCode() shouldBe 201
+        val before = databaseSnapshot(expoId)
+        val standard = "/internal/program-attendances/standard/2"
+        val training = "/internal/program-attendances/training/1"
+        remoteAttendances.addAll(listOf(standard, training, "/internal/program-attendances/standard/1"))
+        val payload = objectMapper.readTree(updateRequest(1, 1)) as ObjectNode
+        payload.withArray("updateTrainingProRequestDto").removeAll()
+        failedProgramDeletion = training
+        request("/expo/$expoId", "PATCH", payload.toString()).statusCode() shouldBe 502
+        databaseSnapshot(expoId) shouldBe before
+        remoteAttendances.toSet() shouldBe setOf(training, "/internal/program-attendances/standard/1")
+        failedProgramDeletion = null
+        request("/expo/$expoId", "PATCH", payload.toString()).statusCode() shouldBe 204
+        remoteAttendances.toSet() shouldBe setOf("/internal/program-attendances/standard/1")
+        attendanceDeletionCalls.toList() shouldBe listOf(standard, training, standard, training)
+    }
+
+    @Test
     fun `PATCH는 잘못된 이미지와 DTO를 원격 정리 전에 거부한다`() {
         val expoId = createExpo()
         val before = databaseSnapshot(expoId)
@@ -994,6 +1112,7 @@ class ExpoApiPostgresHttpTests {
         request("/expo/$expoId", "PATCH", invalidCoordinate.toString()).statusCode() shouldBe 400
         databaseSnapshot(expoId) shouldBe before
         programDeletionCalls.isEmpty() shouldBe true
+        attendanceDeletionCalls.isEmpty() shouldBe true
     }
 
     @Test
@@ -1109,6 +1228,75 @@ class ExpoApiPostgresHttpTests {
             expoRepository.count() shouldBe 0L
             standardProgramRepository.count() shouldBe 0L
             trainingProgramRepository.count() shouldBe 0L
+        }
+    }
+
+    @Test
+    fun `프로그램 변경은 락 대기 중 커밋된 박람회 삭제표식을 확인한다`() {
+        val expoId = createExpo()
+        for ((kind, method) in listOf("training" to "DELETE", "training" to "PATCH", "standard" to "DELETE", "standard" to "PATCH")) {
+            val body =
+                if (method ==
+                    "DELETE"
+                ) {
+                    null
+                } else {
+                    (
+                        if (kind ==
+                            "training"
+                        ) {
+                            TRAINING_PROGRAM_JSON
+                        } else {
+                            STANDARD_PROGRAM_JSON
+                        }
+                    ).replaceFirst("{", """{"id":1,""")
+                }
+            postgres.createConnection("").use { connection ->
+                connection.autoCommit = false
+                try {
+                    connection.prepareStatement("SELECT id FROM tb_expo WHERE id=? FOR UPDATE").use { statement ->
+                        statement.setString(1, expoId)
+                        statement.executeQuery().close()
+                    }
+                    val change = CompletableFuture.supplyAsync { request("/$kind/1", method, body) }
+                    awaitPatchRowLock() shouldBe true
+                    connection.prepareStatement("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?").use { statement ->
+                        statement.setString(1, expoId)
+                        statement.executeUpdate() shouldBe 1
+                    }
+                    connection.commit()
+                    change.get(10, TimeUnit.SECONDS).statusCode() shouldBe 409
+                    programDeletionCalls.isEmpty() shouldBe true
+                    attendanceDeletionCalls.isEmpty() shouldBe true
+                } finally {
+                    connection.rollback()
+                    jdbcTemplate.update("UPDATE tb_expo SET deleting_at=NULL WHERE id=?", expoId)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `프로그램 수정이 삭제 락을 기다리면 삭제된 프로그램을 다시 만들지 않는다`() {
+        val expoId = createExpo()
+        for ((kind, body) in listOf("standard" to STANDARD_PROGRAM_JSON, "training" to TRAINING_PROGRAM_JSON)) {
+            postgres.createConnection("").use { connection ->
+                connection.autoCommit = false
+                try {
+                    connection.prepareStatement("SELECT id FROM tb_expo WHERE id=? FOR UPDATE").use { statement ->
+                        statement.setString(1, expoId)
+                        statement.executeQuery().use { it.next() shouldBe true }
+                    }
+                    val update = CompletableFuture.supplyAsync { request("/$kind/1", "PATCH", body.replaceFirst("{", """{"id":1,""")) }
+                    awaitPatchRowLock() shouldBe true
+                    connection.createStatement().use { it.executeUpdate("DELETE FROM tb_${kind}_program WHERE id=1") shouldBe 1 }
+                    connection.commit()
+                    update.get(10, TimeUnit.SECONDS).statusCode() shouldBe 404
+                    jdbcTemplate.queryForObject("SELECT count(*) FROM tb_${kind}_program WHERE id=1", Long::class.java) shouldBe 0L
+                } finally {
+                    connection.rollback()
+                }
+            }
         }
     }
 
@@ -1339,18 +1527,28 @@ class ExpoApiPostgresHttpTests {
         }
 
         private val programDeletionCalls = ConcurrentLinkedQueue<String>()
+        private val attendanceDeletionCalls = ConcurrentLinkedQueue<String>()
+        private val remoteAttendances = ConcurrentLinkedQueue<String>()
         private val remoteApplications = ConcurrentLinkedQueue<String>()
         private var failedProgramDeletion: String? = null
         private val applicationServer =
             HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
                 createContext("/") { exchange ->
                     val path = exchange.requestURI.path
-                    programDeletionCalls.add(path)
+                    if (path.startsWith(
+                            "/internal/program-attendances",
+                        )
+                    ) {
+                        attendanceDeletionCalls.add(path)
+                    } else {
+                        programDeletionCalls.add(path)
+                    }
                     val valid =
                         exchange.requestMethod == "DELETE" &&
                             exchange.requestHeaders.getFirst("X-Internal-Token") == "test-program-token"
                     val status = if (!valid || path == failedProgramDeletion) 500 else 204
                     if (status == 204) remoteApplications.remove(path)
+                    if (status == 204) remoteAttendances.remove(path)
                     exchange.sendResponseHeaders(status, -1)
                     exchange.close()
                 }
@@ -1360,6 +1558,8 @@ class ExpoApiPostgresHttpTests {
         @JvmStatic
         @DynamicPropertySource
         fun applicationProperties(registry: DynamicPropertyRegistry) {
+            registry.add("expo.attention.service-url") { "http://127.0.0.1:${applicationServer.address.port}" }
+            registry.add("expo.attention.internal-token") { "test-program-token" }
             for (domain in listOf("standard", "training")) {
                 registry.add("expo.$domain.application-service-url") { "http://127.0.0.1:${applicationServer.address.port}" }
                 registry.add("expo.$domain.internal-token") { "test-program-token" }
