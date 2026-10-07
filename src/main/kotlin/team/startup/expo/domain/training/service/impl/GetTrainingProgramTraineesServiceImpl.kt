@@ -8,12 +8,14 @@ import team.startup.expo.domain.training.presentation.dto.response.TrainingProgr
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.GetTrainingProgramTraineesService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.global.attendance.ProgramAttendanceClient
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class GetTrainingProgramTraineesServiceImpl(
     private val programs: TrainingProgramRepository,
     private val dependencies: TrainingDependenciesClient,
+    private val attendances: ProgramAttendanceClient,
 ) : GetTrainingProgramTraineesService {
     @Transactional(readOnly = true)
     override fun execute(programId: Long): List<TrainingProgramTraineeResponse> {
@@ -29,14 +31,16 @@ class GetTrainingProgramTraineesServiceImpl(
         if (names.size != traineeIds.size || namesById.keys != traineeIds.toSet()) {
             throw ExpectedException(HttpStatus.BAD_GATEWAY, "연수자 조회 결과가 신청 기록과 일치하지 않습니다.")
         }
+        val attendanceById = attendances.training(programId)
         return applications.map { application ->
+            val attendance = attendanceById[application.traineeId]
             TrainingProgramTraineeResponse(
                 id = application.applicationId,
                 name = requireNotNull(namesById[application.traineeId]).name,
                 programName = program.title,
-                status = application.status,
-                entryTime = application.entryTime,
-                leaveTime = application.leaveTime,
+                status = attendance != null,
+                entryTime = attendance?.entryTime,
+                leaveTime = attendance?.leaveTime,
             )
         }
     }

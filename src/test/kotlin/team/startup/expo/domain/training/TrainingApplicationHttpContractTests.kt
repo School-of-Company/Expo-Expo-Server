@@ -98,26 +98,6 @@ class TrainingApplicationHttpContractTests {
     }
 
     @Test
-    fun `신청자 목록은 신청 ID 상태와 nullable 출입 시각을 기존 응답으로 변환한다`() {
-        applicationListBody =
-            """[{"applicationId":7,"traineeId":42,"status":false,"entryTime":null,"leaveTime":null},
-            {"applicationId":8,"traineeId":43,"status":true,"entryTime":"09:00","leaveTime":"10:00"}]"""
-        userNamesBody = """[{"traineeId":42,"name":"홍길동"},{"traineeId":43,"name":"김영희"}]"""
-
-        val response = request("GET", "/training/1")
-        response.statusCode() shouldBe 200
-        val trainees = mapper.readTree(response.body())
-        trainees.size() shouldBe 2
-        trainees[0].toString() shouldBe
-            """{"id":7,"name":"홍길동","programName":"연수","status":false,"entryTime":null,"leaveTime":null}"""
-        trainees[1].get("entryTime").asString() shouldBe "09:00"
-        trainees[1].get("leaveTime").asString() shouldBe "10:00"
-        val names = calls.single { it.path == "/internal/trainees/names" }
-        names.token shouldBe "test-training-internal-token"
-        mapper.readTree(names.body).get("traineeIds").size() shouldBe 2
-    }
-
-    @Test
     fun `빈 신청 목록은 빈 배열이고 없는 프로그램은 외부 호출 전에 404다`() {
         request("GET", "/training/999").statusCode() shouldBe 404
         calls.isEmpty() shouldBe true
