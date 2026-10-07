@@ -31,6 +31,7 @@ class TrainingDependenciesClient(
         trainingId: String,
     ): Long {
         val response = post(userServiceUrl, "/internal/trainees/resolve", ResolveTraineeRequest(expoId, trainingId))
+        if (response.statusCode() == 400) throw ExpectedException(HttpStatus.BAD_REQUEST, "연수자 정보가 올바르지 않습니다.")
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "연수자를 찾지 못 했습니다.")
         if (response.statusCode() == 409) throw ExpectedException(HttpStatus.CONFLICT, "연수자 정보가 중복되어 신청할 수 없습니다. 관리자에게 문의해 주세요.")
         if (response.statusCode() != 200) badResponse("User")
@@ -177,7 +178,7 @@ class TrainingDependenciesClient(
         type: Class<T>,
     ): T =
         try {
-            mapper.readValue(body, type)
+            requireNotNull(mapper.readValue(body, type))
         } catch (exception: Exception) {
             throw ExpectedException(HttpStatus.BAD_GATEWAY, "내부 서비스 응답 형식이 올바르지 않습니다.")
         }
