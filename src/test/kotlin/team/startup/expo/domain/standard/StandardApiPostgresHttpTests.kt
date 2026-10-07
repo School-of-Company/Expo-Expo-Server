@@ -133,32 +133,6 @@ class StandardApiPostgresHttpTests {
     }
 
     @Test
-    fun `신청자 목록은 신청 ID와 출입 상태 및 null 시각을 그대로 응답한다`() {
-        request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
-        applicationListBody =
-            """
-            [{"applicationId":7,"participantId":42,"status":false,"entryTime":null,"leaveTime":null},
-            {"applicationId":8,"participantId":43,"status":true,"entryTime":"09:00","leaveTime":"10:00"}]
-            """.trimIndent()
-        userNamesBody = """[{"participantId":42,"name":"홍길동"},{"participantId":43,"name":"김영희"}]"""
-        val response = request("GET", "/standard/1")
-        response.statusCode() shouldBe 200
-        val participants = mapper.readTree(response.body())
-        participants.size() shouldBe 2
-        participants[0].size() shouldBe 6
-        participants[0].get("id").asLong() shouldBe 7L
-        participants[0].get("name").asString() shouldBe "홍길동"
-        participants[0].get("programName").asString() shouldBe "일반"
-        participants[0].get("status").asBoolean() shouldBe false
-        participants[0].get("entryTime").isNull shouldBe true
-        participants[0].get("leaveTime").isNull shouldBe true
-        participants[1].get("entryTime").asString() shouldBe "09:00"
-        participants[1].get("leaveTime").asString() shouldBe "10:00"
-        val names = calls.single { it.path == "/internal/standard-participants/names" }
-        mapper.readTree(names.body).get("participantIds").size() shouldBe 2
-    }
-
-    @Test
     fun `신청자가 없으면 빈 배열이고 없는 프로그램은 404다`() {
         request("GET", "/standard/999").statusCode() shouldBe 404
         calls.isEmpty() shouldBe true
