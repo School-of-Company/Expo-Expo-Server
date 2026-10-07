@@ -49,6 +49,10 @@ expo:
     application-service-url: ${APPLICATION_SERVICE_URL:}
     internal-token: ${STANDARD_INTERNAL_TOKEN:}
   training:
+    sms:
+      enabled: ${KAFKA_TRAINING_SMS_ENABLED:false}
+      relay-delay-ms: ${KAFKA_TRAINING_SMS_RELAY_DELAY_MS:5000}
+      batch-size: ${KAFKA_TRAINING_SMS_BATCH_SIZE:20}
     user-service-url: ${USER_SERVICE_URL:}
     application-service-url: ${APPLICATION_SERVICE_URL:}
     internal-token: ${TRAINING_INTERNAL_TOKEN:}
