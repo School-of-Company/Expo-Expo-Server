@@ -1,0 +1,2 @@
+[src/main/kotlin/team/startup/expo/domain/**/entity/*.kt]
+ktlint_standard_no-blank-line-in-list = disabled

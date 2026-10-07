@@ -1,0 +1,47 @@
+package team.startup.expo.domain.training.service.impl
+
+import org.springframework.data.repository.findByIdOrNull
+import org.springframework.http.HttpStatus
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramTraineeResponse
+import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.domain.training.service.GetTrainingProgramTraineesService
+import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.global.attendance.ProgramAttendanceClient
+import team.startup.expo.global.exception.ExpectedException
+
+@Service
+class GetTrainingProgramTraineesServiceImpl(
+    private val programs: TrainingProgramRepository,
+    private val dependencies: TrainingDependenciesClient,
+    private val attendances: ProgramAttendanceClient,
+) : GetTrainingProgramTraineesService {
+    @Transactional(readOnly = true)
+    override fun execute(programId: Long): List<TrainingProgramTraineeResponse> {
+        val program =
+            programs.findByIdOrNull(programId)
+                ?: throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
+        val applications = dependencies.applications(programId)
+        if (applications.isEmpty()) return emptyList()
+        val expoId = program.expo?.id ?: throw ExpectedException(HttpStatus.BAD_GATEWAY, "프로그램의 박람회 정보가 없습니다.")
+        val traineeIds = applications.map { it.traineeId }.distinct()
+        val names = dependencies.traineeNames(expoId, traineeIds)
+        val namesById = names.associateBy { it.traineeId }
+        if (names.size != traineeIds.size || namesById.keys != traineeIds.toSet()) {
+            throw ExpectedException(HttpStatus.BAD_GATEWAY, "연수자 조회 결과가 신청 기록과 일치하지 않습니다.")
+        }
+        val attendanceById = attendances.training(programId)
+        return applications.map { application ->
+            val attendance = attendanceById[application.traineeId]
+            TrainingProgramTraineeResponse(
+                id = application.applicationId,
+                name = requireNotNull(namesById[application.traineeId]).name,
+                programName = program.title,
+                status = attendance != null,
+                entryTime = attendance?.entryTime,
+                leaveTime = attendance?.leaveTime,
+            )
+        }
+    }
+}

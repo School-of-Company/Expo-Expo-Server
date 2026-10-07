@@ -1,6 +1,20 @@
 spring:
   application:
     name: expo-expo-server
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:}
+    consumer:
+      group-id: ${KAFKA_STANDARD_CREATED_GROUP_ID:expo-expo-server.standard-created}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/expo}
     username: ${DB_USERNAME:expo}
@@ -9,3 +23,39 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
+logging:
+  level:
+    org.springframework.kafka.listener: "OFF"
+
+image:
+  public-base-url: ${IMAGE_PUBLIC_BASE_URL:http://localhost:8080}
+  storage:
+    active: ${IMAGE_STORAGE_PROVIDER:local}
+    local:
+      directory: ${IMAGE_STORAGE_DIRECTORY:./data/images}
+
+expo:
+  standard-created:
+    enabled: ${KAFKA_STANDARD_CREATED_ENABLED:false}
+  form-service-url: ${FORM_SERVICE_URL:}
+  delete-internal-token: ${EXPO_DELETE_INTERNAL_TOKEN:}
+  standard:
+    user-service-url: ${USER_SERVICE_URL:}
+    application-service-url: ${APPLICATION_SERVICE_URL:}
+    internal-token: ${STANDARD_INTERNAL_TOKEN:}
+  training:
+    sms:
+      enabled: ${KAFKA_TRAINING_SMS_ENABLED:false}
+      relay-delay-ms: ${KAFKA_TRAINING_SMS_RELAY_DELAY_MS:5000}
+      batch-size: ${KAFKA_TRAINING_SMS_BATCH_SIZE:20}
+    user-service-url: ${USER_SERVICE_URL:}
+    application-service-url: ${APPLICATION_SERVICE_URL:}
+    internal-token: ${TRAINING_INTERNAL_TOKEN:}
+  attention:
+    service-url: ${ATTENTION_SERVICE_URL:}
+    internal-token: ${ATTENTION_INTERNAL_TOKEN:}

@@ -9,10 +9,13 @@ import jakarta.persistence.PersistenceContext
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
 import org.springframework.transaction.annotation.Transactional
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.support.TestJwt
 
 @SpringBootTest(properties = ["eureka.client.enabled=false", "spring.jpa.hibernate.ddl-auto=create"])
 @Testcontainers
@@ -42,6 +45,12 @@ class ExpoExpoServerApplicationTests {
     }
 
     companion object {
+        @JvmStatic
+        @DynamicPropertySource
+        fun jwtPublicKey(registry: DynamicPropertyRegistry) {
+            registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
+        }
+
         @Container
         @ServiceConnection
         @JvmStatic

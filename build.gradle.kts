@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "team.startup"
-version = "0.0.1-SNAPSHOT"
+version = "0.1.0"
 
 java {
     toolchain {
@@ -26,6 +26,8 @@ extra["springBootAdminVersion"] = "4.1.2"
 extra["springCloudVersion"] = "2025.1.3"
 
 dependencies {
+    implementation("org.springframework.boot:spring-boot-starter-kafka")
+    testImplementation("org.springframework.kafka:spring-kafka-test")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
@@ -43,6 +45,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("org.springframework.boot:spring-boot-starter-flyway")
     implementation("org.springframework.boot:spring-boot-starter-security")
+    implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("de.codecentric:spring-boot-admin-starter-server")
