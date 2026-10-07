@@ -116,6 +116,8 @@ class TrainingDependenciesClient(
         val body = applyCommand(expoId, traineeId, programs)
         when (post(applicationServiceUrl, "/internal/training-program-applications", body).statusCode()) {
             201 -> Unit
+            400 -> throw ExpectedException(HttpStatus.BAD_REQUEST, "연수 신청 정보가 올바르지 않습니다.")
+            404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
             409 -> throw ExpectedException(HttpStatus.CONFLICT, "이미 신청했거나 연수 프로그램의 정원이 찼습니다.")
             else -> badResponse("Application")
         }
@@ -132,6 +134,8 @@ class TrainingDependenciesClient(
         val response = send(applicationServiceUrl, path, "PUT", HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
         when (response.statusCode()) {
             204 -> Unit
+            400 -> throw ExpectedException(HttpStatus.BAD_REQUEST, "연수 신청 정보가 올바르지 않습니다.")
+            404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
             409 -> throw ExpectedException(HttpStatus.CONFLICT, "삭제됐거나 정원이 찬 연수 프로그램이 있습니다.")
             else -> badResponse("Application")
         }

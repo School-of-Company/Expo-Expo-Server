@@ -78,6 +78,46 @@ class StandardApiPostgresHttpTests {
     }
 
     @Test
+    fun `프로그램 목록은 무인증과 일반 사용자에게 공개하고 쓰기와 출석부는 보호한다`() {
+        request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
+        for (authority in listOf(null, "ROLE_USER")) {
+            val response = request("GET", "/standard/program/$expoId", authority = authority)
+            response.statusCode() shouldBe 200
+            mapper.readTree(response.body())[0].get("title").asString() shouldBe "일반"
+        }
+        val missing = request("GET", "/standard/program/missing", authority = null)
+        missing.statusCode() shouldBe 404
+        mapper.readTree(missing.body()).get("message").asString() shouldBe "박람회를 찾지 못 했습니다."
+        request("GET", "/standard/1", authority = null).statusCode() shouldBe 401
+        request("PATCH", "/standard/1", "{}", authority = "ROLE_USER").statusCode() shouldBe 403
+    }
+
+    @Test
+    fun `유니코드 제목은 DB 문자 50개까지 생성 일괄등록 수정에서 보존한다`() {
+        val title = "😀".repeat(50)
+        val payload = program.replace("일반", title)
+        request("POST", "/standard/$expoId", payload).statusCode() shouldBe 201
+        request("POST", "/standard/list/$expoId", "[$payload]").statusCode() shouldBe 201
+        request("PATCH", "/standard/1", payload.dropLast(1) + ""","id":1}""").statusCode() shouldBe 204
+        mapper.readTree(request("GET", "/standard/program/$expoId", authority = null).body()).forEach {
+            it.get("title").asString() shouldBe title
+        }
+        request("POST", "/standard/$expoId", program.replace("일반", "😀".repeat(51))).statusCode() shouldBe 400
+        jdbc.queryForObject("SELECT count(*) FROM tb_standard_program", Long::class.java) shouldBe 2L
+    }
+
+    @Test
+    fun `Application 신청의 입력 오류와 없는 프로그램은 400과 404를 보존한다`() {
+        request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
+        for (status in listOf(400, 404, 409, 500)) {
+            applicationCreateStatus = status
+            val response = request("POST", "/standard/application/$expoId", """{"phoneNumber":"01012345678","standardProIds":[1]}""", null)
+            response.statusCode() shouldBe if (status == 500) 502 else status
+            mapper.readTree(response.body()).get("status").asInt() shouldBe response.statusCode()
+        }
+    }
+
+    @Test
     fun `등록 일괄등록 수정과 목록 응답이 원본 계약을 따른다`() {
         request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
         request("POST", "/standard/list/$expoId", "[$program,$program]").statusCode() shouldBe 201

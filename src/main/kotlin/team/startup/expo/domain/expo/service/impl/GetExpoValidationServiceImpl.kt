@@ -9,6 +9,7 @@ import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationRes
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.GetExpoValidationService
 import team.startup.expo.global.exception.ExpectedException
+import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -91,8 +92,11 @@ class GetExpoValidationServiceImpl(
             }
         } catch (exception: ExpectedException) {
             throw exception
-        } catch (exception: Exception) {
-            throw ExpectedException(HttpStatus.BAD_GATEWAY, "Form 서비스에 연결할 수 없습니다.")
+        } catch (exception: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Form 서비스 연결이 중단됐습니다.")
+        } catch (exception: IOException) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Form 서비스에 연결할 수 없습니다.")
         }
     }
 }

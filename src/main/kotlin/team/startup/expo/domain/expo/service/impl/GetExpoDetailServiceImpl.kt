@@ -17,7 +17,7 @@ class GetExpoDetailServiceImpl(
     override fun execute(expoId: String): ExpoDetailResponse {
         val expo =
             expoRepository.findByIdOrNull(expoId)
-                ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+                ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
 
         return ExpoDetailResponse(
             title = expo.title,

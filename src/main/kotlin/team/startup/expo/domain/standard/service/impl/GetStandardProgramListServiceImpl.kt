@@ -18,7 +18,7 @@ class GetStandardProgramListServiceImpl(
     @Transactional(readOnly = true)
     override fun execute(expoId: String): List<StandardProgramResponse> {
         expoRepository.findByIdOrNull(expoId)
-            ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+            ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
 
         return standardProgramRepository.findByExpoIdOrderByIdAsc(expoId).map { program ->
             StandardProgramResponse(

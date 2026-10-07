@@ -4,13 +4,17 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.MethodArgumentNotValidException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 import org.springframework.web.context.request.WebRequest
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler
+import tools.jackson.databind.ObjectMapper
 
 @RestControllerAdvice
-class GlobalExceptionHandler : ResponseEntityExceptionHandler() {
+class GlobalExceptionHandler(
+    private val mapper: ObjectMapper,
+) : ResponseEntityExceptionHandler() {
     @ExceptionHandler(ExpectedException::class)
     fun handleExpectedException(exception: ExpectedException): ResponseEntity<ErrorResponse> =
         errorResponse(exception.status, exception.message)
@@ -19,6 +23,31 @@ class GlobalExceptionHandler : ResponseEntityExceptionHandler() {
     fun handleUnexpected(exception: Exception): ResponseEntity<ErrorResponse> {
         logger.error("Unhandled API exception", exception)
         return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "서버 오류가 발생했습니다.")
+    }
+
+    override fun handleMethodArgumentNotValid(
+        ex: MethodArgumentNotValidException,
+        headers: HttpHeaders,
+        status: HttpStatusCode,
+        request: WebRequest,
+    ): ResponseEntity<Any> {
+        val name =
+            when (ex.bindingResult.objectName) {
+                "createExpoRequest" -> "generateExpoRequestDto"
+                "updateExpoRequest" -> "updateExpoRequestDto"
+                "addStandardProgramRequest" -> "addStandardProRequestDto"
+                "updateStandardProgramRequest" -> "updateStandardProRequestDto"
+                "addTrainingProgramRequest" -> "addTrainingProRequestDto"
+                "updateTrainingProgramRequest" -> "updateTrainingProRequestDto"
+                "applyStandardProgramsRequest" -> "applicationStandardProListRequestDto"
+                "applyTrainingProgramRequest" -> "applicationTrainingProRequestDto"
+                "applyTrainingProgramsRequest" -> "applicationTrainingProListRequestDto"
+                "applyTrainingProgramsWithTraineeRequest" -> "applicationTrainingProListAndTraineeRequestDto"
+                else -> return handleExceptionInternal(ex, null, headers, status, request)
+            }
+        val fields = ex.bindingResult.fieldErrors.associate { it.field to it.defaultMessage }
+        val message = mapper.writeValueAsString(mapOf(name to fields)).replace('"', '\'')
+        return ResponseEntity.status(status).headers(headers).body(ErrorResponse(status.value(), message))
     }
 
     // Spring MVC 기본 예외(400, 404, 405, 415 등)는 원래 상태 코드를 유지하고 응답 형식만 맞춘다
