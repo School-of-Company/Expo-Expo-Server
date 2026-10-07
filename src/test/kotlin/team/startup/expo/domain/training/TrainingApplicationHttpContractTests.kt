@@ -3,6 +3,7 @@ package team.startup.expo.domain.training
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.shouldBe
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -23,6 +24,7 @@ import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingP
 import team.startup.expo.domain.training.service.ApplyTrainingProgramService
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
+import tools.jackson.databind.json.JsonMapper
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
@@ -32,6 +34,9 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @SpringBootTest(
     webEnvironment = RANDOM_PORT,
@@ -71,6 +76,10 @@ class TrainingApplicationHttpContractTests {
         resolveOrCreateStatus = 200
         resolveOrCreateBody = """{"traineeId":42,"created":true}"""
         replaceStatus = 204
+        dependencyFault = null
+        storedProgramIds = emptySet()
+        fullProgramIds = emptySet()
+        trackApplications = false
         TestClock.now = Instant.parse("2026-09-24T10:00:00+09:00")
         jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
         jdbc.update(
@@ -409,6 +418,127 @@ class TrainingApplicationHttpContractTests {
 
     private val traineePath get() = "/training/application/list/trainee/$expoId"
 
+    @Test
+    fun `User 조회 입력 오류는 400이고 다중 연수 번호는 409다`() {
+        val requests =
+            listOf(
+                "/training/application/1" to """{"trainingId":"training-1"}""",
+                "/training/application/list" to """{"trainingId":"training-1","trainingProIds":[1]}""",
+            )
+        for ((path, body) in requests) {
+            userResolveStatus = 400
+            assertError(request("POST", path, body, authority = null), 400)
+            userResolveStatus = 409
+            assertError(request("POST", path, body, authority = null), 409)
+        }
+        calls.none { it.path == "/internal/training-program-applications" } shouldBe true
+    }
+
+    @Test
+    fun `추가 중복은 409지만 같은 목록 교체는 201이며 정원 실패는 기존 목록을 보존한다`() {
+        trackApplications = true
+        addProgram("2026-09-25T09:00", expoId)
+        request("POST", traineePath, traineeBody(), authority = null).statusCode() shouldBe 201
+        val retry = request("POST", traineePath, traineeBody(), authority = null)
+        retry.statusCode() shouldBe 201
+        retry.body() shouldBe ""
+        storedProgramIds shouldBe setOf(1L)
+        assertError(request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null), 409)
+        assertError(
+            request("POST", "/training/application/list", """{"trainingId":"training-1","trainingProIds":[1,2]}""", authority = null),
+            409,
+        )
+        storedProgramIds shouldBe setOf(1L)
+        fullProgramIds = setOf(2L)
+        calls.clear()
+        assertError(request("POST", traineePath, traineeBody("[1,2]"), authority = null), 409)
+        calls.map { it.method + " " + it.path } shouldBe
+            listOf(
+                "GET /forms/$expoId",
+                "POST /internal/trainees/resolve-or-create",
+                "PUT /internal/training-program-applications/trainee/42",
+            )
+        val replacement = mapper.readTree(calls.last().body)
+        replacement.get("trainee").toString() shouldBe """{"id":42,"expoId":"$expoId"}"""
+        val selected = replacement.get("programs")
+        (0 until selected.size()).map { selected[it].get("id").asLong() }.toSet() shouldBe setOf(1L, 2L)
+        storedProgramIds shouldBe setOf(1L)
+        assertError(request("POST", "/training/application/2", """{"trainingId":"training-1"}""", authority = null), 409)
+        assertError(
+            request("POST", "/training/application/list", """{"trainingId":"training-1","trainingProIds":[2]}""", authority = null),
+            409,
+        )
+        storedProgramIds shouldBe setOf(1L)
+        assertError(request("POST", traineePath, traineeBody("[999]"), authority = null), 404)
+        storedProgramIds shouldBe setOf(1L)
+        fullProgramIds = emptySet()
+        request("POST", traineePath, traineeBody("[2]"), authority = null).statusCode() shouldBe 201
+        storedProgramIds shouldBe setOf(2L)
+    }
+
+    @Test
+    fun `계약에 없는 공급자 4xx는 그대로 노출하지 않는다`() {
+        for (status in listOf(400, 404, 401, 403, 422)) {
+            applicationCreateStatus = status
+            assertError(request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null), 502)
+            replaceStatus = status
+            assertError(request("POST", traineePath, traineeBody(), authority = null), 502)
+        }
+        resolveOrCreateStatus = 404
+        assertError(request("POST", traineePath, traineeBody(), authority = null), 502)
+        formStatus = 400
+        assertError(request("POST", traineePath, traineeBody(), authority = null), 502)
+    }
+
+    @Test
+    fun `성공 상태의 손상된 User와 Form 응답은 NPE 대신 502다`() {
+        for (body in listOf("invalid", "null", "{}", """{"traineeId":0}""")) {
+            userResolveBody = body
+            assertError(request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null), 502)
+            resolveOrCreateBody = body
+            assertError(request("POST", traineePath, traineeBody(), authority = null), 502)
+        }
+        resolveOrCreateBody = """{"traineeId":42}"""
+        for (body in listOf("null", "{}", """{"startDate":null,"endDate":null}""")) {
+            formBody = body
+            assertError(request("POST", traineePath, traineeBody(), authority = null), 502)
+        }
+        calls.none { it.method == "PUT" || it.path == "/internal/training-program-applications" } shouldBe true
+    }
+
+    @Test
+    fun `의존 서비스 연결 단절과 응답 타임아웃은 503다`() {
+        val paths =
+            listOf(
+                "/forms/$expoId",
+                "/internal/trainees/resolve-or-create",
+                "/internal/training-program-applications/trainee/42",
+            )
+        for (path in paths) {
+            dependencyFault = path to "disconnect"
+            assertError(request("POST", traineePath, traineeBody(), authority = null), 503)
+        }
+        dependencyFault = "/internal/trainees/resolve" to "timeout"
+        timeoutRelease = CountDownLatch(1)
+        val started = System.nanoTime()
+        try {
+            assertError(request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null), 503)
+            (TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 8000) shouldBe true
+        } finally {
+            timeoutRelease.countDown()
+        }
+    }
+
+    private fun assertError(
+        response: HttpResponse<String>,
+        status: Int,
+    ) {
+        response.statusCode() shouldBe status
+        val error = mapper.readTree(response.body())
+        error.get("status").asInt() shouldBe status
+        error.get("message").asString().isNotBlank() shouldBe true
+    }
+
     private fun traineeBody(programIds: String = "[1]") =
         """{"trainingId":"training-1","phoneNumber":"010-1234-5678","name":"홍길동",""" +
             """"informationJson":"{\"school\":\"서울\"}","personalInformationStatus":true,"trainingProIds":$programIds}"""
@@ -472,11 +602,37 @@ class TrainingApplicationHttpContractTests {
         private var resolveOrCreateBody = ""
         private var replaceStatus = 204
 
+        @Volatile
+        private var dependencyFault: Pair<String, String>? = null
+
+        @Volatile
+        private var trackApplications = false
+
+        @Volatile
+        private var storedProgramIds = emptySet<Long>()
+
+        @Volatile
+        private var fullProgramIds = emptySet<Long>()
+
+        @Volatile
+        private var timeoutRelease = CountDownLatch(0)
+
+        private val dependencyMapper = JsonMapper.builder().build()
+        private val upstreamExecutor = Executors.newCachedThreadPool()
+
         private val upstream =
             HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+                executor = upstreamExecutor
                 createContext("/") { exchange -> respond(exchange) }
                 start()
             }
+
+        @AfterAll
+        @JvmStatic
+        fun stopUpstream() {
+            upstream.stop(0)
+            upstreamExecutor.shutdownNow()
+        }
 
         @DynamicPropertySource
         @JvmStatic
@@ -490,17 +646,24 @@ class TrainingApplicationHttpContractTests {
 
         private fun respond(exchange: HttpExchange) {
             val path = exchange.requestURI.path
+            val requestBody = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8)
             calls.add(
                 DependencyCall(
                     path = path,
                     query = exchange.requestURI.rawQuery,
                     method = exchange.requestMethod,
-                    body = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8),
+                    body = requestBody,
                     token = exchange.requestHeaders.getFirst("X-Internal-Token"),
                 ),
             )
+            val fault = dependencyFault
+            if (fault?.first == path) {
+                if (fault.second == "timeout") timeoutRelease.await(30, TimeUnit.SECONDS)
+                exchange.close()
+                return
+            }
             val programStatus = if (exchange.requestMethod == "DELETE") applicationDeleteStatus else applicationListStatus
-            val status =
+            var status =
                 when (path) {
                     "/internal/trainees/resolve" -> userResolveStatus
                     "/internal/trainees/names" -> userNamesStatus
@@ -510,6 +673,24 @@ class TrainingApplicationHttpContractTests {
                     "/internal/training-program-applications/trainee/42" -> replaceStatus
                     else -> if (path.startsWith("/forms/")) formStatus else 404
                 }
+            // Application의 원자적 추가/교체 wire 계약을 흉내 낸다. 실제 DB 롤백은 통합 보고서의 검증 범위다.
+            if (trackApplications &&
+                path.startsWith("/internal/training-program-applications") &&
+                exchange.requestMethod in listOf("POST", "PUT")
+            ) {
+                val json = dependencyMapper.readTree(requestBody).get("programs")
+                val selected = (0 until json.size()).map { json[it].get("id").asLong() }.toSet()
+                val replacement = exchange.requestMethod == "PUT"
+                status =
+                    if ((!replacement && selected.any { it in storedProgramIds }) ||
+                        selected.any { it in fullProgramIds && it !in storedProgramIds }
+                    ) {
+                        409
+                    } else {
+                        storedProgramIds = if (replacement) selected else storedProgramIds + selected
+                        if (replacement) 204 else 201
+                    }
+            }
             val responseBody =
                 when (path) {
                     "/internal/trainees/resolve" -> userResolveBody
