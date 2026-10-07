@@ -26,6 +26,34 @@ class TrainingDependenciesClient(
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
+    fun requireApplicationConfiguration() {
+        if (applicationServiceUrl.isBlank() || internalToken.isBlank()) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "연수 프로그램 내부 연동이 설정되지 않았습니다.")
+        }
+    }
+
+    fun traineePhoneNumber(
+        expoId: String,
+        traineeId: Long,
+    ): String {
+        val response = get(userServiceUrl, "/internal/expos/$expoId/trainees/details?cursor=${traineeId - 1}&size=1")
+        if (response.statusCode() != 200) badResponse("User")
+        return try {
+            val items = mapper.readTree(response.body()).path("items")
+            require(items.isArray && items.size() == 1)
+            val id = items[0].path("traineeId")
+            val phone = items[0].path("phoneNumber")
+            require(id.isIntegralNumber && id.canConvertToLong() && id.asLong() == traineeId && phone.isString)
+            val stored = phone.asString()
+            require(stored.matches(Regex("[0-9 -]+")))
+            val digits = stored.replace("-", "").replace(" ", "")
+            require(digits.matches(Regex("01[0-9]{8,9}")))
+            digits
+        } catch (exception: Exception) {
+            throw ExpectedException(HttpStatus.BAD_GATEWAY, "연수 문자 수신자를 확인할 수 없습니다.")
+        }
+    }
+
     fun resolveTrainee(
         expoId: String,
         trainingId: String,
