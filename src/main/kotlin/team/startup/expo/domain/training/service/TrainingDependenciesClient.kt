@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component
 import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsWithTraineeRequest
+import team.startup.expo.global.attendance.ProgramAttendanceClient
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -23,6 +24,7 @@ class TrainingDependenciesClient(
     @Value("\${expo.training.internal-token:}") private val internalToken: String,
     @Value("\${expo.form-service-url:}") private val formServiceUrl: String,
     private val mapper: ObjectMapper,
+    private val attendances: ProgramAttendanceClient,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -148,9 +150,11 @@ class TrainingDependenciesClient(
     }
 
     fun deleteApplications(programId: Long) {
+        attendances.requireConfiguration()
         if (delete(applicationServiceUrl, "/internal/training-program-applications/program/$programId").statusCode() != 204) {
             badResponse("Application")
         }
+        attendances.deleteTraining(programId)
     }
 
     private fun applyCommand(

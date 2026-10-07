@@ -37,6 +37,7 @@ class DeleteExpoServiceImpl(
         dependencies.deleteApplications(expoId, programs.standard, programs.training)
         dependencies.deleteForms(expoId)
         dependencies.deleteUsers(expoId)
+        dependencies.deleteAttendances(expoId, programs.standard, programs.training)
 
         transactions.executeWithoutResult {
             expos.findLockedById(expoId)?.let { expo ->

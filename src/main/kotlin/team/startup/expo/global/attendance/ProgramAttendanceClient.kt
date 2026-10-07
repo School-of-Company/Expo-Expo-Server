@@ -14,7 +14,6 @@ import java.time.Duration
 import java.time.LocalTime
 import java.time.format.DateTimeParseException
 
-// Attention 출석 조회 클라이언트. 경로와 DTO는 Attention #5와 합의 전 초안이라 공급자 구현에 맞춰 바뀔 수 있다.
 @Component
 class ProgramAttendanceClient(
     @Value("\${expo.attention.service-url:}") private val serviceUrl: String,
@@ -22,6 +21,39 @@ class ProgramAttendanceClient(
     private val mapper: ObjectMapper,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
+
+    fun requireConfiguration() {
+        if (serviceUrl.isBlank() || internalToken.isBlank()) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 내부 연동이 설정되지 않았습니다.")
+        }
+    }
+
+    fun deleteStandard(programId: Long) = delete("/internal/program-attendances/standard/$programId")
+
+    fun deleteTraining(programId: Long) = delete("/internal/program-attendances/training/$programId")
+
+    fun deleteExpo(expoId: String) = delete("/internal/expos/$expoId")
+
+    private fun delete(path: String) {
+        requireConfiguration()
+        try {
+            val request =
+                HttpRequest
+                    .newBuilder(URI.create("${serviceUrl.trimEnd('/')}$path"))
+                    .timeout(Duration.ofSeconds(5))
+                    .header("X-Internal-Token", internalToken)
+                    .DELETE()
+                    .build()
+            if (http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() != 204) {
+                throw ExpectedException(HttpStatus.BAD_GATEWAY, "출석 서비스 삭제 응답을 확인할 수 없습니다.")
+            }
+        } catch (exception: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 내부 연동이 중단됐습니다.")
+        } catch (exception: IOException) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 서비스에 연결할 수 없습니다.")
+        }
+    }
 
     fun standard(programId: Long): Map<Long, Attendance> =
         byPerson(
@@ -61,9 +93,7 @@ class ProgramAttendanceClient(
         path: String,
         type: Class<Array<T>>,
     ): List<T> {
-        if (serviceUrl.isBlank() || internalToken.isBlank()) {
-            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 내부 연동이 설정되지 않았습니다.")
-        }
+        requireConfiguration()
         val response =
             try {
                 val request =

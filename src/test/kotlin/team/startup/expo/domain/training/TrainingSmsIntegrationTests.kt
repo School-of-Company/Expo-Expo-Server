@@ -487,7 +487,16 @@ class TrainingSmsIntegrationTests {
 
     @Test
     fun `Application 설정 누락은 HTTP 호출과 SMS 준비 기록 전에 실패한다`() {
-        val missing = TrainingDependenciesClient("http://127.0.0.1:${upstream.address.port}", "", "test-training-token", "", mapper)
+        val missing =
+            TrainingDependenciesClient(
+                "http://127.0.0.1:${upstream.address.port}",
+                "",
+                "test-training-token",
+                "",
+                mapper,
+                team.startup.expo.global.attendance
+                    .ProgramAttendanceClient("", "", mapper),
+            )
         val service = ApplyTrainingProgramListServiceImpl(expos, programs, missing, applicationSms, dbTransactions)
         val error = assertThrows(ExpectedException::class.java) { service.execute(ApplyTrainingProgramsRequest("training-1", listOf(1))) }
         error.status shouldBe HttpStatus.SERVICE_UNAVAILABLE

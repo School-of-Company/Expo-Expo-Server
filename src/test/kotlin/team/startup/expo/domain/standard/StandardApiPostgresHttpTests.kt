@@ -306,6 +306,8 @@ class StandardApiPostgresHttpTests {
             registry.add("expo.standard.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.standard.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.standard.internal-token") { "test-internal-token" }
+            registry.add("expo.attention.service-url") { "http://127.0.0.1:${upstream.address.port}" }
+            registry.add("expo.attention.internal-token") { "test-attention-token" }
         }
 
         private fun respond(exchange: HttpExchange) {
@@ -325,6 +327,7 @@ class StandardApiPostgresHttpTests {
                     "/internal/standard-participants/names" -> userNamesStatus
                     "/internal/standard-program-applications" -> applicationCreateStatus
                     "/internal/standard-program-applications/program/1" -> programStatus
+                    "/internal/program-attendances/standard/1" -> 204
                     else -> 404
                 }
             val body =

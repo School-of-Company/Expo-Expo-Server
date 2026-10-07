@@ -9,6 +9,8 @@ import org.springframework.data.repository.query.Param
 import team.startup.expo.domain.expo.entity.Expo
 
 interface ExpoRepository : JpaRepository<Expo, String> {
+    fun existsByIdAndDeletingAtIsNotNull(id: String): Boolean
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select expo from Expo expo where expo.id = :id")
     fun findLockedById(
