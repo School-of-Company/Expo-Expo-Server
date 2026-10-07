@@ -52,3 +52,6 @@ expo:
     user-service-url: ${USER_SERVICE_URL:}
     application-service-url: ${APPLICATION_SERVICE_URL:}
     internal-token: ${TRAINING_INTERNAL_TOKEN:}
+  attention:
+    service-url: ${ATTENTION_SERVICE_URL:}
+    internal-token: ${ATTENTION_INTERNAL_TOKEN:}

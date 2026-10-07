@@ -169,8 +169,5 @@ class StandardDependenciesClient(
     data class ProgramApplication(
         val applicationId: Long,
         val participantId: Long,
-        val status: Boolean,
-        val entryTime: String?,
-        val leaveTime: String?,
     )
 }
