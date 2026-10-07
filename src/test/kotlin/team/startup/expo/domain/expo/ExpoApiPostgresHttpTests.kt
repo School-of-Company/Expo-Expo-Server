@@ -5,6 +5,7 @@ import io.kotest.matchers.collections.shouldBeIn
 import io.kotest.matchers.shouldBe
 import jakarta.persistence.EntityManagerFactory
 import org.hibernate.SessionFactory
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -50,6 +51,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -109,7 +111,23 @@ class ExpoApiPostgresHttpTests {
 
     @BeforeEach
     fun clearTables() {
+        programDeletionCalls.clear()
+        failedProgramDeletion = null
+        remoteApplications.clear()
         jdbcTemplate.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
+    }
+
+    @Test
+    fun `v1 검증 오류는 message 안에 기존 DTO 이름과 필드 오류를 담는다`() {
+        val payload = VALID_REQUEST_JSON.replace("\"설명\"", "\"${"가".repeat(1001)}\"")
+        val response = postExpo(payload, "ROLE_ADMIN")
+        response.statusCode() shouldBe 400
+        val error = objectMapper.readTree(response.body())
+        error.get("status").asInt() shouldBe 400
+        val details = objectMapper.readTree(error.get("message").asString().replace('\'', '"'))
+        details.get("generateExpoRequestDto").has("description") shouldBe true
+        details.size() shouldBe 1
+        expoRepository.count() shouldBe 0L
     }
 
     @Test
@@ -279,7 +297,11 @@ class ExpoApiPostgresHttpTests {
         val unauthorized = postExpo(VALID_REQUEST_JSON)
         val forbidden = postExpo(VALID_REQUEST_JSON, authority = "ROLE_USER")
 
-        assertError(badRequest, expectedStatus = 400, expectedMessage = "잘못된 요청입니다.")
+        badRequest.statusCode() shouldBe 400
+        val validationError = objectMapper.readTree(badRequest.body())
+        validationError.get("status").asInt() shouldBe 400
+        val fields = objectMapper.readTree(validationError.get("message").asString().replace('\'', '"'))
+        fields.get("generateExpoRequestDto").has("addStandardProRequestDto[0].title") shouldBe true
         assertError(unauthorized, expectedStatus = 401, expectedMessage = "인증이 필요합니다.")
         assertError(forbidden, expectedStatus = 403, expectedMessage = "접근 권한이 없습니다.")
         expoRepository.count() shouldBe 0L
@@ -498,12 +520,33 @@ class ExpoApiPostgresHttpTests {
             response.statusCode() shouldBe 200
             objectMapper.readTree(response.body()) shouldBe
                 objectMapper.readTree(
-                    """{"expoValid":[{"expoId":"$expoId","preStandardFormCreatedStatus":true,"siteStandardFormCreatedStatus":false,"traineeFormCreatedStatus":true,"StandardSurveyCreatedStatus":true,"traineeSurveyCreatedStatus":false}]}""",
+                    """{"expoValid":[{"expoId":"$expoId","preStandardFormCreatedStatus":true,"siteStandardFormCreatedStatus":false,"traineeFormCreatedStatus":true,"standardSurveyCreatedStatus":true,"traineeSurveyCreatedStatus":false}]}""",
                 )
             (maxActiveRequests.get() > 1) shouldBe true
         } finally {
             server.stop(0)
             serverExecutor.shutdown()
+            ReflectionTestUtils.setField(validationService, "formServiceUrl", "")
+        }
+    }
+
+    @Test
+    fun `Form 연결 실패는 503이고 비정상 HTTP 응답은 502다`() {
+        createExpo()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            exchange.sendResponseHeaders(500, -1)
+            exchange.close()
+        }
+        server.start()
+        val url = "http://127.0.0.1:${server.address.port}"
+        try {
+            ReflectionTestUtils.setField(validationService, "formServiceUrl", url)
+            assertError(request("/expo/valid", "GET"), 502, "Form 서비스 응답을 확인할 수 없습니다.")
+            server.stop(0)
+            assertError(request("/expo/valid", "GET"), 503, "Form 서비스에 연결할 수 없습니다.")
+        } finally {
+            server.stop(0)
             ReflectionTestUtils.setField(validationService, "formServiceUrl", "")
         }
     }
@@ -591,7 +634,7 @@ class ExpoApiPostgresHttpTests {
 
         listResponse.statusCode() shouldBe 200
         objectMapper.readTree(listResponse.body()).isEmpty shouldBe true
-        assertError(detailResponse, expectedStatus = 404, expectedMessage = "박람회를 찾을 수 없습니다.")
+        assertError(detailResponse, expectedStatus = 404, expectedMessage = "박람회를 찾지 못 했습니다.")
     }
 
     @Test
@@ -769,7 +812,7 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `실제 HTTP 프로그램 조회는 빈 목록과 없는 Expo 및 권한 실패를 구분한다`() {
+    fun `실제 HTTP 프로그램 조회는 공개 빈 목록과 없는 Expo를 구분한다`() {
         val emptyRequest = objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode
         emptyRequest.putArray("addStandardProRequestDto")
         emptyRequest.putArray("addTrainingProRequestDto")
@@ -779,9 +822,9 @@ class ExpoApiPostgresHttpTests {
             val empty = request("$path/$expoId", "GET")
             empty.statusCode() shouldBe 200
             objectMapper.readTree(empty.body()).isEmpty shouldBe true
-            assertError(request("$path/not-found", "GET"), 404, "박람회를 찾을 수 없습니다.")
-            assertError(request("$path/$expoId", "GET", authority = null), 401, "인증이 필요합니다.")
-            assertError(request("$path/$expoId", "GET", authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+            assertError(request("$path/not-found", "GET", authority = null), 404, "박람회를 찾지 못 했습니다.")
+            request("$path/$expoId", "GET", authority = null).statusCode() shouldBe 200
+            request("$path/$expoId", "GET", authority = "ROLE_USER").statusCode() shouldBe 200
         }
     }
 
@@ -854,6 +897,147 @@ class ExpoApiPostgresHttpTests {
         expoRepository.findById(expoId).orElseThrow().title shouldBe "거부될 수정"
         standardProgramRepository.count() shouldBe 0L
         trainingProgramRepository.count() shouldBe 0L
+        programDeletionCalls.toList() shouldBe
+            listOf("/internal/standard-program-applications/program/1", "/internal/training-program-applications/program/1")
+    }
+
+    @Test
+    fun `누락 프로그램 원격 정리 실패는 로컬을 보존하고 재시도는 이미 정리된 신청도 안전하게 처리한다`() {
+        val expoId = createExpo()
+        val before = databaseSnapshot(expoId)
+        val standardPath = "/internal/standard-program-applications/program/1"
+        val trainingPath = "/internal/training-program-applications/program/1"
+        remoteApplications.addAll(listOf(standardPath, trainingPath))
+        failedProgramDeletion = standardPath
+        request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 502
+        databaseSnapshot(expoId) shouldBe before
+        remoteApplications.toSet() shouldBe setOf(standardPath, trainingPath)
+        programDeletionCalls.toList() shouldBe listOf(standardPath)
+
+        failedProgramDeletion = trainingPath
+        request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 502
+        databaseSnapshot(expoId) shouldBe before
+        remoteApplications.toSet() shouldBe setOf(trainingPath)
+
+        failedProgramDeletion = null
+        request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 204
+        remoteApplications.isEmpty() shouldBe true
+        standardProgramRepository.count() shouldBe 0L
+        trainingProgramRepository.count() shouldBe 0L
+        programDeletionCalls.toList() shouldBe listOf(standardPath, standardPath, trainingPath, standardPath, trainingPath)
+        programDeletionCalls.clear()
+        request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 204
+        programDeletionCalls.isEmpty() shouldBe true
+    }
+
+    @Test
+    fun `PATCH는 누락 ID만 정리하고 유지하는 프로그램의 신청은 건드리지 않는다`() {
+        val expoId = createExpo()
+        request("/standard/$expoId", "POST", STANDARD_PROGRAM_JSON).statusCode() shouldBe 201
+        remoteApplications.addAll(
+            listOf(
+                "/internal/standard-program-applications/program/1",
+                "/internal/standard-program-applications/program/2",
+                "/internal/training-program-applications/program/1",
+            ),
+        )
+        request("/expo/$expoId", "PATCH", updateRequest(1, 1)).statusCode() shouldBe 204
+        programDeletionCalls.toList() shouldBe listOf("/internal/standard-program-applications/program/2")
+        remoteApplications.toSet() shouldBe
+            setOf("/internal/standard-program-applications/program/1", "/internal/training-program-applications/program/1")
+        standardProgramRepository.existsById(1) shouldBe true
+        standardProgramRepository.existsById(2) shouldBe false
+        trainingProgramRepository.existsById(1) shouldBe true
+    }
+
+    @Test
+    fun `원격 정리 성공 뒤 로컬 삭제 실패는 DB를 롤백하고 같은 요청 재시도로 완료한다`() {
+        val expoId = createExpo()
+        val before = databaseSnapshot(expoId)
+        remoteApplications.addAll(
+            listOf("/internal/standard-program-applications/program/1", "/internal/training-program-applications/program/1"),
+        )
+        try {
+            jdbcTemplate.execute(
+                """
+                CREATE FUNCTION fail_program_delete() RETURNS trigger AS ${'$'}trigger${'$'}
+                BEGIN
+                    RAISE EXCEPTION 'forced deletion failure';
+                END;
+                ${'$'}trigger${'$'} LANGUAGE plpgsql;
+                """.trimIndent(),
+            )
+            jdbcTemplate.execute(
+                "CREATE TRIGGER fail_program_delete BEFORE DELETE ON tb_training_program FOR EACH ROW EXECUTE FUNCTION fail_program_delete()",
+            )
+            request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 500
+            databaseSnapshot(expoId) shouldBe before
+            remoteApplications.isEmpty() shouldBe true
+        } finally {
+            jdbcTemplate.execute("DROP TRIGGER IF EXISTS fail_program_delete ON tb_training_program")
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS fail_program_delete()")
+        }
+        request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 204
+        programDeletionCalls.size shouldBe 4
+        standardProgramRepository.count() shouldBe 0L
+        trainingProgramRepository.count() shouldBe 0L
+    }
+
+    @Test
+    fun `PATCH는 잘못된 이미지와 DTO를 원격 정리 전에 거부한다`() {
+        val expoId = createExpo()
+        val before = databaseSnapshot(expoId)
+        val invalidImage = EMPTY_UPDATE_REQUEST_JSON.replace("https://example.com/cover.png", "https://invalid.example/image.png")
+        request("/expo/$expoId", "PATCH", invalidImage).statusCode() shouldBe 409
+        val invalidCoordinate = objectMapper.readTree(EMPTY_UPDATE_REQUEST_JSON) as ObjectNode
+        invalidCoordinate.put("x", "가".repeat(16))
+        request("/expo/$expoId", "PATCH", invalidCoordinate.toString()).statusCode() shouldBe 400
+        databaseSnapshot(expoId) shouldBe before
+        programDeletionCalls.isEmpty() shouldBe true
+    }
+
+    @Test
+    fun `PATCH 저장 실패는 누락 프로그램 원격 신청을 삭제하지 않는다`() {
+        val expoId = createExpo()
+        val before = databaseSnapshot(expoId)
+        val payload = objectMapper.readTree(updateRequest(1, 1).replace("수정 연수", "롤백 연수")) as ObjectNode
+        payload.withArray("updateStandardProRequestDto").removeAll()
+        withTrainingWriteFailure {
+            request("/expo/$expoId", "PATCH", payload.toString()).statusCode() shouldBe 500
+            databaseSnapshot(expoId) shouldBe before
+            programDeletionCalls.isEmpty() shouldBe true
+        }
+    }
+
+    @Test
+    fun `박람회 중첩 프로그램은 유니코드 50문자를 생성 수정하고 51문자를 거절한다`() {
+        val title = "😀".repeat(50)
+        val payload =
+            VALID_REQUEST_JSON
+                .replace("일반 프로그램", title)
+                .replace("연수 프로그램", title)
+                .replace("127.123", "😀".repeat(15))
+                .replace("37.456", "😀".repeat(15))
+        val created = postExpo(payload, authority = "ROLE_ADMIN")
+        created.statusCode() shouldBe 201
+        val expoId = objectMapper.readTree(created.body()).get("expoId").asString()
+        val update =
+            updateRequest(1, 1)
+                .replace("수정 일반", title)
+                .replace("수정 연수", title)
+                .replace("신규 일반", title)
+                .replace("신규 연수", title)
+                .replace("127.456", "😀".repeat(15))
+                .replace("37.789", "😀".repeat(15))
+        request("/expo/$expoId", "PATCH", update).statusCode() shouldBe 204
+        for (path in listOf("standard", "training")) {
+            objectMapper.readTree(request("/$path/program/$expoId", "GET", authority = null).body()).forEach {
+                it.get("title").asString() shouldBe title
+            }
+        }
+        request("/expo/$expoId", "PATCH", update.replace(title, "😀".repeat(51))).statusCode() shouldBe 400
+        postExpo(payload.replace(title, "😀".repeat(51)), authority = "ROLE_ADMIN").statusCode() shouldBe 400
+        programDeletionCalls.isEmpty() shouldBe true
     }
 
     @Test
@@ -878,6 +1062,7 @@ class ExpoApiPostgresHttpTests {
 
             assertError(response, expectedStatus = 409, expectedMessage = "박람회 프로그램 정보가 충돌합니다.")
             expoRepository.findById(targetExpoId).orElseThrow().title shouldBe "2026 박람회"
+            programDeletionCalls.isEmpty() shouldBe true
         }
     }
 
@@ -885,7 +1070,7 @@ class ExpoApiPostgresHttpTests {
     fun `실제 HTTP 수정은 없는 박람회를 404로 응답한다`() {
         val response = request("/expo/not-found", "PATCH", EMPTY_UPDATE_REQUEST_JSON)
 
-        assertError(response, expectedStatus = 404, expectedMessage = "박람회를 찾을 수 없습니다.")
+        assertError(response, expectedStatus = 404, expectedMessage = "박람회를 찾지 못 했습니다.")
     }
 
     @Test
@@ -1147,6 +1332,40 @@ class ExpoApiPostgresHttpTests {
     }
 
     companion object {
+        @JvmStatic
+        @AfterAll
+        fun stopApplicationServer() {
+            applicationServer.stop(0)
+        }
+
+        private val programDeletionCalls = ConcurrentLinkedQueue<String>()
+        private val remoteApplications = ConcurrentLinkedQueue<String>()
+        private var failedProgramDeletion: String? = null
+        private val applicationServer =
+            HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+                createContext("/") { exchange ->
+                    val path = exchange.requestURI.path
+                    programDeletionCalls.add(path)
+                    val valid =
+                        exchange.requestMethod == "DELETE" &&
+                            exchange.requestHeaders.getFirst("X-Internal-Token") == "test-program-token"
+                    val status = if (!valid || path == failedProgramDeletion) 500 else 204
+                    if (status == 204) remoteApplications.remove(path)
+                    exchange.sendResponseHeaders(status, -1)
+                    exchange.close()
+                }
+                start()
+            }
+
+        @JvmStatic
+        @DynamicPropertySource
+        fun applicationProperties(registry: DynamicPropertyRegistry) {
+            for (domain in listOf("standard", "training")) {
+                registry.add("expo.$domain.application-service-url") { "http://127.0.0.1:${applicationServer.address.port}" }
+                registry.add("expo.$domain.internal-token") { "test-program-token" }
+            }
+        }
+
         @JvmStatic
         @DynamicPropertySource
         fun jwtPublicKey(registry: DynamicPropertyRegistry) {

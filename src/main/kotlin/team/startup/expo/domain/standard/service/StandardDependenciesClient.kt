@@ -54,6 +54,8 @@ class StandardDependenciesClient(
             )
         when (post(applicationServiceUrl, "/internal/standard-program-applications", body).statusCode()) {
             201 -> Unit
+            400 -> throw ExpectedException(HttpStatus.BAD_REQUEST, "일반 프로그램 신청 정보가 올바르지 않습니다.")
+            404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "일반 프로그램을 찾지 못 했습니다.")
             409 -> throw ExpectedException(HttpStatus.CONFLICT, "이미 신청한 유저입니다.")
             else -> badResponse("Application")
         }

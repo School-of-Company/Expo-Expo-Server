@@ -419,6 +419,25 @@ class TrainingApplicationHttpContractTests {
     private val traineePath get() = "/training/application/list/trainee/$expoId"
 
     @Test
+    fun `Application 추가와 교체의 400 404를 공개 API에서 보존한다`() {
+        val additions =
+            listOf(
+                "/training/application/1" to """{"trainingId":"training-1"}""",
+                "/training/application/list" to """{"trainingId":"training-1","trainingProIds":[1]}""",
+            )
+        for (status in listOf(400, 404)) {
+            applicationCreateStatus = status
+            for ((path, body) in additions) {
+                assertError(request("POST", path, body, authority = null), status)
+            }
+            replaceStatus = status
+            assertError(request("POST", traineePath, traineeBody(), authority = null), status)
+        }
+        calls.count { it.path == "/internal/training-program-applications" } shouldBe 4
+        calls.count { it.method == "PUT" } shouldBe 2
+    }
+
+    @Test
     fun `User 조회 입력 오류는 400이고 다중 연수 번호는 409다`() {
         val requests =
             listOf(
@@ -478,7 +497,7 @@ class TrainingApplicationHttpContractTests {
 
     @Test
     fun `계약에 없는 공급자 4xx는 그대로 노출하지 않는다`() {
-        for (status in listOf(400, 404, 401, 403, 422)) {
+        for (status in listOf(401, 403, 422)) {
             applicationCreateStatus = status
             assertError(request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null), 502)
             replaceStatus = status

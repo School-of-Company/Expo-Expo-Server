@@ -70,6 +70,21 @@ class TrainingProgramHttpContractTests {
     }
 
     @Test
+    fun `프로그램 목록만 무인증 및 일반 사용자에게 공개한다`() {
+        request("POST", "/training/training-test-expo", PROGRAM).statusCode() shouldBe 201
+        for (authority in listOf(null, "ROLE_USER")) {
+            val listed = request("GET", "/training/program/training-test-expo", authority = authority)
+            listed.statusCode() shouldBe 200
+            objectMapper.readTree(listed.body()).size() shouldBe 1
+        }
+        val missing = request("GET", "/training/program/missing", authority = null)
+        missing.statusCode() shouldBe 404
+        objectMapper.readTree(missing.body()).get("message").asString() shouldBe "박람회를 찾지 못 했습니다."
+        request("GET", "/training/1", authority = null).statusCode() shouldBe 401
+        request("DELETE", "/training/1", authority = "ROLE_USER").statusCode() shouldBe 403
+    }
+
+    @Test
     fun `단건 생성과 목록 응답은 원본 날짜 문자열과 필드를 유지한다`() {
         val created = request("POST", "/training/training-test-expo", PROGRAM)
         val listed = request("GET", "/training/program/training-test-expo")

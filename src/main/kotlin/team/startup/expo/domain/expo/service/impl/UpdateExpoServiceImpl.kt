@@ -10,8 +10,10 @@ import team.startup.expo.domain.expo.service.UpdateExpoService
 import team.startup.expo.domain.image.service.AttachExpoImageService
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
+import team.startup.expo.domain.standard.service.StandardDependenciesClient
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.domain.training.service.TrainingDependenciesClient
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
@@ -20,6 +22,8 @@ class UpdateExpoServiceImpl(
     private val standardProgramRepository: StandardProgramRepository,
     private val trainingProgramRepository: TrainingProgramRepository,
     private val attachExpoImageService: AttachExpoImageService,
+    private val standardDependencies: StandardDependenciesClient,
+    private val trainingDependencies: TrainingDependenciesClient,
 ) : UpdateExpoService {
     @Transactional
     override fun execute(
@@ -28,7 +32,7 @@ class UpdateExpoServiceImpl(
     ) {
         val expo =
             expoRepository.findLockedById(expoId)
-                ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+                ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
         if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
         val existingStandardPrograms = standardProgramRepository.findByExpo(expo)
         val existingTrainingPrograms = trainingProgramRepository.findByExpo(expo)
@@ -44,8 +48,13 @@ class UpdateExpoServiceImpl(
             existingIds = existingTrainingPrograms.mapNotNull { it.id }.toSet(),
         )
 
-        standardProgramRepository.deleteAllInBatch(existingStandardPrograms.filter { it.id !in requestedStandardIds })
-        trainingProgramRepository.deleteAllInBatch(existingTrainingPrograms.filter { it.id !in requestedTrainingIds })
+        val removedStandardPrograms = existingStandardPrograms.filter { it.id !in requestedStandardIds }
+        val removedTrainingPrograms = existingTrainingPrograms.filter { it.id !in requestedTrainingIds }
+
+        val uploadedBy =
+            SecurityContextHolder.getContext().authentication?.name
+                ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+        attachExpoImageService.execute(request.coverImage, uploadedBy, expoId, previousUrl = expo.coverImage)
 
         val updatedRows =
             expoRepository.updateInfo(
@@ -60,7 +69,7 @@ class UpdateExpoServiceImpl(
                 y = request.y,
             )
         if (updatedRows != 1) {
-            throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
+            throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
         }
 
         val updatedExpo = expoRepository.getReferenceById(expoId)
@@ -87,15 +96,10 @@ class UpdateExpoServiceImpl(
                 )
             },
         )
-        val uploadedBy =
-            SecurityContextHolder.getContext().authentication?.name
-                ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
-        attachExpoImageService.execute(
-            request.coverImage,
-            uploadedBy,
-            expoId,
-            previousUrl = expo.coverImage,
-        )
+        removedStandardPrograms.forEach { standardDependencies.deleteApplications(requireNotNull(it.id)) }
+        removedTrainingPrograms.forEach { trainingDependencies.deleteApplications(requireNotNull(it.id)) }
+        standardProgramRepository.deleteAllInBatch(removedStandardPrograms)
+        trainingProgramRepository.deleteAllInBatch(removedTrainingPrograms)
     }
 
     private fun validateProgramIds(

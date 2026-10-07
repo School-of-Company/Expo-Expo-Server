@@ -110,7 +110,7 @@ class SecurityConfig {
                     .requestMatchers(HttpMethod.GET, "/expo", "/expo/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/standard/program/{expo_id}", "/training/program/{expo_id}")
-                    .hasAuthority(ADMIN_AUTHORITY)
+                    .permitAll()
                     .requestMatchers(HttpMethod.POST, "/standard/application/{expo_id}")
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/standard/{expo_id}", "/standard/list/{expo_id}")
