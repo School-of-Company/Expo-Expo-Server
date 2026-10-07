@@ -1,11 +1,8 @@
 package team.startup.expo.domain.expo.service
 
 import team.startup.expo.domain.expo.presentation.dto.request.ExpoPageRequest
-import team.startup.expo.domain.expo.presentation.dto.response.ExpoPageResponse
-import team.startup.expo.domain.expo.presentation.dto.response.ExpoSummaryResponse
 
 interface GetExpoListService {
-    fun execute(): List<ExpoSummaryResponse>
-
-    fun executePage(request: ExpoPageRequest): ExpoPageResponse
+    // page나 size가 있으면 ExpoPageResponse, 없으면 List<ExpoSummaryResponse>를 돌려준다
+    fun execute(request: ExpoPageRequest): Any
 }

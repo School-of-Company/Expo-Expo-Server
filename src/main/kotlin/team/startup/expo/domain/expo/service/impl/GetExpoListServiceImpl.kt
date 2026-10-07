@@ -16,10 +16,8 @@ class GetExpoListServiceImpl(
     private val expoRepository: ExpoRepository,
 ) : GetExpoListService {
     @Transactional(readOnly = true)
-    override fun execute(): List<ExpoSummaryResponse> = expoRepository.findAll(Sort.by(Sort.Direction.DESC, "id")).map { it.toSummary() }
-
-    @Transactional(readOnly = true)
-    override fun executePage(request: ExpoPageRequest): ExpoPageResponse {
+    override fun execute(request: ExpoPageRequest): Any {
+        if (!request.isPaged) return expoRepository.findAll(Sort.by(Sort.Direction.DESC, "id")).map { it.toSummary() }
         val result = expoRepository.findAll(PageRequest.of(request.pageNumber, request.pageSize, Sort.by(Sort.Direction.DESC, "id")))
         return ExpoPageResponse(
             content = result.content.map { it.toSummary() },

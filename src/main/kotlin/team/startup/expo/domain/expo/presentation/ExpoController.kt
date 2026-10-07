@@ -66,8 +66,7 @@ class ExpoController(
     @GetMapping
     fun getExpoList(
         @Valid @ModelAttribute request: ExpoPageRequest,
-    ): ResponseEntity<Any> =
-        ResponseEntity.ok(if (request.isPaged) getExpoListService.executePage(request) else getExpoListService.execute())
+    ): ResponseEntity<Any> = ResponseEntity.ok(getExpoListService.execute(request))
 
     @GetMapping("/{expo_id}")
     fun getExpoDetail(
