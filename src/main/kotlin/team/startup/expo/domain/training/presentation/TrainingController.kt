@@ -15,23 +15,32 @@ import org.springframework.web.bind.annotation.RestController
 import team.startup.expo.domain.training.presentation.dto.request.AddTrainingProgramRequest
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramRequest
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
+import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsWithTraineeRequest
 import team.startup.expo.domain.training.presentation.dto.request.UpdateTrainingProgramRequest
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramResponse
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramTraineeResponse
+import team.startup.expo.domain.training.service.ApplyTrainingProgramListService
 import team.startup.expo.domain.training.service.ApplyTrainingProgramService
+import team.startup.expo.domain.training.service.ApplyTrainingProgramsWithTraineeService
+import team.startup.expo.domain.training.service.CreateTrainingProgramListService
+import team.startup.expo.domain.training.service.CreateTrainingProgramService
 import team.startup.expo.domain.training.service.DeleteTrainingProgramService
 import team.startup.expo.domain.training.service.GetTrainingProgramListService
 import team.startup.expo.domain.training.service.GetTrainingProgramTraineesService
-import team.startup.expo.domain.training.service.TrainingProgramWriteService
+import team.startup.expo.domain.training.service.UpdateTrainingProgramService
 
 @RestController
 @RequestMapping("/training")
 class TrainingController(
     private val getTrainingProgramListService: GetTrainingProgramListService,
-    private val trainingProgramWriteService: TrainingProgramWriteService,
+    private val createTrainingProgramService: CreateTrainingProgramService,
+    private val createTrainingProgramListService: CreateTrainingProgramListService,
+    private val updateTrainingProgramService: UpdateTrainingProgramService,
     private val getTrainingProgramTraineesService: GetTrainingProgramTraineesService,
     private val deleteTrainingProgramService: DeleteTrainingProgramService,
     private val applyTrainingProgramService: ApplyTrainingProgramService,
+    private val applyTrainingProgramListService: ApplyTrainingProgramListService,
+    private val applyTrainingProgramsWithTraineeService: ApplyTrainingProgramsWithTraineeService,
 ) {
     @Operation(summary = "연수 프로그램 목록 조회")
     @GetMapping("/program/{expo_id}")
@@ -44,7 +53,7 @@ class TrainingController(
         @PathVariable("expo_id") expoId: String,
         @Valid @RequestBody request: AddTrainingProgramRequest,
     ): ResponseEntity<Void> {
-        trainingProgramWriteService.add(expoId, request)
+        createTrainingProgramService.execute(expoId, request)
         return ResponseEntity.status(HttpStatus.CREATED).build()
     }
 
@@ -53,7 +62,7 @@ class TrainingController(
         @PathVariable("expo_id") expoId: String,
         @Valid @RequestBody requests: List<AddTrainingProgramRequest>,
     ): ResponseEntity<Void> {
-        trainingProgramWriteService.addAll(expoId, requests)
+        createTrainingProgramListService.execute(expoId, requests)
         return ResponseEntity.status(HttpStatus.CREATED).build()
     }
 
@@ -62,7 +71,7 @@ class TrainingController(
         @PathVariable("trainingPro_id") trainingProgramId: Long,
         @Valid @RequestBody request: UpdateTrainingProgramRequest,
     ): ResponseEntity<Void> {
-        trainingProgramWriteService.update(trainingProgramId, request)
+        updateTrainingProgramService.execute(trainingProgramId, request)
         return ResponseEntity.noContent().build()
     }
 
@@ -92,7 +101,16 @@ class TrainingController(
     fun applyList(
         @Valid @RequestBody request: ApplyTrainingProgramsRequest,
     ): ResponseEntity<Void> {
-        applyTrainingProgramService.executeList(request)
+        applyTrainingProgramListService.execute(request)
+        return ResponseEntity.status(HttpStatus.CREATED).build()
+    }
+
+    @PostMapping("/application/list/trainee/{expo_id}")
+    fun applyListWithTrainee(
+        @PathVariable("expo_id") expoId: String,
+        @Valid @RequestBody request: ApplyTrainingProgramsWithTraineeRequest,
+    ): ResponseEntity<Void> {
+        applyTrainingProgramsWithTraineeService.execute(expoId, request)
         return ResponseEntity.status(HttpStatus.CREATED).build()
     }
 }

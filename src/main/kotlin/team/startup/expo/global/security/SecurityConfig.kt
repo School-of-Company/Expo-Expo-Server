@@ -131,6 +131,8 @@ class SecurityConfig {
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/training/application/{trainingPro_id}", "/training/application/list")
                     .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/training/application/list/trainee/{expo_id}")
+                    .permitAll()
                     .requestMatchers(HttpMethod.PATCH, "/expo/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.DELETE, "/expo/{expo_id}")
