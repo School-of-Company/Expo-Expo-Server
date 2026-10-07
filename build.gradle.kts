@@ -26,6 +26,8 @@ extra["springBootAdminVersion"] = "4.1.2"
 extra["springCloudVersion"] = "2025.1.3"
 
 dependencies {
+    implementation("org.springframework.boot:spring-boot-starter-kafka")
+    testImplementation("org.springframework.kafka:spring-kafka-test")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
