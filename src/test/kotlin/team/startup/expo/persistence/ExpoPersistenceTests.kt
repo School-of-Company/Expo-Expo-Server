@@ -439,6 +439,52 @@ class ExpoPersistenceTests {
         }
     }
 
+    @Test
+    fun `V24와 V25는 V23 기존 박람회를 보존하고 빈 회차 및 변경 테이블을 추가한다`() {
+        DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
+            try {
+                Flyway
+                    .configure()
+                    .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
+                    .schemas("preregister_upgrade")
+                    .target("23")
+                    .load()
+                    .migrate()
+                connection.createStatement().use { statement ->
+                    statement.execute("SET search_path TO preregister_upgrade")
+                    statement.execute(
+                        """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
+                           VALUES ('$EXPO_ID','기존 박람회','설명','2026-10-31','2026-11-01','광주','127','37',5,3)""",
+                    )
+                }
+                Flyway
+                    .configure()
+                    .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
+                    .schemas("preregister_upgrade")
+                    .load()
+                    .migrate()
+                    .migrationsExecuted shouldBe 2
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT title,application_person FROM tb_expo").use { result ->
+                        result.next() shouldBe true
+                        result.getString("title") shouldBe "기존 박람회"
+                        result.getLong("application_person") shouldBe 5L
+                    }
+                    statement.executeQuery("SELECT COUNT(*) FROM tb_preregister_session").use { result ->
+                        result.next() shouldBe true
+                        result.getLong(1) shouldBe 0L
+                    }
+                    statement.executeQuery("SELECT COUNT(*) FROM tb_preregister_session_change").use { result ->
+                        result.next() shouldBe true
+                        result.getLong(1) shouldBe 0L
+                    }
+                }
+            } finally {
+                connection.createStatement().use { it.execute("DROP SCHEMA IF EXISTS preregister_upgrade CASCADE") }
+            }
+        }
+    }
+
     private fun assertRejected(
         sql: String,
         vararg args: Any,
