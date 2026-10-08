@@ -517,7 +517,17 @@ class ExpoApiPostgresHttpTests {
     @Test
     fun `소유 서비스 실패는 삭제를 중단하고 재시도 시 같은 프로그램 ID로 이어간다`() {
         val expoId = createExpo()
+        jdbcTemplate.update(
+            """INSERT INTO tb_preregister_session (expo_id,title,started_at,ended_at,place,capacity,waiting_capacity,closed)
+               VALUES (?,'회차','2026-09-24T00:00:00Z','2026-09-24T01:00:00Z','광주',100,10,false)""",
+            expoId,
+        )
         val formAttempts = AtomicInteger()
+        jdbcTemplate.update(
+            """INSERT INTO tb_preregister_session_change (session_id,change_id,next_revision,operation,definition_changed)
+               SELECT id,'0190abcd-0000-7000-8000-000000000003',2,'DELETE',true FROM tb_preregister_session WHERE expo_id=?""",
+            expoId,
+        )
         val applicationBodies = mutableListOf<String>()
         withDeletionServer { exchange ->
             when {
@@ -544,11 +554,17 @@ class ExpoApiPostgresHttpTests {
             standardProgramRepository.count() shouldBe 1L
             trainingProgramRepository.count() shouldBe 1L
             assertError(request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON), 409, "삭제 중인 박람회입니다.")
+            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session WHERE expo_id = ?", Long::class.java, expoId) shouldBe
+                1L
+            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session_change", Long::class.java) shouldBe 1L
 
             request("/expo/$expoId", "DELETE").statusCode() shouldBe 204
             applicationBodies.size shouldBe 2
             applicationBodies[0] shouldBe applicationBodies[1]
             expoRepository.existsById(expoId) shouldBe false
+            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session WHERE expo_id = ?", Long::class.java, expoId) shouldBe
+                0L
+            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session_change", Long::class.java) shouldBe 0L
         }
     }
 
