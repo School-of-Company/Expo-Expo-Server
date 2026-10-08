@@ -51,6 +51,7 @@ expo:
   training:
     sms:
       enabled: ${KAFKA_TRAINING_SMS_ENABLED:false}
+      contract-verified: ${KAFKA_TRAINING_SMS_CONTRACT_VERIFIED:false}
       relay-delay-ms: ${KAFKA_TRAINING_SMS_RELAY_DELAY_MS:5000}
       batch-size: ${KAFKA_TRAINING_SMS_BATCH_SIZE:20}
     user-service-url: ${USER_SERVICE_URL:}

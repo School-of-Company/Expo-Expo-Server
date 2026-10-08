@@ -22,12 +22,14 @@ class PublishTrainingSmsServiceImpl(
     private val dependencies: TrainingDependenciesClient,
     private val mapper: ObjectMapper,
     @Value("\${expo.training.sms.batch-size:20}") private val batchSize: Int = 20,
+    @Value("\${expo.training.sms.contract-verified:false}") private val contractVerified: Boolean = false,
 ) : PublishTrainingSmsService {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val kafka = KafkaTemplate(producers, mapOf("max.block.ms" to 5000)).apply { setProducerListener(null) }
 
     init {
         require(batchSize in 1..100) { "Training SMS batch size must be between 1 and 100" }
+        require(contractVerified) { "Training SMS requires verified Notification deployment and replay contracts" }
     }
 
     @PreDestroy
@@ -50,6 +52,12 @@ class PublishTrainingSmsServiceImpl(
                 } ?: return
             var acknowledged = false
             try {
+                if (publication.firstPublishAttemptAt == null &&
+                    dependencies.applicationVersion(publication.traineeId) != publication.receiptVersion
+                ) {
+                    outbox.holdPublication(publication, "STALE_RECEIPT")
+                    return@repeat
+                }
                 val payload =
                     publication.payload ?: mapper
                         .writeValueAsString(
@@ -59,6 +67,7 @@ class PublishTrainingSmsServiceImpl(
                                 text = requireNotNull(publication.text),
                             ),
                         ).also { if (!outbox.savePayload(publication, it)) return@repeat }
+                if (!outbox.beginPublication(publication)) return@repeat
                 kafka.send("notification.sms.requested", publication.eventId, payload).get(10, TimeUnit.SECONDS)
                 acknowledged = true
                 outbox.sent(publication)
