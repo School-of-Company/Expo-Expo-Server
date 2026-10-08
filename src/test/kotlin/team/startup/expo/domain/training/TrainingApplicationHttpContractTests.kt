@@ -23,6 +23,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramRequest
 import team.startup.expo.domain.training.service.ApplyTrainingProgramService
 import team.startup.expo.support.TestJwt
+import team.startup.expo.support.TrainingApplicationStub
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.json.JsonMapper
 import java.net.InetSocketAddress
@@ -40,7 +41,11 @@ import java.util.concurrent.TimeUnit
 
 @SpringBootTest(
     webEnvironment = RANDOM_PORT,
-    properties = ["eureka.client.enabled=false", "spring.jpa.hibernate.ddl-auto=validate"],
+    properties = [
+        "eureka.client.enabled=false",
+        "spring.jpa.hibernate.ddl-auto=validate",
+        "expo.training.operations.recovery-delay-ms=3600000",
+    ],
 )
 @EntityScan("team.startup.expo.domain")
 @Testcontainers
@@ -63,6 +68,7 @@ class TrainingApplicationHttpContractTests {
     @BeforeEach
     fun setUp() {
         calls.clear()
+        applicationStub.reset()
         userResolveStatus = 200
         userNamesStatus = 200
         applicationCreateStatus = 201
@@ -81,7 +87,9 @@ class TrainingApplicationHttpContractTests {
         fullProgramIds = emptySet()
         trackApplications = false
         TestClock.now = Instant.parse("2026-09-24T10:00:00+09:00")
-        jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
+        jdbc.execute(
+            "TRUNCATE TABLE tb_training_sms_outbox, tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE",
+        )
         jdbc.update(
             """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -104,6 +112,21 @@ class TrainingApplicationHttpContractTests {
             "CHOICE",
             expoId,
         )
+    }
+
+    @Test
+    fun `단건 쓰기도 최초 호출 전에 UUID와 기대 버전을 내구 저장한다`() {
+        request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null).statusCode() shouldBe 201
+        val save = calls.single { it.path == "/internal/training-program-applications" }
+        val command = mapper.readTree(save.body)
+        command.path("operationId").isString shouldBe true
+        command.path("expectedVersion").isIntegralNumber shouldBe true
+        jdbc.queryForObject(
+            "SELECT command_json FROM tb_training_sms_outbox WHERE event_id = ?",
+            String::class.java,
+            command.path("operationId").asString(),
+        ) shouldBe
+            save.body
     }
 
     @Test
@@ -163,7 +186,15 @@ class TrainingApplicationHttpContractTests {
         val created = request("POST", "/training/application/1", body, authority = null)
         created.statusCode() shouldBe 201
         created.body() shouldBe ""
-        calls.map { it.path } shouldBe listOf("/internal/trainees/resolve", "/internal/training-program-applications")
+        calls
+            .filterNot {
+                it.method == "GET" && (
+                    it.path.endsWith(
+                        "/version",
+                    ) || it.path.contains("/operations/")
+                )
+            }.map { it.path } shouldBe
+            listOf("/internal/trainees/resolve", "/internal/training-program-applications")
         calls.clear()
         request("POST", "/training/application/999", body, authority = null).statusCode() shouldBe 404
         calls.isEmpty() shouldBe true
@@ -274,7 +305,7 @@ class TrainingApplicationHttpContractTests {
         val created = request("POST", traineePath, traineeBody("[2,1,2]"), authority = null)
         created.statusCode() shouldBe 201
         created.body() shouldBe ""
-        calls.map { it.method + " " + it.path } shouldBe
+        calls.filterNot { it.path.endsWith("/version") || it.path.contains("/operations/") }.map { it.method + " " + it.path } shouldBe
             listOf(
                 "GET /forms/$expoId",
                 "POST /internal/trainees/resolve-or-create",
@@ -288,7 +319,7 @@ class TrainingApplicationHttpContractTests {
         mapper.readTree(resolve.body).toString() shouldBe
             """{"expoId":"$expoId","trainingId":"training-1","name":"홍길동","phoneNumber":"010-1234-5678",""" +
             """"informationJson":"{\"school\":\"서울\"}","personalInformationStatus":true}"""
-        val replace = calls.last()
+        val replace = calls.single { it.method == "PUT" }
         replace.token shouldBe "test-training-internal-token"
         val replaceBody = mapper.readTree(replace.body)
         replaceBody.get("trainee").toString() shouldBe """{"id":42,"expoId":"$expoId"}"""
@@ -471,13 +502,13 @@ class TrainingApplicationHttpContractTests {
         fullProgramIds = setOf(2L)
         calls.clear()
         assertError(request("POST", traineePath, traineeBody("[1,2]"), authority = null), 409)
-        calls.map { it.method + " " + it.path } shouldBe
+        calls.filterNot { it.path.endsWith("/version") || it.path.contains("/operations/") }.map { it.method + " " + it.path } shouldBe
             listOf(
                 "GET /forms/$expoId",
                 "POST /internal/trainees/resolve-or-create",
                 "PUT /internal/training-program-applications/trainee/42",
             )
-        val replacement = mapper.readTree(calls.last().body)
+        val replacement = mapper.readTree(calls.single { it.method == "PUT" }.body)
         replacement.get("trainee").toString() shouldBe """{"id":42,"expoId":"$expoId"}"""
         val selected = replacement.get("programs")
         (0 until selected.size()).map { selected[it].get("id").asLong() }.toSet() shouldBe setOf(1L, 2L)
@@ -607,6 +638,7 @@ class TrainingApplicationHttpContractTests {
         )
 
         private val calls = ConcurrentLinkedQueue<DependencyCall>()
+        private val applicationStub = TrainingApplicationStub()
         private var userResolveStatus = 200
         private var userNamesStatus = 200
         private var applicationCreateStatus = 201
@@ -695,31 +727,42 @@ class TrainingApplicationHttpContractTests {
                     "/internal/training-program-applications/trainee/42" -> replaceStatus
                     else -> if (path.startsWith("/forms/")) formStatus else 404
                 }
-            // Application의 원자적 추가/교체 wire 계약을 흉내 낸다. 실제 DB 롤백은 통합 보고서의 검증 범위다.
-            if (trackApplications &&
+            if (
                 path.startsWith("/internal/training-program-applications") &&
                 exchange.requestMethod in listOf("POST", "PUT")
             ) {
-                val json = dependencyMapper.readTree(requestBody).get("programs")
-                val selected = (0 until json.size()).map { json[it].get("id").asLong() }.toSet()
-                val replacement = exchange.requestMethod == "PUT"
-                status =
-                    if ((!replacement && selected.any { it in storedProgramIds }) ||
-                        selected.any { it in fullProgramIds && it !in storedProgramIds }
-                    ) {
-                        409
-                    } else {
-                        storedProgramIds = if (replacement) selected else storedProgramIds + selected
-                        if (replacement) 204 else 201
-                    }
+                applicationStub.fullProgramIds = fullProgramIds
+                status = applicationStub.execute(requestBody, exchange.requestMethod == "PUT", status)
+                storedProgramIds = applicationStub.programIds
             }
+            if (path.contains("/operations/")) status = if (applicationStub.receipt(path.substringAfterLast('/')) == null) 404 else 200
+            if (path.endsWith("/version")) status = 200
             val responseBody =
                 when (path) {
-                    "/internal/trainees/resolve" -> userResolveBody
-                    "/internal/trainees/names" -> userNamesBody
-                    "/internal/training-program-applications/program/1" -> if (exchange.requestMethod == "GET") applicationListBody else ""
-                    "/internal/trainees/resolve-or-create" -> resolveOrCreateBody
-                    else -> if (path.startsWith("/forms/")) formBody else ""
+                    "/internal/trainees/resolve" -> {
+                        userResolveBody
+                    }
+
+                    "/internal/trainees/names" -> {
+                        userNamesBody
+                    }
+
+                    "/internal/training-program-applications/program/1" -> {
+                        if (exchange.requestMethod == "GET") applicationListBody else ""
+                    }
+
+                    "/internal/trainees/resolve-or-create" -> {
+                        resolveOrCreateBody
+                    }
+
+                    else -> {
+                        when {
+                            path.startsWith("/forms/") -> formBody
+                            path.endsWith("/version") -> """{"version":${applicationStub.version}}"""
+                            path.contains("/operations/") -> applicationStub.receipt(path.substringAfterLast('/')) ?: ""
+                            else -> ""
+                        }
+                    }
                 }
             val bytes = responseBody.toByteArray(Charsets.UTF_8)
             exchange.sendResponseHeaders(status, if (status == 204 || bytes.isEmpty()) -1 else bytes.size.toLong())

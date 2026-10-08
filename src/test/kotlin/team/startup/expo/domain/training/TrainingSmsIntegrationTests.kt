@@ -18,8 +18,11 @@ import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+import org.springframework.core.io.ClassPathResource
 import org.springframework.http.HttpStatus
+import org.springframework.jdbc.core.ConnectionCallback
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.datasource.init.ScriptUtils
 import org.springframework.kafka.core.ProducerFactory
 import org.springframework.kafka.test.EmbeddedKafkaBroker
 import org.springframework.kafka.test.context.EmbeddedKafka
@@ -30,16 +33,25 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.DeleteExpoService
+import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
 import team.startup.expo.domain.training.service.PublishTrainingSmsService
+import team.startup.expo.domain.training.service.RecoverTrainingOperationsService
+import team.startup.expo.domain.training.service.TrainingApplicationCommand
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingOperationType
+import team.startup.expo.domain.training.service.TrainingProgramReference
+import team.startup.expo.domain.training.service.TrainingTraineeReference
 import team.startup.expo.domain.training.service.impl.ApplyTrainingProgramListServiceImpl
 import team.startup.expo.domain.training.service.impl.PublishTrainingSmsServiceImpl
+import team.startup.expo.domain.training.service.impl.RecoverTrainingOperationsServiceImpl
 import team.startup.expo.global.exception.ExpectedException
 import team.startup.expo.support.TestJwt
+import team.startup.expo.support.TrainingApplicationStub
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
 import java.net.URI
@@ -60,6 +72,8 @@ import java.util.concurrent.atomic.AtomicInteger
     properties = [
         "eureka.client.enabled=false",
         "expo.training.sms.enabled=true",
+        "expo.training.sms.contract-verified=true",
+        "expo.training.operations.recovery-delay-ms=3600000",
         "expo.training.sms.relay-delay-ms=3600000",
         "spring.kafka.producer.properties.delivery.timeout.ms=2000",
         "spring.kafka.producer.properties.request.timeout.ms=1000",
@@ -85,6 +99,9 @@ class TrainingSmsIntegrationTests {
     private lateinit var relay: PublishTrainingSmsService
 
     @Autowired
+    private lateinit var recovery: RecoverTrainingOperationsService
+
+    @Autowired
     private lateinit var outbox: TrainingSmsOutboxRepository
 
     @Autowired
@@ -98,6 +115,9 @@ class TrainingSmsIntegrationTests {
 
     @Autowired
     private lateinit var applicationSms: TrainingApplicationSmsService
+
+    @Autowired
+    private lateinit var deleteExpo: DeleteExpoService
 
     @Autowired
     private lateinit var dbTransactions: TransactionTemplate
@@ -130,12 +150,18 @@ class TrainingSmsIntegrationTests {
         }
         recipientBody = """{"items":[{"traineeId":42,"phoneNumber":"010-9876-5432"}],"nextCursor":null}"""
         recipientStatus = 200
+        receiptStatus = 200
         replaceStatus = 204
         addStatus = 201
         applicationCalls.set(0)
         recipientCalls.set(0)
         dropApplicationResponse = false
         applicationDelayMillis = 0
+        applicationStub.reset()
+        beforeApplicationWrite = { body ->
+            val id = mapper.readTree(body).path("operationId").asString()
+            jdbc.queryForObject("SELECT command_json FROM tb_training_sms_outbox WHERE event_id = ?", String::class.java, id) shouldBe body
+        }
     }
 
     @Test
@@ -162,7 +188,8 @@ class TrainingSmsIntegrationTests {
             state() shouldBe "SENT"
             jdbc.queryForObject("SELECT payload FROM tb_training_sms_outbox", String::class.java) shouldBe null
             applyReplace("[1,2,1]").statusCode() shouldBe 201
-            count() shouldBe 1L
+            count() shouldBe 2L
+            state() shouldBe "SUPPRESSED"
             relay.execute()
             consumer.poll(Duration.ofMillis(500)).isEmpty shouldBe true
             applicationCalls.get() shouldBe 2
@@ -172,14 +199,15 @@ class TrainingSmsIntegrationTests {
     @Test
     fun `다건 성공만 SMS를 준비하고 단건은 수신자 조회도 하지 않는다`() {
         request("/training/application/1", """{"trainingId":"training-1"}""").statusCode() shouldBe 201
-        count() shouldBe 0L
+        count() shouldBe 1L
+        state() shouldBe "SUPPRESSED"
         recipientCalls.get() shouldBe 0
-        request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[1,2]}""").statusCode() shouldBe 201
+        request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[2]}""").statusCode() shouldBe 201
         state() shouldBe "READY"
         addStatus = 409
         request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[2,1]}""").statusCode() shouldBe 409
-        state() shouldBe "READY"
-        count() shouldBe 1L
+        state() shouldBe "REJECTED"
+        count() shouldBe 3L
     }
 
     @Test
@@ -189,7 +217,7 @@ class TrainingSmsIntegrationTests {
         replaceStatus = 409
         applyReplace("[2]").statusCode() shouldBe 409
         applyReplace("[1]").statusCode() shouldBe 409
-        count() shouldBe 2L
+        count() shouldBe 3L
         replaceStatus = 204
         applyReplace("[2]").statusCode() shouldBe 201
         applyReplace("[1]").statusCode() shouldBe 201
@@ -247,47 +275,58 @@ class TrainingSmsIntegrationTests {
         state() shouldBe "UNKNOWN"
         replaceStatus = 409
         applyReplace("[1]").statusCode() shouldBe 409
-        state() shouldBe "UNKNOWN"
+        state() shouldBe "REJECTED"
         replaceStatus = 204
         applyReplace("[1]").statusCode() shouldBe 201
         state() shouldBe "READY"
-        eventId() shouldBe id
+        (eventId() != id) shouldBe true
     }
 
     @Test
-    fun `Application 응답 유실 뒤 add 재시도 409는 성공 증거로 간주하지 않는다`() {
+    fun `commit 후 응답 유실은 영수증으로 복구하며 새 공개 ADD의 409와 구분한다`() {
         dropApplicationResponse = true
         request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[1]}""").statusCode() shouldBe 503
         state() shouldBe "UNKNOWN"
+        val original = eventId()
         dropApplicationResponse = false
         addStatus = 409
         request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[1]}""").statusCode() shouldBe 409
-        state() shouldBe "UNKNOWN"
-        count() shouldBe 1L
+        state() shouldBe "REJECTED"
+        count() shouldBe 2L
+        jdbc.update("UPDATE tb_training_sms_outbox SET recover_after = CURRENT_TIMESTAMP WHERE event_id = ?", original)
+        recovery.execute()
+        jdbc.queryForObject("SELECT state FROM tb_training_sms_outbox WHERE event_id = ?", String::class.java, original) shouldBe "READY"
+        applicationStub.version shouldBe 1L
+        applicationStub.programIds shouldBe setOf(1L)
     }
 
     @Test
-    fun `프로세스 중단으로 남은 PREPARED의 add 재시도 거절도 성공 여부 미확정이다`() {
-        outbox.prepare(EXPO, 42, "ADD:1", "신청 완료")
-        jdbc.update("UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second'")
-        addStatus = 409
-        request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[1]}""").statusCode() shouldBe 409
-        state() shouldBe "UNKNOWN"
+    fun `재시작 복구는 최초 호출 전 PREPARED의 정확한 UUID 명령으로 재전달한다`() {
+        val original = prepare(TrainingOperationType.ADD)
+        jdbc.update(
+            "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
+        )
+        RecoverTrainingOperationsServiceImpl(outbox, dependencies).execute()
+        state() shouldBe "READY"
         count() shouldBe 1L
+        eventId() shouldBe original.eventId
+        applicationStub.commands.single() shouldBe original.commandJson
     }
 
     @Test
     fun `DB 풀 두 연결로 외부 호출 중인 동시 요청 열두 개를 처리한다`() {
         applicationDelayMillis = 150
         val requests = (1..12).map { CompletableFuture.supplyAsync { applyReplace("[1]").statusCode() } }
-        requests.forEach { it.get(30, TimeUnit.SECONDS) shouldBe 201 }
-        count() shouldBe 1L
-        state() shouldBe "READY"
+        val statuses = requests.map { it.get(30, TimeUnit.SECONDS) }
+        statuses.all { it in setOf(201, 409) } shouldBe true
+        statuses.contains(201) shouldBe true
+        count() shouldBe 12L
+        applicationStub.version shouldBe 1L
         applicationCalls.get() shouldBe 12
     }
 
     @Test
-    fun `외부 성공 뒤 로컬 확정 실패는 준비 기록을 남기고 다음 교체 성공으로 복구한다`() {
+    fun `외부 성공 뒤 로컬 확정 실패는 새 신청 없이 원본 영수증으로 복구한다`() {
         jdbc.execute(
             """CREATE FUNCTION fail_sms_confirm() RETURNS trigger AS ${'$'}body${'$'}
                BEGIN IF NEW.state = 'READY' THEN RAISE EXCEPTION 'forced confirmation failure'; END IF;
@@ -307,8 +346,10 @@ class TrainingSmsIntegrationTests {
             jdbc.execute("DROP FUNCTION fail_sms_confirm()")
         }
         val id = eventId()
-        jdbc.update("UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second'")
-        applyReplace("[1]").statusCode() shouldBe 201
+        jdbc.update(
+            "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
+        )
+        recovery.execute()
         state() shouldBe "READY"
         eventId() shouldBe id
     }
@@ -332,7 +373,7 @@ class TrainingSmsIntegrationTests {
         }
         consumer().use { consumer ->
             jdbc.update("UPDATE tb_training_sms_outbox SET next_attempt_at = CURRENT_TIMESTAMP")
-            val restarted = PublishTrainingSmsServiceImpl(outbox, producers, dependencies, mapper)
+            val restarted = PublishTrainingSmsServiceImpl(outbox, producers, dependencies, mapper, contractVerified = true)
             try {
                 restarted.execute()
             } finally {
@@ -388,7 +429,7 @@ class TrainingSmsIntegrationTests {
     }
 
     @Test
-    fun `신청 준비 기록 장애는 신청 성공을 막지 않고 민감정보를 기록하지 않는다`(output: CapturedOutput) {
+    fun `신청 준비 기록 장애는 Application 쓰기 전에 503이고 민감정보를 기록하지 않는다`(output: CapturedOutput) {
         jdbc.execute(
             """CREATE FUNCTION fail_sms_prepare() RETURNS trigger AS ${'$'}body${'$'}
                BEGIN RAISE EXCEPTION 'sensitive-prepare-marker'; END; ${'$'}body${'$'} LANGUAGE plpgsql""",
@@ -397,10 +438,10 @@ class TrainingSmsIntegrationTests {
             "CREATE TRIGGER fail_sms_prepare BEFORE INSERT ON tb_training_sms_outbox FOR EACH ROW EXECUTE FUNCTION fail_sms_prepare()",
         )
         try {
-            applyReplace("[1]").statusCode() shouldBe 201
-            applicationCalls.get() shouldBe 1
+            applyReplace("[1]").statusCode() shouldBe 503
+            applicationCalls.get() shouldBe 0
             count() shouldBe 0L
-            output.all.contains("Training SMS journal preparation failed") shouldBe true
+            output.all.contains("Training operation preparation failed") shouldBe true
             output.all.contains("sensitive-prepare-marker") shouldBe false
         } finally {
             jdbc.execute("DROP TRIGGER fail_sms_prepare ON tb_training_sms_outbox")
@@ -458,6 +499,11 @@ class TrainingSmsIntegrationTests {
                 "REPLACE:$index",
             )
         }
+        jdbc.update(
+            """UPDATE tb_training_sms_outbox SET application_state = 'SUCCEEDED', command_schema_version = 1,
+            operation_type = 'ADD', request_method = 'POST', request_path = '/internal/training-program-applications',
+            command_json = '{}', expected_version = 0, receipt_version = 0""",
+        )
         consumer().use { consumer ->
             relay.execute()
             jdbc.queryForObject("SELECT count(*) FROM tb_training_sms_outbox WHERE state = 'SENT'", Long::class.java) shouldBe 20L
@@ -475,13 +521,17 @@ class TrainingSmsIntegrationTests {
 
     @Test
     fun `만료된 신청 시도의 늦은 확정은 새 시도의 상태를 덮어쓰지 않는다`() {
-        val first = requireNotNull(outbox.prepare(EXPO, 42, "REPLACE:1", "신청 완료"))
-        jdbc.update("UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second'")
-        val second = requireNotNull(outbox.prepare(EXPO, 42, "REPLACE:1", "신청 완료"))
+        val first = prepare(TrainingOperationType.REPLACE)
+        dependencies.executeOperation(first)
+        val receipt = requireNotNull(dependencies.operationReceipt(first))
+        jdbc.update(
+            "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
+        )
+        val second = requireNotNull(outbox.claimRecovery())
         first.eventId shouldBe second.eventId
-        outbox.confirmed(first)
-        state() shouldBe "UNKNOWN"
-        outbox.confirmed(second)
+        outbox.confirmed(first, receipt)
+        state() shouldBe "PREPARED"
+        outbox.confirmed(second, receipt)
         state() shouldBe "READY"
     }
 
@@ -519,10 +569,302 @@ class TrainingSmsIntegrationTests {
         state() shouldBe "SENT"
     }
 
+    @Test
+    fun `영수증 조회 장애는 성공 응답을 보존하고 선점을 해제하여 조회만 복구한다`() {
+        receiptStatus = 503
+        applyReplace("[1]").statusCode() shouldBe 201
+        state() shouldBe "UNKNOWN"
+        jdbc.queryForObject("SELECT lease_token IS NULL AND response_received FROM tb_training_sms_outbox", Boolean::class.java) shouldBe
+            true
+        receiptStatus = 200
+        jdbc.update("UPDATE tb_training_sms_outbox SET recover_after = CURRENT_TIMESTAMP")
+        recovery.execute()
+        state() shouldBe "READY"
+        applicationCalls.get() shouldBe 1
+    }
+
+    @Test
+    fun `삭제가 시작된 박람회는 명령 저장과 Application 호출 전에 충돌한다`() {
+        val expo = expos.findById(EXPO).orElseThrow()
+        val selected = programs.findByExpoIdOrderByIdAsc(EXPO)
+        jdbc.update("UPDATE tb_expo SET deleting_at = CURRENT_TIMESTAMP WHERE id = ?", EXPO)
+        val failure = assertThrows(ExpectedException::class.java) { prepare(TrainingOperationType.ADD) }
+        failure.status shouldBe HttpStatus.CONFLICT
+        assertThrows(ExpectedException::class.java) {
+            applicationSms.execute(expo, 42, selected, TrainingOperationType.ADD, false)
+        }.status shouldBe HttpStatus.CONFLICT
+        count() shouldBe 0L
+        applicationCalls.get() shouldBe 0
+    }
+
+    @Test
+    fun `미확정 신청과 수동 확인 보류는 박람회 삭제 표시와 원격 삭제 전에 충돌한다`() {
+        val operation = prepare(TrainingOperationType.ADD)
+        assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
+        outbox.hold(operation, "RECOVERY_LIMIT")
+        assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
+        jdbc.queryForObject("SELECT deleting_at IS NULL FROM tb_expo WHERE id = ?", Boolean::class.java, EXPO) shouldBe true
+        outbox.hasUnresolvedApplications(EXPO) shouldBe true
+        jdbc.update("UPDATE tb_training_sms_outbox SET application_state = 'SUCCEEDED', hold_reason = 'STALE_RECEIPT'")
+        outbox.hasUnresolvedApplications(EXPO) shouldBe false
+        jdbc.update("UPDATE tb_training_sms_outbox SET application_state = 'LEGACY', hold_reason = 'LEGACY_UNCERTAIN'")
+        outbox.hasUnresolvedApplications(EXPO) shouldBe true
+    }
+
+    @Test
+    fun `30번째 복구 선점은 유효하며 해제한 뒤 추가 복구 없이 보류한다`() {
+        prepare(TrainingOperationType.ADD)
+        jdbc.update("UPDATE tb_training_sms_outbox SET recovery_attempts = 29, lease_until = NULL, recover_after = CURRENT_TIMESTAMP")
+        val last = requireNotNull(outbox.claimRecovery())
+        outbox.canReplay(last) shouldBe true
+        outbox.maintain()
+        outbox.canReplay(last) shouldBe true
+        outbox.pending(last)
+        outbox.maintain()
+        state() shouldBe "HELD"
+        outbox.claimRecovery() shouldBe null
+        jdbc.queryForObject("SELECT recovery_attempts FROM tb_training_sms_outbox", Int::class.java) shouldBe 30
+    }
+
+    @Test
+    fun `다른 작업의 유지보수 장애가 확정 문자 발행을 막지 않는다`() {
+        applyReplace("[1]").statusCode() shouldBe 201
+        val ready = eventId()
+        val expired = prepare(TrainingOperationType.ADD)
+        jdbc.update(
+            "UPDATE tb_training_sms_outbox SET created_at = CURRENT_TIMESTAMP - INTERVAL '16 minutes', lease_until = NULL WHERE event_id = ?",
+            expired.eventId,
+        )
+        jdbc.execute(
+            """CREATE FUNCTION fail_review_maintenance() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF NEW.application_state = 'HELD' THEN RAISE EXCEPTION 'maintenance failure'; END IF; RETURN NEW; END $$""",
+        )
+        jdbc.execute(
+            "CREATE TRIGGER fail_review_maintenance BEFORE UPDATE ON tb_training_sms_outbox FOR EACH ROW EXECUTE FUNCTION fail_review_maintenance()",
+        )
+        try {
+            assertThrows(Exception::class.java) { outbox.maintain() }
+            consumer().use { consumer ->
+                relay.execute()
+                nextRecord(consumer).key() shouldBe ready
+            }
+            jdbc.queryForObject("SELECT state FROM tb_training_sms_outbox WHERE event_id = ?", String::class.java, ready) shouldBe "SENT"
+        } finally {
+            jdbc.execute("DROP TRIGGER fail_review_maintenance ON tb_training_sms_outbox")
+            jdbc.execute("DROP FUNCTION fail_review_maintenance()")
+        }
+    }
+
+    @Test
+    fun `영수증 404는 정상 성공 응답 뒤에도 문자나 재실행의 근거가 아니다`() {
+        applicationStub.hiddenReceipts = true
+        applyReplace("[1]").statusCode() shouldBe 201
+        state() shouldBe "UNKNOWN"
+        jdbc.update("UPDATE tb_training_sms_outbox SET recover_after = CURRENT_TIMESTAMP")
+        recovery.execute()
+        state() shouldBe "UNKNOWN"
+        applicationCalls.get() shouldBe 1
+        recipientCalls.get() shouldBe 0
+        relay.execute()
+        state() shouldBe "UNKNOWN"
+        applicationStub.hiddenReceipts = false
+        jdbc.update("UPDATE tb_training_sms_outbox SET recover_after = CURRENT_TIMESTAMP")
+        recovery.execute()
+        state() shouldBe "READY"
+    }
+
+    @Test
+    fun `영수증의 다른 대상 손상 버전 목록 상태는 모두 성공확정을 막는다`() {
+        val operation = prepare(TrainingOperationType.ADD)
+        dependencies.executeOperation(operation)
+        val original = requireNotNull(applicationStub.receipt(operation.eventId))
+        val mutations =
+            listOf(
+                original.replace(operation.eventId, UUID.randomUUID().toString()),
+                original.replace("\"ADD\"", "\"REPLACE\""),
+                original.replace(EXPO, "another-expo"),
+                original.replace("\"traineeId\":42", "\"traineeId\":43"),
+                original.replace("\"version\":1", "\"version\":\"1\""),
+                original.replace("\"version\":1", "\"version\":2"),
+                original.replace("\"changed\":true", "\"changed\":false"),
+                original.replace("[1]", "[1,1]"),
+                original.replace("[1]", "[2]"),
+                original.replace("SUCCEEDED", "PENDING"),
+            )
+        mutations.forEach {
+            applicationStub.receiptOverride = it
+            assertThrows(ExpectedException::class.java) { dependencies.operationReceipt(operation) }.status shouldBe HttpStatus.BAD_GATEWAY
+            state() shouldBe "PREPARED"
+        }
+    }
+
+    @Test
+    fun `취소 후 같은 프로그램 새 신청은 새 UUID이고 삭제 뒤 신규 신청은 409다`() {
+        applyReplace("[1]").statusCode() shouldBe 201
+        val first = eventId()
+        applicationStub.cancel()
+        request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[1]}""").statusCode() shouldBe 201
+        (first != eventId()) shouldBe true
+        applicationStub.version shouldBe 3L
+        applicationStub.delete(1)
+        request("/training/application/list", """{"trainingId":"training-1","trainingProIds":[1]}""").statusCode() shouldBe 409
+        applicationStub.version shouldBe 4L
+        applicationStub.programIds shouldBe emptySet()
+    }
+
+    @Test
+    fun `늦은 미완료 REPLACE 복구는 기대 버전을 최신화하지 않는다`() {
+        val old = prepare(TrainingOperationType.REPLACE)
+        applyReplace("[2]").statusCode() shouldBe 201
+        jdbc.update(
+            "UPDATE tb_training_sms_outbox SET lease_until = NULL, recover_after = CURRENT_TIMESTAMP WHERE event_id = ?",
+            old.eventId,
+        )
+        recovery.execute()
+        jdbc.queryForObject(
+            "SELECT application_state FROM tb_training_sms_outbox WHERE event_id = ?",
+            String::class.java,
+            old.eventId,
+        ) shouldBe
+            "HELD"
+        jdbc.queryForObject("SELECT command_json FROM tb_training_sms_outbox WHERE event_id = ?", String::class.java, old.eventId) shouldBe
+            old.commandJson
+        applicationStub.commands.last() shouldBe old.commandJson
+        applicationStub.version shouldBe 1L
+        applicationStub.programIds shouldBe setOf(2L)
+        dependencies.operationReceipt(old) shouldBe null
+    }
+
+    @Test
+    fun `복수 복구자도 동일 작업의 신청 버전과 발행 기록을 한 번만 만든다`() {
+        val operation = prepare(TrainingOperationType.ADD)
+        jdbc.update("UPDATE tb_training_sms_outbox SET lease_until = NULL, recover_after = CURRENT_TIMESTAMP")
+        val workers = (1..8).map { CompletableFuture.runAsync { RecoverTrainingOperationsServiceImpl(outbox, dependencies).execute() } }
+        workers.forEach { it.get(20, TimeUnit.SECONDS) }
+        applicationStub.version shouldBe 1L
+        applicationCalls.get() shouldBe 1
+        count() shouldBe 1L
+        eventId() shouldBe operation.eventId
+        state() shouldBe "READY"
+    }
+
+    @Test
+    fun `미발행 과거 성공은 최신 버전과 다르면 보류하고 번호 본문을 지운다`() {
+        applyReplace("[1]").statusCode() shouldBe 201
+        applicationStub.cancel()
+        relay.execute()
+        state() shouldBe "HELD"
+        jdbc.queryForObject("SELECT application_state FROM tb_training_sms_outbox", String::class.java) shouldBe "SUCCEEDED"
+        jdbc.queryForObject("SELECT hold_reason FROM tb_training_sms_outbox", String::class.java) shouldBe "STALE_RECEIPT"
+        jdbc.queryForObject("SELECT notification_text FROM tb_training_sms_outbox", String::class.java) shouldBe null
+        recipientCalls.get() shouldBe 0
+    }
+
+    @Test
+    fun `빈 내부 취소와 무변경은 영수증을 소비하되 완료 문자를 만들지 않는다`() {
+        applyReplace("[1]").statusCode() shouldBe 201
+        val service = applicationSms
+        val expo = requireNotNull(expos.findById(EXPO).orElse(null))
+        service.execute(expo, 42, emptyList(), TrainingOperationType.REPLACE)
+        applicationStub.version shouldBe 2L
+        state() shouldBe "SUPPRESSED"
+        service.execute(expo, 42, emptyList(), TrainingOperationType.REPLACE)
+        applicationStub.version shouldBe 2L
+        state() shouldBe "SUPPRESSED"
+        recipientCalls.get() shouldBe 0
+    }
+
+    @Test
+    fun `복구 시간 횟수 상한은 원본을 보존한 채 운영보류한다`() {
+        val old = prepare(TrainingOperationType.ADD)
+        jdbc.update("UPDATE tb_training_sms_outbox SET created_at = CURRENT_TIMESTAMP - INTERVAL '15 minutes', lease_until = NULL")
+        recovery.execute()
+        state() shouldBe "HELD"
+        applicationCalls.get() shouldBe 0
+        jdbc.queryForObject("SELECT command_json FROM tb_training_sms_outbox", String::class.java) shouldBe old.commandJson
+        val capped = prepare(TrainingOperationType.ADD)
+        jdbc.update("UPDATE tb_training_sms_outbox SET recovery_attempts = 30, lease_until = NULL WHERE event_id = ?", capped.eventId)
+        recovery.execute()
+        state() shouldBe "HELD"
+        applicationCalls.get() shouldBe 0
+        count() shouldBe 2L
+    }
+
+    @Test
+    fun `SMS 기간 초과는 payload를 지우고 성공 기록은 30일 뒤에만 삭제한다`() {
+        applyReplace("[1]").statusCode() shouldBe 201
+        jdbc.update(
+            "UPDATE tb_training_sms_outbox SET payload = 'synthetic-private-payload', created_at = CURRENT_TIMESTAMP - INTERVAL '23 hours'",
+        )
+        outbox.maintain()
+        state() shouldBe "HELD"
+        jdbc.queryForObject("SELECT payload FROM tb_training_sms_outbox", String::class.java) shouldBe null
+        jdbc.queryForObject("SELECT receipt_json FROM tb_training_sms_outbox", String::class.java)?.contains("SUCCEEDED") shouldBe true
+        jdbc.update("UPDATE tb_training_sms_outbox SET terminal_at = CURRENT_TIMESTAMP - INTERVAL '30 days'")
+        outbox.maintain()
+        count() shouldBe 0L
+        prepare(TrainingOperationType.ADD)
+        jdbc.update("UPDATE tb_training_sms_outbox SET created_at = CURRENT_TIMESTAMP - INTERVAL '31 days', lease_until = NULL")
+        outbox.maintain()
+        count() shouldBe 1L
+        state() shouldBe "HELD"
+    }
+
+    @Test
+    fun `legacy migration은 지문으로 성공을 추정하지 않고 불확정 발행도 보류한다`() {
+        dbTransactions.executeWithoutResult {
+            jdbc.execute("CREATE SCHEMA legacy_receipt_check")
+            jdbc.execute("SET LOCAL search_path TO legacy_receipt_check")
+            jdbc.execute(
+                ConnectionCallback<Unit> { connection ->
+                    ScriptUtils.executeSqlScript(connection, ClassPathResource("db/migration/V23__training_sms_outbox.sql"))
+                },
+            )
+            listOf("PREPARED", "UNKNOWN", "READY", "SENT", "REJECTED").forEach { state ->
+                jdbc.update(
+                    "INSERT INTO tb_training_sms_outbox(event_id,expo_id,trainee_id,fingerprint,state,notification_text) VALUES (?,?,42,'ADD:1',?,'private')",
+                    UUID.randomUUID().toString(),
+                    EXPO,
+                    state,
+                )
+            }
+            jdbc.execute(
+                ConnectionCallback<Unit> { connection ->
+                    ScriptUtils.executeSqlScript(connection, ClassPathResource("db/migration/V24__training_operation_receipts.sql"))
+                },
+            )
+            jdbc.queryForObject(
+                "SELECT count(*) FROM tb_training_sms_outbox WHERE state = 'HELD' AND notification_text IS NULL AND command_json IS NULL",
+                Long::class.java,
+            ) shouldBe
+                3L
+            jdbc.queryForObject("SELECT count(*) FROM tb_training_sms_outbox WHERE state IN ('SENT','REJECTED')", Long::class.java) shouldBe
+                2L
+            jdbc.execute("DROP SCHEMA legacy_receipt_check CASCADE")
+        }
+    }
+
+    @Test
+    fun `Notification 계약 검증 없는 SMS 활성화는 시작 단계에서 거절한다`() {
+        assertThrows(IllegalArgumentException::class.java) { PublishTrainingSmsServiceImpl(outbox, producers, dependencies, mapper) }
+    }
+
     private fun applyReplace(ids: String) =
         request(
             "/training/application/list/trainee/$EXPO",
             """{"trainingId":"training-1","phoneNumber":"010-1234-5678","name":"테스트","informationJson":"{}","personalInformationStatus":true,"trainingProIds":$ids}""",
+        )
+
+    private fun prepare(type: TrainingOperationType) =
+        outbox.prepare(
+            TrainingApplicationCommand(
+                TrainingTraineeReference(42, EXPO),
+                listOf(TrainingProgramReference(1, EXPO, Category.CHOICE)),
+                UUID.randomUUID(),
+                applicationStub.version,
+            ),
+            type,
+            "신청 완료",
         )
 
     private fun request(
@@ -577,20 +919,38 @@ class TrainingSmsIntegrationTests {
         private val recipientCalls = AtomicInteger()
         private var recipientBody = ""
         private var recipientStatus = 200
+        private var receiptStatus = 200
         private var replaceStatus = 204
         private var addStatus = 201
         private var dropApplicationResponse = false
         private var applicationDelayMillis = 0L
+        private val applicationStub = TrainingApplicationStub()
+        private var beforeApplicationWrite: (String) -> Unit = {}
 
         private val upstream =
             HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
                 executor = Executors.newFixedThreadPool(16) { work -> Thread(work).apply { isDaemon = true } }
                 createContext("/") { exchange ->
                     val path = exchange.requestURI.path
-                    exchange.requestBody.readAllBytes()
-                    if (path.contains("training-program-applications")) {
+                    val requestBody = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8)
+                    var applicationStatus: Int? = null
+                    if (path.contains("training-program-applications") && exchange.requestMethod in setOf("POST", "PUT")) {
+                        check(exchange.requestHeaders.getFirst("X-Internal-Token") == "test-training-token")
+                        beforeApplicationWrite(requestBody)
                         applicationCalls.incrementAndGet()
                         if (applicationDelayMillis > 0) Thread.sleep(applicationDelayMillis)
+                        applicationStatus =
+                            applicationStub.execute(
+                                requestBody,
+                                exchange.requestMethod == "PUT",
+                                if (exchange.requestMethod ==
+                                    "PUT"
+                                ) {
+                                    replaceStatus
+                                } else {
+                                    addStatus
+                                },
+                            )
                         if (dropApplicationResponse) {
                             exchange.close()
                             return@createContext
@@ -603,16 +963,35 @@ class TrainingSmsIntegrationTests {
                     }
                     val status =
                         when {
-                            path.contains("/trainees/details") -> recipientStatus
-                            path.endsWith("/trainee/42") -> replaceStatus
-                            path.endsWith("/training-program-applications") -> addStatus
-                            else -> 200
+                            path.contains("/trainees/details") -> {
+                                recipientStatus
+                            }
+
+                            path.contains("/operations/") -> {
+                                if (applicationStub.receipt(path.substringAfterLast('/')) ==
+                                    null
+                                ) {
+                                    404
+                                } else {
+                                    receiptStatus
+                                }
+                            }
+
+                            applicationStatus != null -> {
+                                applicationStatus
+                            }
+
+                            else -> {
+                                200
+                            }
                         }
                     val body =
                         when {
                             path.contains("/trainees/details") -> recipientBody
                             path.startsWith("/forms/") -> """{"startDate":"2020-01-01T00:00:00Z","endDate":"2099-01-01T00:00:00Z"}"""
                             path.startsWith("/internal/trainees/") -> """{"traineeId":42,"created":false}"""
+                            path.endsWith("/version") -> """{"version":${applicationStub.version}}"""
+                            path.contains("/operations/") -> applicationStub.receipt(path.substringAfterLast('/')) ?: ""
                             else -> ""
                         }.toByteArray()
                     exchange.sendResponseHeaders(status, if (status == 204 || body.isEmpty()) -1 else body.size.toLong())

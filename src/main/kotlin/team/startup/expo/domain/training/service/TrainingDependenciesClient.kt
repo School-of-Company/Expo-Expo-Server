@@ -3,8 +3,6 @@ package team.startup.expo.domain.training.service
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
-import team.startup.expo.domain.training.entity.Category
-import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsWithTraineeRequest
 import team.startup.expo.global.attendance.ProgramAttendanceClient
 import team.startup.expo.global.exception.ExpectedException
@@ -16,6 +14,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
 
 @Component
 class TrainingDependenciesClient(
@@ -110,36 +109,101 @@ class TrainingDependenciesClient(
         return decode(response.body(), Array<TraineeName>::class.java).toList()
     }
 
-    fun apply(
-        expoId: String,
-        traineeId: Long,
-        programs: List<TrainingProgram>,
-    ) {
-        val body = applyCommand(expoId, traineeId, programs)
-        when (post(applicationServiceUrl, "/internal/training-program-applications", body).statusCode()) {
-            201 -> Unit
-            400 -> throw ExpectedException(HttpStatus.BAD_REQUEST, "연수 신청 정보가 올바르지 않습니다.")
-            404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
-            409 -> throw ExpectedException(HttpStatus.CONFLICT, "이미 신청했거나 연수 프로그램의 정원이 찼습니다.")
-            else -> badResponse("Application")
+    fun executeOperation(operation: TrainingOperation) {
+        val response =
+            send(applicationServiceUrl, operation.path, operation.method, HttpRequest.BodyPublishers.ofString(operation.commandJson))
+        when (response.statusCode()) {
+            if (operation.type == TrainingOperationType.ADD) 201 else 204 -> {
+                Unit
+            }
+
+            400 -> {
+                throw ExpectedException(HttpStatus.BAD_REQUEST, "연수 신청 정보가 올바르지 않습니다.")
+            }
+
+            404 -> {
+                throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
+            }
+
+            409 -> {
+                throw ExpectedException(
+                    HttpStatus.CONFLICT,
+                    if (operation.type == TrainingOperationType.ADD) {
+                        "이미 신청했거나 연수 프로그램의 정원이 찼습니다."
+                    } else {
+                        "삭제됐거나 정원이 찬 연수 프로그램이 있습니다."
+                    },
+                )
+            }
+
+            else -> {
+                badResponse("Application")
+            }
         }
     }
 
-    // 연수자의 신청을 programs로 통째로 바꾼다. Application이 한 트랜잭션으로 처리해 실패하면 기존 신청이 남는다.
-    fun replaceApplications(
-        expoId: String,
-        traineeId: Long,
-        programs: List<TrainingProgram>,
-    ) {
-        val body = applyCommand(expoId, traineeId, programs)
-        val path = "/internal/training-program-applications/trainee/$traineeId"
-        val response = send(applicationServiceUrl, path, "PUT", HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
-        when (response.statusCode()) {
-            204 -> Unit
-            400 -> throw ExpectedException(HttpStatus.BAD_REQUEST, "연수 신청 정보가 올바르지 않습니다.")
-            404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
-            409 -> throw ExpectedException(HttpStatus.CONFLICT, "삭제됐거나 정원이 찬 연수 프로그램이 있습니다.")
-            else -> badResponse("Application")
+    fun applicationVersion(traineeId: Long): Long {
+        val response = get(applicationServiceUrl, "/internal/training-program-applications/trainee/$traineeId/version")
+        if (response.statusCode() != 200) badResponse("Application")
+        return try {
+            val version = mapper.readTree(response.body()).path("version")
+            require(version.isIntegralNumber && version.canConvertToLong() && version.asLong() >= 0)
+            version.asLong()
+        } catch (exception: Exception) {
+            badResponse("Application")
+        }
+    }
+
+    fun operationReceipt(operation: TrainingOperation): TrainingOperationReceipt? {
+        val response = get(applicationServiceUrl, "/internal/training-program-applications/operations/${operation.eventId}")
+        if (response.statusCode() == 404) return null
+        if (response.statusCode() != 200) badResponse("Application")
+        return try {
+            val json = mapper.readTree(response.body())
+            val operationId = json.path("operationId")
+            val type = json.path("operationType")
+            val expoId = json.path("expoId")
+            val traineeId = json.path("traineeId")
+            val version = json.path("version")
+            val changed = json.path("changed")
+            val ids = json.path("programIds")
+            val completedAt = json.path("completedAt")
+            require(operationId.isString && UUID.fromString(operationId.asString()).toString() == operation.eventId)
+            require(type.isString && type.asString() == operation.type.name)
+            require(expoId.isString && expoId.asString() == operation.expoId)
+            require(traineeId.isIntegralNumber && traineeId.canConvertToLong() && traineeId.asLong() == operation.traineeId)
+            require(json.path("status").isString && json.path("status").asString() == "SUCCEEDED")
+            require(version.isIntegralNumber && version.canConvertToLong() && version.asLong() >= 0 && changed.isBoolean)
+            require(ids.isArray && completedAt.isString)
+            val programIds =
+                (0 until ids.size()).map { index ->
+                    val it = ids[index]
+                    require(it.isIntegralNumber && it.canConvertToLong() && it.asLong() > 0)
+                    it.asLong()
+                }
+            require(programIds == programIds.distinct().sorted())
+            val expectedResult = if (changed.asBoolean()) Math.addExact(operation.expectedVersion, 1) else operation.expectedVersion
+            require(version.asLong() == expectedResult)
+            val command = mapper.readTree(operation.commandJson)
+            val programs = command.path("programs")
+            val requested = (0 until programs.size()).map { programs[it].path("id").asLong() }.sorted()
+            if (operation.type == TrainingOperationType.ADD) {
+                require(changed.asBoolean() && programIds.containsAll(requested))
+            } else {
+                require(programIds == requested)
+            }
+            TrainingOperationReceipt(
+                UUID.fromString(operation.eventId),
+                operation.type,
+                operation.expoId,
+                operation.traineeId,
+                version.asLong(),
+                changed.asBoolean(),
+                programIds,
+                Instant.parse(completedAt.asString()),
+            )
+        } catch (exception: Exception) {
+            badResponse("Application")
         }
     }
 
@@ -156,15 +220,6 @@ class TrainingDependenciesClient(
         }
         attendances.deleteTraining(programId)
     }
-
-    private fun applyCommand(
-        expoId: String,
-        traineeId: Long,
-        programs: List<TrainingProgram>,
-    ) = ApplyProgramsCommand(
-        trainee = TraineeReference(traineeId, expoId),
-        programs = programs.map { ProgramReference(requireNotNull(it.id), expoId, it.category) },
-    )
 
     private fun post(
         baseUrl: String,
@@ -253,22 +308,6 @@ class TrainingDependenciesClient(
     data class TraineeName(
         val traineeId: Long,
         val name: String,
-    )
-
-    private data class TraineeReference(
-        val id: Long,
-        val expoId: String,
-    )
-
-    private data class ProgramReference(
-        val id: Long,
-        val expoId: String,
-        val category: Category,
-    )
-
-    private data class ApplyProgramsCommand(
-        val trainee: TraineeReference,
-        val programs: List<ProgramReference>,
     )
 
     data class ProgramApplication(

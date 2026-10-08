@@ -8,7 +8,7 @@ interface TrainingApplicationSmsService {
         expo: Expo,
         traineeId: Long,
         programs: List<TrainingProgram>,
-        mode: String,
-        apply: () -> Unit,
+        type: TrainingOperationType,
+        sendSms: Boolean = true,
     )
 }

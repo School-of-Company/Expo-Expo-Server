@@ -9,6 +9,7 @@ import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.ApplyTrainingProgramListService
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
@@ -40,6 +41,6 @@ class ApplyTrainingProgramListServiceImpl(
         val expoId = expo.id
         dependencies.requireApplicationConfiguration()
         val traineeId = dependencies.resolveTrainee(expoId, request.trainingId)
-        sms.execute(expo, traineeId, found, "ADD") { dependencies.apply(expoId, traineeId, found) }
+        sms.execute(expo, traineeId, found, TrainingOperationType.ADD)
     }
 }

@@ -9,6 +9,7 @@ import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.ApplyTrainingProgramsWithTraineeService
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.global.exception.ExpectedException
 import java.time.Clock
 import java.time.LocalDate
@@ -52,6 +53,6 @@ class ApplyTrainingProgramsWithTraineeServiceImpl(
         }
         dependencies.requireApplicationConfiguration()
         val traineeId = dependencies.resolveOrCreateTrainee(expoId, request)
-        sms.execute(expo, traineeId, found, "REPLACE") { dependencies.replaceApplications(expoId, traineeId, found) }
+        sms.execute(expo, traineeId, found, TrainingOperationType.REPLACE)
     }
 }

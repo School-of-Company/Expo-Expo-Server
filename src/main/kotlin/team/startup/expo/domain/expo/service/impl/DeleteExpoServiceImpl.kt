@@ -9,6 +9,7 @@ import team.startup.expo.domain.expo.service.ExpoDeletionClient
 import team.startup.expo.domain.image.repository.ExpoImageRepository
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
@@ -19,6 +20,7 @@ class DeleteExpoServiceImpl(
     private val images: ExpoImageRepository,
     private val dependencies: ExpoDeletionClient,
     private val transactions: TransactionTemplate,
+    private val operations: TrainingSmsOutboxRepository,
 ) : DeleteExpoService {
     override fun execute(expoId: String) {
         val programs =
@@ -26,6 +28,9 @@ class DeleteExpoServiceImpl(
                 val expo =
                     expos.findLockedById(expoId)
                         ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
+                if (operations.hasUnresolvedApplications(expoId)) {
+                    throw ExpectedException(HttpStatus.CONFLICT, "확인 중인 연수 신청이 있어 박람회를 삭제할 수 없습니다.")
+                }
                 dependencies.requireConfiguration()
                 expo.markDeleting()
                 ProgramIds(
