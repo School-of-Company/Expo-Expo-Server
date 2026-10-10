@@ -18,6 +18,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.datasource.DriverManagerDataSource
 import org.springframework.test.annotation.DirtiesContext
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
@@ -359,6 +360,12 @@ class ExpoPersistenceTests {
             )
 
         flyway.migrate().migrationsExecuted shouldBe 0
+        val versions = flyway.info().all().mapNotNull { it.version?.version }
+        versions.size shouldBe versions.toSet().size
+        flyway
+            .info()
+            .current()
+            .version.version shouldBe "26"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -440,47 +447,102 @@ class ExpoPersistenceTests {
     }
 
     @Test
-    fun `V24와 V25는 V23 기존 박람회를 보존하고 빈 회차 및 변경 테이블을 추가한다`() {
-        DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
-            try {
-                Flyway
-                    .configure()
-                    .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
-                    .schemas("preregister_upgrade")
-                    .target("23")
-                    .load()
-                    .migrate()
-                connection.createStatement().use { statement ->
-                    statement.execute("SET search_path TO preregister_upgrade")
-                    statement.execute(
-                        """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
+    fun `V23 V24 V25에서 V26까지 기존 데이터와 migration history를 보존한다`() {
+        listOf(23, 24, 25).forEach { target ->
+            DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
+                try {
+                    Flyway
+                        .configure()
+                        .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
+                        .schemas("preregister_upgrade")
+                        .target(target.toString())
+                        .load()
+                        .migrate()
+                    connection.createStatement().use { statement ->
+                        statement.execute("SET search_path TO preregister_upgrade")
+                        statement.execute(
+                            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
                            VALUES ('$EXPO_ID','기존 박람회','설명','2026-10-31','2026-11-01','광주','127','37',5,3)""",
-                    )
+                        )
+                    }
+                    val upgradeJdbc =
+                        JdbcTemplate(
+                            DriverManagerDataSource(postgres.jdbcUrl, postgres.username, postgres.password),
+                        )
+                    val historyBefore =
+                        upgradeJdbc.queryForList(
+                            "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",
+                        )
+                    connection.createStatement().use { statement ->
+                        statement.execute(
+                            "INSERT INTO tb_training_sms_outbox (event_id,expo_id,trainee_id,fingerprint,state) VALUES ('legacy-event','$EXPO_ID',42,'ADD:1','SENT')",
+                        )
+                        if (target >= 24) {
+                            statement.execute(
+                                "INSERT INTO tb_preregister_session (expo_id,title,started_at,ended_at,place,capacity,waiting_capacity,closed) VALUES ('$EXPO_ID','기존 회차','2026-10-31 09:00+09','2026-10-31 10:00+09','광주',10,0,false)",
+                            )
+                        }
+                        if (target == 25) {
+                            statement.execute(
+                                "INSERT INTO tb_preregister_session_change (session_id,change_id,next_revision,operation,definition_changed) VALUES (1,'00000000-0000-0000-0000-000000000001',2,'DELETE',false)",
+                            )
+                        }
+                    }
+                    val sessionsBefore =
+                        if (target >=
+                            24
+                        ) {
+                            upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session")
+                        } else {
+                            emptyList()
+                        }
+                    val changesBefore =
+                        if (target ==
+                            25
+                        ) {
+                            upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change")
+                        } else {
+                            emptyList()
+                        }
+                    Flyway
+                        .configure()
+                        .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
+                        .schemas("preregister_upgrade")
+                        .load()
+                        .migrate()
+                        .migrationsExecuted shouldBe 26 - target
+                    upgradeJdbc
+                        .queryForList(
+                            "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",
+                        ).take(historyBefore.size) shouldBe
+                        historyBefore
+                    upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session") shouldBe sessionsBefore
+                    upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change") shouldBe changesBefore
+                    connection.createStatement().use { statement ->
+                        statement.executeQuery("SELECT title,application_person FROM tb_expo").use { result ->
+                            result.next() shouldBe true
+                            result.getString("title") shouldBe "기존 박람회"
+                            result.getLong("application_person") shouldBe 5L
+                        }
+                        statement.executeQuery("SELECT COUNT(*) FROM tb_preregister_session").use { result ->
+                            result.next() shouldBe true
+                            result.getLong(1) shouldBe if (target >= 24) 1L else 0L
+                        }
+                        statement.executeQuery("SELECT COUNT(*) FROM tb_preregister_session_change").use { result ->
+                            result.next() shouldBe true
+                            result.getLong(1) shouldBe if (target == 25) 1L else 0L
+                        }
+                        statement.executeQuery("SELECT event_id,state,application_state FROM tb_training_sms_outbox").use { result ->
+                            result.next() shouldBe true
+                            result.getString("event_id") shouldBe "legacy-event"
+                            result.getString("state") shouldBe "SENT"
+                            result.getString("application_state") shouldBe "LEGACY"
+                            result.next() shouldBe false
+                        }
+                    }
+                } finally {
+                    connection.createStatement().use { it.execute("DROP SCHEMA IF EXISTS preregister_upgrade CASCADE") }
                 }
-                Flyway
-                    .configure()
-                    .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
-                    .schemas("preregister_upgrade")
-                    .load()
-                    .migrate()
-                    .migrationsExecuted shouldBe 2
-                connection.createStatement().use { statement ->
-                    statement.executeQuery("SELECT title,application_person FROM tb_expo").use { result ->
-                        result.next() shouldBe true
-                        result.getString("title") shouldBe "기존 박람회"
-                        result.getLong("application_person") shouldBe 5L
-                    }
-                    statement.executeQuery("SELECT COUNT(*) FROM tb_preregister_session").use { result ->
-                        result.next() shouldBe true
-                        result.getLong(1) shouldBe 0L
-                    }
-                    statement.executeQuery("SELECT COUNT(*) FROM tb_preregister_session_change").use { result ->
-                        result.next() shouldBe true
-                        result.getLong(1) shouldBe 0L
-                    }
-                }
-            } finally {
-                connection.createStatement().use { it.execute("DROP SCHEMA IF EXISTS preregister_upgrade CASCADE") }
             }
         }
     }

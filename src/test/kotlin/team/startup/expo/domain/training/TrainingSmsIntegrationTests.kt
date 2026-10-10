@@ -830,7 +830,7 @@ class TrainingSmsIntegrationTests {
             }
             jdbc.execute(
                 ConnectionCallback<Unit> { connection ->
-                    ScriptUtils.executeSqlScript(connection, ClassPathResource("db/migration/V24__training_operation_receipts.sql"))
+                    ScriptUtils.executeSqlScript(connection, ClassPathResource("db/migration/V26__training_operation_receipts.sql"))
                 },
             )
             jdbc.queryForObject(
