@@ -16,7 +16,7 @@ Application의 인증된 영수증 200에서 UUID/type/expoId/traineeId/status�
 
 ## 내구 기록과 기간
 
-기존 `tb_training_sms_outbox`를 V24로 확장한다. Application 성공과 SMS 발행 상태는 분리한다.
+기존 `tb_training_sms_outbox`를 V26으로 확장한다. Application 성공과 SMS 발행 상태는 분리한다.
 
 | 항목 | 정책 |
 | --- | --- |
@@ -42,7 +42,7 @@ Application의 인증된 영수증 200에서 UUID/type/expoId/traineeId/status�
 V23의 PREPARED/UNKNOWN에는 원본 명령/기대 버전이 없어 자동 keyed 복구하지 않는다. READY에도 내구 최초 발행 시각이 없어 이전 ACK 유실과 안전한 재생 기간을 판단하지 못하므로 `LEGACY_PUBLICATION_UNCERTAIN`으로 보류한다. 본문/payload를 지운다. 기존 SENT/REJECTED는 상태를 보존한다. 불확정 기록의 eventId를 과거 Application operationId라고 해석하지 않는다.
 
 1. 대상 환경의 Application V4.1 migration 적용과 **모든 쓰기 인스턴스**의 PR #31 계약 지원을 확인한다. dev workflow 성공/PR 병합만으로 prod 또는 모든 인스턴스 전환을 판정하지 않는다. ADD/REPLACE/취소/프로그램 삭제 및 purge 경로, 구버전 프로세스/배치/운영 쓰기 도구까지 확인한다.
-2. 구 Expo 신청 쓰기/relay를 drain하거나 중단하고 V24를 적용한다. #62 등 병행 작업의 migration 번호·배포 순서를 다시 대조한다. 이미 적용한 migration을 재번호하지 않는다.
+2. 대상 DB의 `flyway_schema_history`에서 version/script/checksum과 실제 스키마를 먼저 확인한다. 구 Expo 신청 쓰기/relay를 drain하거나 중단하고 V26을 적용한다. 회차 V24/V25는 유지한다. 이전 #66의 `V24__training_operation_receipts.sql`이 이미 적용된 DB는 현재 회차 V24와 이력이 충돌하므로 이 절차로 바로 업그레이드하지 않는다. 백업과 운영 이력 확인 후 별도 전환 계획이 필요하며, 임의 repair·checksum 수정·이력/데이터 삭제를 수행하지 않는다.
 3. 모든 Expo 쓰기 인스턴스를 전환한다. keyed 미완료 기록을 무키 호출·새 UUID·새 기대 버전으로 바꾸는 rollback은 금지한다. 구 binary로 rollback이 필요하면 신청 트래픽/relay를 먼저 중단하고 원본을 보존한다.
 4. SMS는 비활성 상태에서 실제 Application·전용 DB 통합 검증을 완료한다.
 5. Notification #8의 실제 배포 SHA, Kafka/Redis + 강제 fake sender, processing/done, Redis 완료 장애, DLQ 재생 기간, consumer group offset, TRAINEE 발신번호·승인 본문을 확인한다. 확인한 develop은 done 24시간이며 7일 변경 PR #7의 병합·배포를 별도로 확인해야 한다.
