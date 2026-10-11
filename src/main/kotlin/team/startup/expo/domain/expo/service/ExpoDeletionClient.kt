@@ -18,14 +18,18 @@ class ExpoDeletionClient(
     @Value("\${expo.standard.application-service-url:}") private val applicationUrl: String,
     @Value("\${expo.form-service-url:}") private val formUrl: String,
     @Value("\${expo.standard.user-service-url:}") private val userUrl: String,
-    @Value("\${expo.delete-internal-token:}") private val internalToken: String,
+    @Value("\${APPLICATION_INTERNAL_TOKEN:\${expo.delete-internal-token:}}") private val applicationToken: String,
+    @Value("\${FORM_INTERNAL_TOKEN:\${expo.delete-internal-token:}}") private val formToken: String,
+    @Value("\${USER_INTERNAL_TOKEN:\${expo.delete-internal-token:}}") private val userToken: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
     fun requireConfiguration() {
-        if (applicationUrl.isBlank() || formUrl.isBlank() || userUrl.isBlank() || internalToken.isBlank()) {
+        if (applicationUrl.isBlank() || formUrl.isBlank() || userUrl.isBlank() ||
+            applicationToken.isBlank() || formToken.isBlank() || userToken.isBlank()
+        ) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "박람회 삭제 내부 연동이 설정되지 않았습니다.")
         }
         attendances.requireConfiguration()
@@ -38,6 +42,7 @@ class ExpoDeletionClient(
     ) {
         send(
             applicationUrl,
+            applicationToken,
             "/internal/expos/$expoId/purge",
             "POST",
             HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(ProgramIds(standardIds, trainingIds))),
@@ -45,9 +50,9 @@ class ExpoDeletionClient(
         )
     }
 
-    fun deleteForms(expoId: String) = delete(formUrl, expoId, "Form")
+    fun deleteForms(expoId: String) = delete(formUrl, formToken, expoId, "Form")
 
-    fun deleteUsers(expoId: String) = delete(userUrl, expoId, "User")
+    fun deleteUsers(expoId: String) = delete(userUrl, userToken, expoId, "User")
 
     fun deleteAttendances(
         expoId: String,
@@ -61,14 +66,16 @@ class ExpoDeletionClient(
 
     private fun delete(
         baseUrl: String,
+        token: String,
         expoId: String,
         service: String,
     ) {
-        send(baseUrl, "/internal/expos/$expoId", "DELETE", HttpRequest.BodyPublishers.noBody(), service)
+        send(baseUrl, token, "/internal/expos/$expoId", "DELETE", HttpRequest.BodyPublishers.noBody(), service)
     }
 
     private fun send(
         baseUrl: String,
+        token: String,
         path: String,
         method: String,
         body: HttpRequest.BodyPublisher,
@@ -80,7 +87,7 @@ class ExpoDeletionClient(
                     .newBuilder(URI.create("${baseUrl.trimEnd('/')}$path"))
                     .timeout(Duration.ofSeconds(5))
                     .header("Content-Type", "application/json")
-                    .header("X-Internal-Token", internalToken)
+                    .header("X-Internal-Token", token)
                     .method(method, body)
                     .build()
             if (http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() != 204) {

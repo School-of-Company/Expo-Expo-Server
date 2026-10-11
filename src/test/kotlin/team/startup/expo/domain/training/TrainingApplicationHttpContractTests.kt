@@ -171,7 +171,7 @@ class TrainingApplicationHttpContractTests {
         val lookupBody = mapper.readTree(lookup.body)
         lookupBody.get("expoId").asString() shouldBe expoId
         lookupBody.get("trainingId").asString() shouldBe "training-1"
-        lookup.token shouldBe "test-training-internal-token"
+        lookup.token shouldBe "test-user-token"
         val save = calls.single { it.path == "/internal/training-program-applications" }
         val saveBody = mapper.readTree(save.body)
         saveBody.get("trainee").get("id").asLong() shouldBe 42L
@@ -220,7 +220,7 @@ class TrainingApplicationHttpContractTests {
         val lookup = calls.single { it.path == "/internal/trainees/resolve" }
         mapper.readTree(lookup.body).get("expoId").asString() shouldBe expoId
         val save = calls.single { it.path == "/internal/training-program-applications" }
-        save.token shouldBe "test-training-internal-token"
+        save.token shouldBe "test-application-token"
         val programs = mapper.readTree(save.body).get("programs")
         programs.size() shouldBe 2
         (0 until programs.size()).map { programs[it].get("id").asLong() }.toSet() shouldBe setOf(1L, 2L)
@@ -315,12 +315,12 @@ class TrainingApplicationHttpContractTests {
         form.query shouldBe "type=TRAINEE&applicationType=PRE"
         form.token shouldBe null
         val resolve = calls.single { it.path == "/internal/trainees/resolve-or-create" }
-        resolve.token shouldBe "test-training-internal-token"
+        resolve.token shouldBe "test-user-token"
         mapper.readTree(resolve.body).toString() shouldBe
             """{"expoId":"$expoId","trainingId":"training-1","name":"홍길동","phoneNumber":"010-1234-5678",""" +
             """"informationJson":"{\"school\":\"서울\"}","personalInformationStatus":true}"""
         val replace = calls.single { it.method == "PUT" }
-        replace.token shouldBe "test-training-internal-token"
+        replace.token shouldBe "test-application-token"
         val replaceBody = mapper.readTree(replace.body)
         replaceBody.get("trainee").toString() shouldBe """{"id":42,"expoId":"$expoId"}"""
         val programs = replaceBody.get("programs")
@@ -692,6 +692,8 @@ class TrainingApplicationHttpContractTests {
             registry.add("expo.training.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.internal-token") { "test-training-internal-token" }
+            registry.add("USER_INTERNAL_TOKEN") { "test-user-token" }
+            registry.add("APPLICATION_INTERNAL_TOKEN") { "test-application-token" }
             registry.add("expo.attention.service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.attention.internal-token") { "test-attention-token" }
             registry.add("expo.form-service-url") { "http://127.0.0.1:${upstream.address.port}" }

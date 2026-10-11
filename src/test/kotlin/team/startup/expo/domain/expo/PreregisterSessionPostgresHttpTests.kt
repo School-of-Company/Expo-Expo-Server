@@ -2,6 +2,7 @@ package team.startup.expo.domain.expo
 
 import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.shouldBe
+import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.BeforeEach
@@ -31,6 +32,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.sql.DriverManager
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -83,6 +85,128 @@ class PreregisterSessionPostgresHttpTests {
                    VALUES (?,'박람회','설명','2026-10-31','2026-11-01','광주','127','37',5,3)""",
                 id,
             )
+        }
+    }
+
+    @Test
+    fun `기존 PostgreSQL 회차 마이그레이션은 취소 마감을 추론하지 않는다`() {
+        val schema = "cancel_deadline_upgrade"
+
+        fun migrate(target: String) =
+            Flyway
+                .configure()
+                .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
+                .schemas(schema)
+                .defaultSchema(schema)
+                .target(target)
+                .load()
+                .migrate()
+        try {
+            migrate("28")
+            DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
+                connection.schema = schema
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate(
+                        """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
+                           VALUES ('$EXPO_ID','expo','description','2026-10-31','2026-11-01','place','127','37',0,0)""",
+                    )
+                    statement.executeUpdate(
+                        """INSERT INTO tb_preregister_session (expo_id,title,started_at,ended_at,place,capacity,waiting_capacity,closed)
+                           VALUES ('$EXPO_ID','session','2026-10-31T00:30:00Z','2026-10-31T03:30:00Z','place',100,10,false)""",
+                    )
+                }
+            }
+            migrate("29")
+            DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
+                connection.schema = schema
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT cancel_ended_at, revision FROM tb_preregister_session").use { rows ->
+                        rows.next() shouldBe true
+                        rows.getObject("cancel_ended_at") shouldBe null
+                        rows.getLong("revision") shouldBe 1L
+                        rows.next() shouldBe false
+                    }
+                }
+            }
+        } finally {
+            jdbc.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
+        }
+    }
+
+    @Test
+    fun `취소 마감은 미설정이면 null이고 과거 현재 미래 및 회차와 독립된 시각을 보존한다`() {
+        val legacy = create()
+        read(legacy).get("cancelEndedAt").isNull shouldBe true
+        mapper
+            .readTree(request(internalPath(legacy), token = "test-expo-token", role = null).body())
+            .get("cancelEndedAt")
+            .isNull shouldBe true
+        val now = Instant.now()
+        listOf(now.minusSeconds(60), now, now.plusSeconds(60), Instant.parse("2026-11-02T00:00:00Z")).forEach { deadline ->
+            val id = create(withDeadline(deadline.toString()))
+            val internal = mapper.readTree(request(internalPath(id), token = "test-expo-token", role = null).body())
+            Instant.parse(internal.get("cancelEndedAt").asString()) shouldBe deadline.truncatedTo(java.time.temporal.ChronoUnit.MICROS)
+        }
+        listOf("\"2026-10-31T09:30:00\"", "\"invalid\"", "123", "\"123\"", "\"\"", "true").forEach { invalid ->
+            val definition = DEFINITION.dropLast(1) + ",\"cancelEndedAt\":$invalid}"
+            request(path(), "POST", definition).statusCode() shouldBe 400
+            request(path(legacy), "PATCH", updateBody(definition = definition)).statusCode() shouldBe 400
+        }
+        calls.size shouldBe 0
+    }
+
+    @Test
+    fun `취소 마감 설정 변경 제거는 정의 승인과 버전을 따르고 거절은 원본을 보존한다`() {
+        val id = create()
+        val deadline = "2026-10-30T09:30:00.123456789+09:00"
+        val body = updateBody(definition = withDeadline(deadline))
+        histories += id
+        request(path(id), "PATCH", body).statusCode() shouldBe 409
+        read(id).get("cancelEndedAt").isNull shouldBe true
+        read(id).get("revision").asLong() shouldBe 1L
+        histories -= id
+        request(path(id), "PATCH", body).statusCode() shouldBe 204
+        request(path(id), "PATCH", body).statusCode() shouldBe 204
+        read(id).get("revision").asLong() shouldBe 2L
+        Instant.parse(read(id).get("cancelEndedAt").asString()) shouldBe Instant.parse("2026-10-30T00:30:00.123456Z")
+        val command = mapper.readTree(calls.last().body)
+        command.get("definitionChanged").asBoolean() shouldBe true
+        command.get("definition").get("cancelEndedAt") shouldBe read(id).get("cancelEndedAt")
+        request(path(id), "PATCH", updateBody(definition = DEFINITION)).statusCode() shouldBe 409
+        request(path(id), "PATCH", updateBody(revision = 2, definition = withDeadline("2026-10-30T01:00:00Z"))).statusCode() shouldBe 204
+        request(
+            path(id),
+            "PATCH",
+            updateBody(revision = 3, definition = DEFINITION.dropLast(1) + ",\"cancelEndedAt\":null}"),
+        ).statusCode() shouldBe
+            204
+        read(id).get("cancelEndedAt").isNull shouldBe true
+        read(id).get("revision").asLong() shouldBe 4L
+        request(path(id), "PATCH", updateBody(revision = 4, definition = withDeadline(deadline))).statusCode() shouldBe 204
+        request(path(id), "PATCH", updateBody(revision = 5, definition = DEFINITION)).statusCode() shouldBe 204
+        read(id).get("cancelEndedAt").isNull shouldBe true
+    }
+
+    @Test
+    fun `같은 버전 취소 마감 동시 설정은 한 건만 승인한다`() {
+        val id = create()
+        val start = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val futures =
+                listOf("2026-10-30T00:00:00Z", "2026-10-30T01:00:00Z").map { deadline ->
+                    CompletableFuture.supplyAsync({
+                        start.await()
+                        request(path(id), "PATCH", updateBody(definition = withDeadline(deadline))).statusCode()
+                    }, executor)
+                }
+            start.countDown()
+            futures.map { it.get(30, TimeUnit.SECONDS) }.sorted() shouldBe listOf(204, 409)
+            read(id).get("revision").asLong() shouldBe 2L
+            calls.size shouldBe 1
+            mapper.readTree(calls.single().body).get("definition").get("cancelEndedAt") shouldBe read(id).get("cancelEndedAt")
+        } finally {
+            executor.shutdownNow()
         }
     }
 
@@ -257,7 +381,7 @@ class PreregisterSessionPostgresHttpTests {
     @Test
     fun `원격 승인 후 DB 저장이 실패해도 원래 명령을 본문 없이 재시도한다`() {
         val id = create()
-        val body = updateBody()
+        val body = updateBody(definition = withDeadline("2026-10-30T00:00:00Z"))
         try {
             jdbc.execute(
                 """CREATE FUNCTION fail_session_update() RETURNS trigger AS ${'$'}trigger${'$'}
@@ -273,11 +397,13 @@ class PreregisterSessionPostgresHttpTests {
             jdbc.execute("DROP FUNCTION IF EXISTS fail_session_update()")
         }
         read(id).get("revision").asLong() shouldBe 1L
+        read(id).get("cancelEndedAt").isNull shouldBe true
         pending.size shouldBe 1
         journalCount(id) shouldBe 1L
         request(path(id), "PATCH", updateBody(definition = DEFINITION.replace("100", "101"))).statusCode() shouldBe 409
         request(path(id) + "/changes/retry", "POST").statusCode() shouldBe 204
         read(id).get("revision").asLong() shouldBe 2L
+        read(id).get("cancelEndedAt").asString() shouldBe "2026-10-30T00:00:00Z"
         journalCount(id) shouldBe 0L
         calls.size shouldBe 2
         calls[0].body shouldBe calls[1].body
@@ -516,6 +642,8 @@ class PreregisterSessionPostgresHttpTests {
     }
 
     private fun read(id: Long): JsonNode = mapper.readTree(request(path(id)).body())
+
+    private fun withDeadline(deadline: String): String = DEFINITION.dropLast(1) + ",\"cancelEndedAt\":\"$deadline\"}"
 
     private fun journalCount(id: Long): Long =
         jdbc.queryForObject("SELECT COUNT(*) FROM tb_preregister_session_change WHERE session_id=?", Long::class.java, id)!!

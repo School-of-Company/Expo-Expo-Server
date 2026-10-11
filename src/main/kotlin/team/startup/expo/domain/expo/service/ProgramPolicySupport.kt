@@ -13,6 +13,7 @@ import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
+import team.startup.expo.domain.expo.repository.ProgramFormChangeRepository
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
@@ -34,6 +35,7 @@ class ProgramPolicySupport(
     private val client: ProgramPolicyClient,
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
+    private val forms: ProgramFormChangeRepository,
 ) {
     fun command(vararg values: Any?): String = mapper.writeValueAsString(values)
 
@@ -180,7 +182,19 @@ class ProgramPolicySupport(
                 throw ExpectedException(HttpStatus.BAD_REQUEST, "다른 행사 또는 유형의 프로그램 묶음입니다.")
             }
         }
+        definition.policy?.let {
+            forms.lock()
+            if (forms.blocked(it.formId)) conflict("프로그램 폼 변경이 진행 중이거나 복구가 필요합니다.")
+        }
         if (validateForm) client.validateForm(definition)
+    }
+
+    fun validateForApply(definition: ProgramDefinition) {
+        definition.policy?.let {
+            forms.lock()
+            if (forms.blocked(it.formId)) conflict("프로그램 폼 변경이 진행 중이거나 복구가 필요합니다.")
+            client.validateForm(definition)
+        }
     }
 
     private fun missingExpo(): Nothing = throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")

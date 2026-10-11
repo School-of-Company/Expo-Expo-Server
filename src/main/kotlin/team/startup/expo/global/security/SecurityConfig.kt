@@ -49,14 +49,14 @@ class SecurityConfig {
                         val issuedAt = jwt.issuedAt
                         val expiresAt = jwt.expiresAt
                         if (
-                            jwt.subject?.toLongOrNull() != null &&
+                            jwt.subject?.toLongOrNull()?.let { it > 0 } == true &&
                             issuedAt != null &&
                             expiresAt != null &&
                             Duration.between(issuedAt, expiresAt) > Duration.ZERO &&
                             Duration.between(issuedAt, expiresAt) <= Duration.ofMinutes(15) &&
                             !issuedAt.isAfter(Instant.now().plusSeconds(30)) &&
                             expiresAt.isAfter(Instant.now()) &&
-                            jwt.getClaim<Any>("role") is String
+                            (jwt.getClaim<Any>("role") as? String)?.isNotBlank() == true
                         ) {
                             OAuth2TokenValidatorResult.success()
                         } else {
@@ -73,6 +73,7 @@ class SecurityConfig {
         http: HttpSecurity,
         objectMapper: ObjectMapper,
         @Value("\${EXPO_INTERNAL_TOKEN:}") internalToken: String,
+        @Value("\${swagger.enabled:false}") swaggerEnabled: Boolean,
     ): SecurityFilterChain {
         if (internalToken.isBlank()) {
             logger.warn("EXPO_INTERNAL_TOKEN is not configured; internal expo requests will be rejected")
@@ -92,16 +93,33 @@ class SecurityConfig {
                         writeError(objectMapper, response, HttpServletResponse.SC_FORBIDDEN, "접근 권한이 없습니다.")
                     }
             }.authorizeHttpRequests { requests ->
+                if (swaggerEnabled) {
+                    requests
+                        .requestMatchers(HttpMethod.GET, *SWAGGER_PATHS)
+                        .permitAll()
+                }
                 requests
+                    .requestMatchers(*SWAGGER_PATHS)
+                    .denyAll()
                     .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/image/{id}")
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/image")
                     .hasAuthority(ADMIN_AUTHORITY)
+                    .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/admin-access")
+                    .authenticated()
+                    .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/program-sessions")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}", "/internal/expo/{expo_id}/standard-programs/{program_id}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/internal/expo/{expo_id}/training-programs/batch")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.GET, "/internal/forms/by-id/{formId}/usage")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.PUT, "/internal/forms/by-id/{formId}/changes/{changeId}")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.DELETE, "/internal/forms/by-id/{formId}/changes/{changeId}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.PUT, "/internal/expo/{expo_id}/standard-registrations/{participant_id}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
@@ -193,6 +211,8 @@ class SecurityConfig {
     }
 
     private companion object {
+        val SWAGGER_PATHS =
+            arrayOf("/expo/v3/api-docs", "/expo/v3/api-docs/**", "/expo/swagger-ui.html", "/expo/swagger-ui/**")
         const val ADMIN_AUTHORITY = "ROLE_ADMIN"
         val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
     }

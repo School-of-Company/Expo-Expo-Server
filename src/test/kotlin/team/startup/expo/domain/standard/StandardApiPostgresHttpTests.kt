@@ -167,8 +167,9 @@ class StandardApiPostgresHttpTests {
         val lookup = calls.single { it.path == "/internal/standard-participants/resolve" }
         mapper.readTree(lookup.body).get("expoId").asString() shouldBe expoId
         mapper.readTree(lookup.body).get("phoneNumber").asString() shouldBe "01012345678"
-        lookup.token shouldBe "test-internal-token"
+        lookup.token shouldBe "test-user-token"
         val saved = calls.single { it.path == "/internal/standard-program-applications" }
+        saved.token shouldBe "test-application-token"
         val body = mapper.readTree(saved.body)
         body.get("participant").get("id").asLong() shouldBe 42L
         body.get("programs").size() shouldBe 1
@@ -309,6 +310,8 @@ class StandardApiPostgresHttpTests {
             registry.add("expo.standard.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.standard.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.standard.internal-token") { "test-internal-token" }
+            registry.add("USER_INTERNAL_TOKEN") { "test-user-token" }
+            registry.add("APPLICATION_INTERNAL_TOKEN") { "test-application-token" }
             registry.add("expo.attention.service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.attention.internal-token") { "test-attention-token" }
         }

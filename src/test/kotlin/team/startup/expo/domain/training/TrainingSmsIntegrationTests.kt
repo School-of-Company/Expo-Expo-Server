@@ -634,6 +634,7 @@ class TrainingSmsIntegrationTests {
                 "http://127.0.0.1:${upstream.address.port}",
                 "",
                 "test-training-token",
+                "test-application-token",
                 "",
                 mapper,
                 team.startup.expo.global.attendance

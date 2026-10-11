@@ -123,6 +123,20 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `기본 문서 경로는 박람회 ID로 처리하거나 변경하지 않는다`() {
+        val expoId = createExpo()
+        val before = databaseSnapshot(expoId)
+        listOf("/expo/v3/api-docs", "/expo/swagger-ui.html", "/expo/swagger-ui/index.html").forEach { path ->
+            request(path, "GET", authority = null).statusCode() shouldBe 401
+            listOf("GET", "PATCH", "DELETE").forEach { method ->
+                request(path, method).statusCode() shouldBe 403
+            }
+        }
+        request("/expo/$expoId", "GET").statusCode() shouldBe 200
+        databaseSnapshot(expoId) shouldBe before
+    }
+
+    @Test
     fun `v1 검증 오류는 message 안에 기존 DTO 이름과 필드 오류를 담는다`() {
         val payload = VALID_REQUEST_JSON.replace("\"설명\"", "\"${"가".repeat(1001)}\"")
         val response = postExpo(payload, "ROLE_ADMIN")
@@ -397,7 +411,6 @@ class ExpoApiPostgresHttpTests {
         val calls = mutableListOf<String>()
 
         withDeletionServer { exchange ->
-            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-delete-token"
             calls += "${exchange.requestMethod} ${exchange.requestURI.path}"
             if (exchange.requestURI.path.endsWith("/purge")) {
                 objectMapper.readTree(exchange.requestBody.readAllBytes()) shouldBe
@@ -581,6 +594,9 @@ class ExpoApiPostgresHttpTests {
     private fun withDeletionServer(respond: (com.sun.net.httpserver.HttpExchange) -> Int): AutoCloseable {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
+            val target = exchange.requestURI.path.split('/')[1]
+            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe
+                if (target == "attendance") "test-delete-token" else "test-$target-token"
             val status = respond(exchange)
             exchange.sendResponseHeaders(status, -1)
             exchange.close()
@@ -590,14 +606,16 @@ class ExpoApiPostgresHttpTests {
         ReflectionTestUtils.setField(deletionClient, "applicationUrl", "$url/application")
         ReflectionTestUtils.setField(deletionClient, "formUrl", "$url/form")
         ReflectionTestUtils.setField(deletionClient, "userUrl", "$url/user")
-        ReflectionTestUtils.setField(deletionClient, "internalToken", "test-delete-token")
+        ReflectionTestUtils.setField(deletionClient, "applicationToken", "test-application-token")
+        ReflectionTestUtils.setField(deletionClient, "formToken", "test-form-token")
+        ReflectionTestUtils.setField(deletionClient, "userToken", "test-user-token")
         ReflectionTestUtils.setField(attendances, "serviceUrl", "$url/attendance")
         ReflectionTestUtils.setField(attendances, "internalToken", "test-delete-token")
         return AutoCloseable {
             server.stop(0)
             ReflectionTestUtils.setField(attendances, "serviceUrl", "http://127.0.0.1:${applicationServer.address.port}")
             ReflectionTestUtils.setField(attendances, "internalToken", "test-program-token")
-            listOf("applicationUrl", "formUrl", "userUrl", "internalToken").forEach {
+            listOf("applicationUrl", "formUrl", "userUrl", "applicationToken", "formToken", "userToken").forEach {
                 ReflectionTestUtils.setField(deletionClient, it, "")
             }
         }

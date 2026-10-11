@@ -70,10 +70,15 @@ class ProgramPoliciesPostgresHttpTests {
         supplierMapper = mapper
         lostResponse = false
         beforeReply = null
+        beforeFormReply = null
         wrongFormExpo = false
+        unrestrictedForm = false
+        wrongFormPurpose = false
+        lateFormStart = false
         malformedForm = false
         shortFormPeriod = false
         calls.clear()
+        jdbc.execute("TRUNCATE tb_program_form_change")
         jdbc.execute("TRUNCATE tb_expo_image, tb_expo RESTART IDENTITY CASCADE")
         jdbc.execute(
             "CREATE TABLE IF NOT EXISTS test_admission (program_type TEXT NOT NULL, program_id BIGINT NOT NULL, confirmed INT NOT NULL DEFAULT 0, waiting INT NOT NULL DEFAULT 0, capacity INT NOT NULL, next_revision BIGINT NOT NULL DEFAULT 1, blocked BOOLEAN NOT NULL DEFAULT false, history BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(program_type,program_id))",
@@ -125,6 +130,37 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `nullable form participant type allows standard and training create and policy update`() {
+        unrestrictedForm = true
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", body(type)).statusCode() shouldBe 201
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            request("/$type/1", "PATCH", body(type, policy = policy(form = form, capacity = 3), id = 1, revision = 1)).statusCode() shouldBe
+                204
+            list(type)[0].get("revision").asLong() shouldBe 2L
+            calls.count { it.first == "/internal/forms/by-id/$form" } shouldBe 3
+        }
+        calls.any { it.first.startsWith("/internal/program-forms/") } shouldBe false
+    }
+
+    @Test
+    fun `unrestricted forms still enforce expo purpose and both period boundaries without rows`() {
+        unrestrictedForm = true
+        wrongFormExpo = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        wrongFormExpo = false
+        wrongFormPurpose = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        wrongFormPurpose = false
+        lateFormStart = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        lateFormStart = false
+        shortFormPeriod = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        list("standard").size() shouldBe 0
+    }
+
+    @Test
     fun `all create paths validate capacity occupation time form and group scope without partial rows`() {
         create("standard")
         request("/training/$OTHER", "POST", body("training", policy = null)).statusCode() shouldBe 201
@@ -150,6 +186,7 @@ class ProgramPoliciesPostgresHttpTests {
         request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
         wrongFormExpo = false
         request("/standard/$EXPO", "POST", body("standard", policy = policy(form = TRAINING_FORM))).statusCode() shouldBe 400
+        request("/training/$EXPO", "POST", body("training", policy = policy(form = STANDARD_FORM))).statusCode() shouldBe 400
         request("/standard/$EXPO", "POST", body("standard", policy = policy(form = UUID.randomUUID().toString()))).statusCode() shouldBe 404
         malformedForm = true
         request("/training/list/$EXPO", "POST", "[${body("training")}]").statusCode() shouldBe 502
@@ -571,6 +608,266 @@ class ProgramPoliciesPostgresHttpTests {
 
     private fun pending(): Long = jdbc.queryForObject("SELECT count(*) FROM tb_program_change", Long::class.java)!!
 
+    private fun formChange(
+        form: String = STANDARD_FORM,
+        id: String = UUID.randomUUID().toString(),
+    ): String = "/internal/forms/by-id/$form/changes/$id"
+
+    private fun internal(
+        path: String,
+        method: String = "GET",
+        body: String = "",
+    ): HttpResponse<String> = request(path, method, body, role = null, token = "expo-test-token")
+
+    private fun shrink(
+        start: String = "2026-10-11T00:00:00Z",
+        end: String = "2026-10-12T00:00:00Z",
+    ): String = """{"kind":"SHRINK","startDate":"$start","endDate":"$end"}"""
+
+    @Test
+    fun `form usage is internally authenticated and unused forms return null bounds`() {
+        val path = "/internal/forms/by-id/$STANDARD_FORM/usage"
+        request(path, role = null).statusCode() shouldBe 401
+        request(path, role = null, token = "wrong").statusCode() shouldBe 401
+        request(path).statusCode() shouldBe 401
+        val response = internal(path)
+        response.statusCode() shouldBe 200
+        val usage = mapper.readTree(response.body())
+        usage.get("formId").asString() shouldBe STANDARD_FORM
+        usage.get("referenced").asBoolean() shouldBe false
+        usage.get("applicationStartedAt").isNull shouldBe true
+        usage.get("applicationEndedAt").isNull shouldBe true
+        val change = formChange()
+        request(change, "PUT", """{"kind":"DELETE"}""", role = null).statusCode() shouldBe 401
+        request(change, "DELETE", role = null).statusCode() shouldBe 401
+        internal("/internal/forms/by-id/not-a-uuid/usage").statusCode() shouldBe 400
+    }
+
+    @Test
+    fun `usage combines all standard and training sessions including closed and elapsed periods`() {
+        create("standard")
+        create("standard")
+        create("training")
+        val expanded =
+            policy(group = list("training")[0].get("groupId").asString())
+                .replace(
+                    "2026-10-11T00:00:00Z",
+                    "2026-10-02T00:00:00Z",
+                ).replace("2026-10-12T00:00:00Z", "2026-10-20T00:00:00Z")
+        jdbc.update("UPDATE tb_training_program SET policy_json=? WHERE id=1", expanded)
+        val closed = policy(group = list("standard")[1].get("groupId").asString()).replace("\"closed\":false", "\"closed\":true")
+        jdbc.update("UPDATE tb_standard_program SET policy_json=? WHERE id=2", closed)
+        val usage = mapper.readTree(internal("/internal/forms/by-id/$STANDARD_FORM/usage").body())
+        usage.get("referenced").asBoolean() shouldBe true
+        usage.get("applicationStartedAt").asString() shouldBe "2026-10-02T00:00:00Z"
+        usage.get("applicationEndedAt").asString() shouldBe "2026-10-20T00:00:00Z"
+        internal(formChange(), "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        internal(formChange(), "PUT", shrink()).statusCode() shouldBe 409
+        internal(formChange(), "PUT", shrink("2026-10-02T00:00:00Z", "2026-10-20T00:00:00Z")).statusCode() shouldBe 200
+    }
+
+    @Test
+    fun `shrink accepts inclusive bounds and rejects either cut without creating receipts`() {
+        create("standard")
+        create("training")
+        internal(formChange(), "PUT", shrink(start = "2026-10-11T00:00:01Z")).statusCode() shouldBe 409
+        internal(formChange(), "PUT", shrink(end = "2026-10-11T23:59:59Z")).statusCode() shouldBe 409
+        internal(formChange(), "PUT", """{"kind":"SHRINK"}""").statusCode() shouldBe 400
+        internal(formChange(), "PUT", shrink("2026-10-12T00:00:00Z", "2026-10-11T00:00:00Z")).statusCode() shouldBe 400
+        internal(formChange(), "PUT", """{"kind":"DELETE","startDate":"2026-10-11T00:00:00Z"}""").statusCode() shouldBe 400
+        jdbc.queryForObject("SELECT count(*) FROM tb_program_form_change", Long::class.java) shouldBe 0L
+        val response = internal(formChange(), "PUT", shrink())
+        response.statusCode() shouldBe 200
+        mapper.readTree(response.body()).get("referenced").asBoolean() shouldBe true
+        internal(formChange(TRAINING_FORM), "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+    }
+
+    @Test
+    fun `change keys replay exactly and release tombstones prevent delayed resurrection`() {
+        val path = formChange()
+        val first = internal(path, "PUT", """{"kind":"DELETE"}""")
+        first.statusCode() shouldBe 200
+        internal(path, "PUT", """{"kind":"DELETE"}""").body() shouldBe first.body()
+        internal(path, "PUT", shrink()).statusCode() shouldBe 409
+        internal(formChange(), "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        internal(formChange(), "DELETE").statusCode() shouldBe 204
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 409
+        internal(path, "DELETE").statusCode() shouldBe 204
+        internal(path, "DELETE").statusCode() shouldBe 204
+        internal(path, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        val cancelled = formChange()
+        internal(cancelled, "DELETE").statusCode() shouldBe 204
+        internal(cancelled, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        create("standard")
+    }
+
+    @Test
+    fun `expired reservations cannot be renewed and keep connections blocked until release`() {
+        val id = UUID.randomUUID().toString()
+        val path = formChange(id = id)
+        val response = internal(path, "PUT", """{"kind":"DELETE"}""")
+        response.statusCode() shouldBe 200
+        val expires = java.time.Instant.parse(mapper.readTree(response.body()).get("expiresAt").asString())
+        (
+            java.time.Duration
+                .between(java.time.Instant.now(), expires)
+                .seconds in 290..300
+        ) shouldBe true
+        jdbc.update(
+            "UPDATE tb_program_form_change SET expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE change_id=?",
+            UUID.fromString(id),
+        )
+        internal(path, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        internal(formChange(), "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 409
+        internal(path, "DELETE").statusCode() shouldBe 204
+        create("standard")
+    }
+
+    @Test
+    fun `reservations block individual list nested create and nested update connections atomically`() {
+        val standard = formChange()
+        val training = formChange(TRAINING_FORM)
+        internal(standard, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 200
+        internal(training, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 200
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", body(type)).statusCode() shouldBe 409
+            request("/$type/list/$EXPO", "POST", "[${body(type, policy = null)},${body(type)}]").statusCode() shouldBe 409
+            list(type).size() shouldBe 0
+        }
+        request("/expo/$EXPO", "PATCH", expoBody(body("standard"), body("training"))).statusCode() shouldBe 409
+        jdbc.update(
+            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('form-image','local','test','/image/form-test','image/png','1',CURRENT_TIMESTAMP,'PENDING')",
+        )
+        val nested =
+            expoBody(body("standard"), body("training"))
+                .replace("updateStandardProRequestDto", "addStandardProRequestDto")
+                .replace("updateTrainingProRequestDto", "addTrainingProRequestDto")
+                .replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/form-test\"")
+        request("/expo", "POST", nested).statusCode() shouldBe 409
+        jdbc.queryForObject("SELECT count(*) FROM tb_expo", Long::class.java) shouldBe 2L
+        internal(standard, "DELETE").statusCode() shouldBe 204
+        internal(training, "DELETE").statusCode() shouldBe 204
+        create("standard")
+        create("training")
+        internal(formChange(), "PUT", shrink()).statusCode() shouldBe 200
+        internal(formChange(TRAINING_FORM), "PUT", shrink()).statusCode() shouldBe 200
+        update(1, policy(capacity = 3)).statusCode() shouldBe 409
+        request("/training/1", "PATCH", body("training", policy(form = TRAINING_FORM, capacity = 3), 1, 1)).statusCode() shouldBe 409
+        request(
+            "/expo/$EXPO",
+            "PATCH",
+            expoBody(body("standard", policy(capacity = 3), 1, 1), body("training", policy(form = TRAINING_FORM), 1, 1)),
+        ).statusCode() shouldBe
+            409
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        list("training")[0].get("revision").asLong() shouldBe 1L
+    }
+
+    @Test
+    fun `pending revisions contribute usage and delayed approval cannot bypass a reservation`() {
+        create("standard")
+        seed("STANDARD", 1)
+        lostResponse = true
+        val expanded = policy(capacity = 3).replace("2026-10-11T00:00:00Z", "2026-10-03T00:00:00Z")
+        update(1, expanded).statusCode() shouldBe 502
+        val usage = mapper.readTree(internal("/internal/forms/by-id/$STANDARD_FORM/usage").body())
+        usage.get("applicationStartedAt").asString() shouldBe "2026-10-03T00:00:00Z"
+        internal(formChange(), "PUT", shrink()).statusCode() shouldBe 409
+        val path = formChange()
+        internal(path, "PUT", shrink("2026-10-03T00:00:00Z")).statusCode() shouldBe 200
+        lostResponse = false
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 409
+        pending() shouldBe 1L
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        internal(path, "DELETE").statusCode() shouldBe 204
+        shortFormPeriod = true
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 400
+        pending() shouldBe 1L
+        shortFormPeriod = false
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("standard")[0].get("revision").asLong() shouldBe 2L
+    }
+
+    @Test
+    fun `reservation made while application approval is delayed blocks final apply`() {
+        create("training")
+        seed("TRAINING", 1)
+        val path = formChange(TRAINING_FORM)
+        beforeReply = { internal(path, "PUT", shrink()).statusCode() shouldBe 200 }
+        request("/training/1", "PATCH", body("training", policy(form = TRAINING_FORM, capacity = 3), 1, 1)).statusCode() shouldBe 409
+        pending() shouldBe 1L
+        list("training")[0].get("revision").asLong() shouldBe 1L
+        beforeReply = null
+        internal(path, "DELETE").statusCode() shouldBe 204
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("training")[0].get("revision").asLong() shouldBe 2L
+    }
+
+    @Test
+    fun `reservation waits in Postgres until a validated connection commits`() {
+        val formLookup = CountDownLatch(1)
+        val reply = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        beforeFormReply = {
+            formLookup.countDown()
+            reply.await(5, TimeUnit.SECONDS)
+        }
+        try {
+            val create = CompletableFuture.supplyAsync({ request("/standard/$EXPO", "POST", body("standard")).statusCode() }, executor)
+            formLookup.await(5, TimeUnit.SECONDS) shouldBe true
+            val reserve = CompletableFuture.supplyAsync({ internal(formChange(), "PUT", """{"kind":"DELETE"}""").statusCode() }, executor)
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            var waiting = false
+            while (!waiting && System.nanoTime() < deadline) {
+                waiting =
+                    jdbc.queryForObject(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'SELECT id FROM tb_program_form_guard%')",
+                        Boolean::class.java,
+                    )!!
+                if (!waiting) Thread.sleep(10)
+            }
+            waiting shouldBe true
+            reserve.isDone shouldBe false
+            reply.countDown()
+            create.get(10, TimeUnit.SECONDS) shouldBe 201
+            reserve.get(10, TimeUnit.SECONDS) shouldBe 409
+        } finally {
+            reply.countDown()
+            beforeFormReply = null
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `Postgres serializes reservation and new connection across separate transactions`() {
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            repeat(6) {
+                jdbc.execute("TRUNCATE tb_program_form_change, tb_standard_program RESTART IDENTITY CASCADE")
+                val start = CountDownLatch(1)
+                val path = formChange()
+                val create =
+                    CompletableFuture.supplyAsync({
+                        start.await()
+                        request("/standard/$EXPO", "POST", body("standard")).statusCode()
+                    }, executor)
+                val reserve =
+                    CompletableFuture.supplyAsync({
+                        start.await()
+                        internal(path, "PUT", """{"kind":"DELETE"}""").statusCode()
+                    }, executor)
+                start.countDown()
+                val created = create.get(15, TimeUnit.SECONDS)
+                val reserved = reserve.get(15, TimeUnit.SECONDS)
+                ((created == 201 && reserved == 409) || (created == 409 && reserved == 200)) shouldBe true
+                jdbc.queryForObject("SELECT count(*) FROM tb_standard_program", Long::class.java) shouldBe if (created == 201) 1L else 0L
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
     private fun seed(
         type: String,
         id: Long,
@@ -686,11 +983,19 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var wrongFormExpo = false
 
+        @Volatile private var unrestrictedForm = false
+
+        @Volatile private var wrongFormPurpose = false
+
+        @Volatile private var lateFormStart = false
+
         @Volatile private var malformedForm = false
 
         @Volatile private var shortFormPeriod = false
 
         @Volatile private var beforeReply: (() -> Unit)? = null
+
+        @Volatile private var beforeFormReply: (() -> Unit)? = null
         private val serverExecutor = Executors.newFixedThreadPool(4)
         private val server =
             HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
@@ -699,17 +1004,21 @@ class ProgramPoliciesPostgresHttpTests {
                         val path = exchange.requestURI.path
                         val body = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8)
                         calls += path to body
-                        if (path.startsWith("/internal/program-forms/")) {
+                        if (path.startsWith("/internal/forms/by-id/")) {
                             val id = path.substringAfterLast('/')
                             val type = if (id == TRAINING_FORM) "TRAINEE" else "STANDARD"
                             val expo = if (wrongFormExpo) OTHER else EXPO
+                            val purpose = if (wrongFormPurpose) "REGISTRATION" else "PROGRAM"
+                            val participantType = if (unrestrictedForm) "null" else "\"$type\""
+                            val startDate = if (lateFormStart) "2026-10-11T01:00:00Z" else "2026-10-01T00:00:00Z"
                             val response =
                                 if (malformedForm) {
                                     "{}"
                                 } else {
-                                    """{"id":"$id","expoId":"$expo","purpose":"PROGRAM","participantType":"$type","startDate":"2026-10-01T00:00:00Z","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
+                                    """{"id":"$id","expoId":"$expo","purpose":"$purpose","version":1,"title":"form","informationText":"","dynamicForm":[],"participantType":$participantType,"startDate":"$startDate","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
                                 }
                             val bytes = response.toByteArray()
+                            beforeFormReply?.invoke()
                             exchange.sendResponseHeaders(if (id in listOf(STANDARD_FORM, TRAINING_FORM)) 200 else 404, bytes.size.toLong())
                             exchange.responseBody.write(bytes)
                         } else if (path.contains("/program-changes/")) {
