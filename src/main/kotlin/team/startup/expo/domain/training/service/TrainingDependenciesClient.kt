@@ -43,7 +43,8 @@ class TrainingDependenciesClient(
             val items = mapper.readTree(response.body()).path("items")
             require(items.isArray && items.size() == 1)
             val id = items[0].path("traineeId")
-            val phone = items[0].path("phoneNumber")
+            val notificationPhone = items[0].path("notificationPhoneNumber")
+            val phone = if (notificationPhone.isMissingNode || notificationPhone.isNull) items[0].path("phoneNumber") else notificationPhone
             require(id.isIntegralNumber && id.canConvertToLong() && id.asLong() == traineeId && phone.isString)
             val stored = phone.asString()
             require(stored.matches(Regex("[0-9 -]+")))

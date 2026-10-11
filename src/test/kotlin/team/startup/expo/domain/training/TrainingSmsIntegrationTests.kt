@@ -168,6 +168,92 @@ class TrainingSmsIntegrationTests {
     }
 
     @Test
+    fun `수신번호 우선 선택과 legacy fallback은 HTTP 조회와 CUSTOM 발행에 동일하게 적용된다`() {
+        listOf(
+            "\"notificationPhoneNumber\":\"010-2222 3333\",\"phoneNumber\":\"01011112222\"" to "01022223333",
+            "\"notificationPhoneNumber\":\"010-2222 3333\",\"phoneNumber\":null" to "01022223333",
+            "\"phoneNumber\":\"010-1111 2222\"" to "01011112222",
+            "\"notificationPhoneNumber\":null,\"phoneNumber\":\"010-1111 2222\"" to "01011112222",
+        ).forEachIndexed { index, (fields, expected) ->
+            recipientBody = """{"items":[{"traineeId":42,$fields}]}"""
+            dependencies.traineePhoneNumber(EXPO, 42) shouldBe expected
+            consumer().use { consumer ->
+                applyReplace(if (index % 2 == 0) "[1]" else "[2]").statusCode() shouldBe 201
+                relay.execute()
+                mapper.readTree(nextRecord(consumer).value()).path("phoneNumbers")[0].asString() shouldBe expected
+                state() shouldBe "SENT"
+            }
+        }
+    }
+
+    @Test
+    fun `선택번호 무효는 개인번호로 대체하지 않고 Kafka 미발행과 기존 재시도 만료정책을 유지한다`(output: CapturedOutput) {
+        consumer().use { consumer ->
+            applyReplace("[1]").statusCode() shouldBe 201
+            val id = eventId()
+            val fields =
+                listOf("\"\"", "\"   \"", "\"invalid-sensitive-number\"", "\"0212345678\"", "123", "true", "[]", "{}")
+                    .map { "\"notificationPhoneNumber\":$it,\"phoneNumber\":\"01011112222\"" } +
+                    listOf("", "\"notificationPhoneNumber\":null,\"phoneNumber\":null", "\"phoneNumber\":\"\"")
+            fields.forEachIndexed { index, value ->
+                recipientBody = """{"items":[{"traineeId":42${if (value.isEmpty()) "" else ",$value"}}]}"""
+                val failure = assertThrows(ExpectedException::class.java) { dependencies.traineePhoneNumber(EXPO, 42) }
+                failure.status shouldBe HttpStatus.BAD_GATEWAY
+                failure.message shouldBe "연수 문자 수신자를 확인할 수 없습니다."
+                jdbc.update("UPDATE tb_training_sms_outbox SET next_attempt_at = CURRENT_TIMESTAMP")
+                relay.execute()
+                state() shouldBe "READY"
+                eventId() shouldBe id
+                jdbc.queryForObject("SELECT attempts FROM tb_training_sms_outbox", Int::class.java) shouldBe index + 1
+                jdbc.queryForObject("SELECT payload FROM tb_training_sms_outbox", String::class.java) shouldBe null
+                jdbc.queryForObject("SELECT first_publish_attempt_at IS NULL FROM tb_training_sms_outbox", Boolean::class.java) shouldBe
+                    true
+                jdbc.queryForObject(
+                    "SELECT next_attempt_at = updated_at + INTERVAL '30 seconds' FROM tb_training_sms_outbox",
+                    Boolean::class.java,
+                ) shouldBe
+                    true
+            }
+            consumer.poll(Duration.ofMillis(500)).isEmpty shouldBe true
+            jdbc.update("UPDATE tb_training_sms_outbox SET created_at = CURRENT_TIMESTAMP - INTERVAL '23 hours'")
+            recovery.execute()
+            relay.execute()
+            state() shouldBe "HELD"
+            jdbc.queryForObject("SELECT hold_reason FROM tb_training_sms_outbox", String::class.java) shouldBe "SMS_EXPIRED"
+            jdbc.queryForObject("SELECT application_state FROM tb_training_sms_outbox", String::class.java) shouldBe "SUCCEEDED"
+            jdbc.queryForObject("SELECT notification_text FROM tb_training_sms_outbox", String::class.java) shouldBe null
+            consumer.poll(Duration.ofMillis(500)).isEmpty shouldBe true
+            applicationCalls.get() shouldBe 1
+            output.all.contains("invalid-sensitive-number") shouldBe false
+            output.all.contains("01011112222") shouldBe false
+        }
+    }
+
+    @Test
+    fun `같은 대표번호의 서로 다른 연수자 작업은 각각 다른 이벤트를 발행한다`() {
+        val expo = expos.findById(EXPO).orElseThrow()
+        consumer().use { consumer ->
+            val records =
+                listOf(42L, 43L).mapIndexed { index, traineeId ->
+                    recipientBody = """{"items":[{"traineeId":$traineeId,"notificationPhoneNumber":"01022223333","phoneNumber":null}]}"""
+                    applicationSms.execute(expo, traineeId, programs.findAllByIdIn(listOf(index + 1L)), TrainingOperationType.ADD)
+                    state() shouldBe "READY"
+                    relay.execute()
+                    nextRecord(consumer)
+                }
+            records.map { it.key() }.distinct().size shouldBe 2
+            records.forEach {
+                val event = mapper.readTree(it.value())
+                event.path("eventId").asString() shouldBe it.key()
+                event.path("phoneNumbers")[0].asString() shouldBe "01022223333"
+            }
+            jdbc.queryForList("SELECT trainee_id FROM tb_training_sms_outbox ORDER BY sequence", Long::class.java) shouldBe listOf(42L, 43L)
+            jdbc.queryForObject("SELECT count(*) FROM tb_training_sms_outbox WHERE state = 'SENT'", Long::class.java) shouldBe 2L
+            consumer.poll(Duration.ofMillis(500)).isEmpty shouldBe true
+        }
+    }
+
+    @Test
     fun `등록 교체 성공은 저장된 수신번호로 CUSTOM을 발행하고 동일 변경 재시도는 발행하지 않는다`() {
         consumer().use { consumer ->
             applyReplace("[2,1]").also {
@@ -409,12 +495,15 @@ class TrainingSmsIntegrationTests {
                 jdbc.execute("DROP FUNCTION fail_sms_sent()")
             }
             val first = nextRecord(consumer)
+            recipientBody = """{"items":[{"traineeId":42,"notificationPhoneNumber":"01022223333","phoneNumber":null}]}"""
+            val lookups = recipientCalls.get()
             jdbc.update("UPDATE tb_training_sms_outbox SET next_attempt_at = CURRENT_TIMESTAMP")
             relay.execute()
             val duplicate = nextRecord(consumer)
             first.key() shouldBe id
             duplicate.key() shouldBe id
             duplicate.value() shouldBe first.value()
+            recipientCalls.get() shouldBe lookups
             state() shouldBe "SENT"
         }
     }
@@ -961,7 +1050,7 @@ class TrainingSmsIntegrationTests {
                     }
                     if (path.contains("/trainees/details")) {
                         recipientCalls.incrementAndGet()
-                        check(exchange.requestURI.rawQuery == "cursor=41&size=1")
+                        check(exchange.requestURI.rawQuery in setOf("cursor=41&size=1", "cursor=42&size=1"))
                         check(exchange.requestHeaders.getFirst("X-Internal-Token") == "test-training-token")
                     }
                     val status =
