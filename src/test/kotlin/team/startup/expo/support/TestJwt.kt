@@ -19,10 +19,11 @@ object TestJwt {
         role: String,
         ttlSeconds: Long = 900,
         issuedAtOffsetSeconds: Long = 0,
+        subject: String = "1",
     ): String {
         val now = Instant.now().epochSecond + issuedAtOffsetSeconds
         val header = encode("""{"alg":"RS256","typ":"JWT"}""")
-        val payload = encode("""{"sub":"1","role":"$role","iat":$now,"exp":${now + ttlSeconds}}""")
+        val payload = encode("""{"sub":"$subject","role":"$role","iat":$now,"exp":${now + ttlSeconds}}""")
         val content = "$header.$payload"
         val signature =
             Signature

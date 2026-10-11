@@ -49,14 +49,14 @@ class SecurityConfig {
                         val issuedAt = jwt.issuedAt
                         val expiresAt = jwt.expiresAt
                         if (
-                            jwt.subject?.toLongOrNull() != null &&
+                            jwt.subject?.toLongOrNull()?.let { it > 0 } == true &&
                             issuedAt != null &&
                             expiresAt != null &&
                             Duration.between(issuedAt, expiresAt) > Duration.ZERO &&
                             Duration.between(issuedAt, expiresAt) <= Duration.ofMinutes(15) &&
                             !issuedAt.isAfter(Instant.now().plusSeconds(30)) &&
                             expiresAt.isAfter(Instant.now()) &&
-                            jwt.getClaim<Any>("role") is String
+                            (jwt.getClaim<Any>("role") as? String)?.isNotBlank() == true
                         ) {
                             OAuth2TokenValidatorResult.success()
                         } else {
@@ -99,6 +99,10 @@ class SecurityConfig {
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/image")
                     .hasAuthority(ADMIN_AUTHORITY)
+                    .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/admin-access")
+                    .authenticated()
+                    .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/program-sessions")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}", "/internal/expo/{expo_id}/standard-programs/{program_id}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/internal/expo/{expo_id}/training-programs/batch")
