@@ -1,12 +1,22 @@
 package team.startup.expo.domain.expo.presentation.dto.response
 
+import io.swagger.v3.oas.annotations.media.Schema
+
 data class ExpoDetailResponse(
+    @field:Schema(description = "제목", example = "예시 박람회")
     val title: String,
+    @field:Schema(description = "설명", example = "가상 행사 설명")
     val description: String,
+    @field:Schema(description = "박람회 시작일", example = "2030-01-01")
     val startedDay: String,
+    @field:Schema(description = "박람회 종료일", example = "2030-01-02")
     val finishedDay: String,
+    @field:Schema(description = "행사 장소", example = "가상 전시장")
     val location: String,
+    @field:Schema(description = "업로드한 대표 이미지 URL", example = "https://example.invalid/image/sample")
     val coverImage: String?,
+    @field:Schema(description = "경도 문자열", example = "127.0000")
     val x: String,
+    @field:Schema(description = "위도 문자열", example = "37.0000")
     val y: String,
 )

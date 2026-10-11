@@ -1,6 +1,7 @@
 package team.startup.expo.domain.standard.presentation
 
 import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.responses.ApiResponse
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -24,6 +25,7 @@ import team.startup.expo.domain.standard.service.DeleteStandardProgramService
 import team.startup.expo.domain.standard.service.GetStandardProgramListService
 import team.startup.expo.domain.standard.service.GetStandardProgramParticipantsService
 import team.startup.expo.domain.standard.service.UpdateStandardProgramService
+import team.startup.expo.global.swagger.ApiError
 
 @RestController
 @RequestMapping("/standard")
@@ -37,6 +39,13 @@ class StandardController(
     private val deleteStandardProgramService: DeleteStandardProgramService,
 ) {
     @PostMapping("/{expo_id}")
+    @Operation(summary = "일반 프로그램 생성")
+    @ApiResponse(responseCode = "201", description = "처리 성공")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiError(status = 409, description = "삭제·변경 진행 상태, 버전, 신청 이력, 정원 또는 이미지 연결이 충돌합니다.")
+    @ApiError(status = 502, description = "연동 서비스 응답 상태 또는 본문이 올바르지 않습니다.")
+    @ApiError(status = 503, description = "연동 설정이 없거나 서비스·이미지 저장소에 연결할 수 없습니다.")
     fun create(
         @PathVariable("expo_id") expoId: String,
         @Valid @RequestBody request: AddStandardProgramRequest,
@@ -46,6 +55,13 @@ class StandardController(
     }
 
     @PostMapping("/list/{expo_id}")
+    @Operation(summary = "일반 프로그램 일괄 생성")
+    @ApiResponse(responseCode = "201", description = "처리 성공")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiError(status = 409, description = "삭제·변경 진행 상태, 버전, 신청 이력, 정원 또는 이미지 연결이 충돌합니다.")
+    @ApiError(status = 502, description = "연동 서비스 응답 상태 또는 본문이 올바르지 않습니다.")
+    @ApiError(status = 503, description = "연동 설정이 없거나 서비스·이미지 저장소에 연결할 수 없습니다.")
     fun createAll(
         @PathVariable("expo_id") expoId: String,
         @RequestBody requests: List<@Valid AddStandardProgramRequest>,
@@ -55,6 +71,13 @@ class StandardController(
     }
 
     @PatchMapping("/{standardPro_id}")
+    @Operation(summary = "일반 프로그램 수정")
+    @ApiResponse(responseCode = "204", description = "처리 완료 (본문 없음)")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiError(status = 409, description = "삭제·변경 진행 상태, 버전, 신청 이력, 정원 또는 이미지 연결이 충돌합니다.")
+    @ApiError(status = 502, description = "연동 서비스 응답 상태 또는 본문이 올바르지 않습니다.")
+    @ApiError(status = 503, description = "연동 설정이 없거나 서비스·이미지 저장소에 연결할 수 없습니다.")
     fun update(
         @PathVariable("standardPro_id") programId: Long,
         @Valid @RequestBody request: UpdateStandardProgramRequest,
@@ -65,11 +88,20 @@ class StandardController(
 
     @Operation(summary = "일반 프로그램 목록 조회")
     @GetMapping("/program/{expo_id}")
+    @ApiResponse(responseCode = "200", description = "처리 성공")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
     fun getProgramList(
         @PathVariable("expo_id") expoId: String,
     ): ResponseEntity<List<StandardProgramResponse>> = ResponseEntity.ok(getStandardProgramListService.execute(expoId))
 
     @DeleteMapping("/{standardPro_id}")
+    @Operation(summary = "일반 프로그램 삭제")
+    @ApiResponse(responseCode = "204", description = "처리 완료 (본문 없음)")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiError(status = 409, description = "삭제·변경 진행 상태, 버전, 신청 이력, 정원 또는 이미지 연결이 충돌합니다.")
+    @ApiError(status = 502, description = "연동 서비스 응답 상태 또는 본문이 올바르지 않습니다.")
+    @ApiError(status = 503, description = "연동 설정이 없거나 서비스·이미지 저장소에 연결할 수 없습니다.")
     fun delete(
         @PathVariable("standardPro_id") programId: Long,
     ): ResponseEntity<Void> {
@@ -78,12 +110,25 @@ class StandardController(
     }
 
     @GetMapping("/{standardPro_id}")
+    @Operation(summary = "일반 프로그램 참가자·출석 조회")
+    @ApiResponse(responseCode = "200", description = "처리 성공")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiError(status = 502, description = "연동 서비스 응답 상태 또는 본문이 올바르지 않습니다.")
+    @ApiError(status = 503, description = "연동 설정이 없거나 서비스·이미지 저장소에 연결할 수 없습니다.")
     fun participants(
         @PathVariable("standardPro_id") programId: Long,
     ): ResponseEntity<List<StandardProgramParticipantResponse>> =
         ResponseEntity.ok(getStandardProgramParticipantsService.execute(programId))
 
     @PostMapping("/application/{expo_id}")
+    @Operation(summary = "일반 프로그램 신청")
+    @ApiResponse(responseCode = "201", description = "처리 성공")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiError(status = 409, description = "삭제·변경 진행 상태, 버전, 신청 이력, 정원 또는 이미지 연결이 충돌합니다.")
+    @ApiError(status = 502, description = "연동 서비스 응답 상태 또는 본문이 올바르지 않습니다.")
+    @ApiError(status = 503, description = "연동 설정이 없거나 서비스·이미지 저장소에 연결할 수 없습니다.")
     fun apply(
         @PathVariable("expo_id") expoId: String,
         @Valid @RequestBody request: ApplyStandardProgramsRequest,

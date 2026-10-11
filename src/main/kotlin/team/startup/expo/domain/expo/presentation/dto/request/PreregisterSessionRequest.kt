@@ -22,20 +22,27 @@ import java.time.temporal.ChronoUnit
 data class PreregisterSessionRequest(
     @field:NotBlank
     @field:CodePointLength(max = 50)
+    @field:Schema(description = "제목", example = "예시 박람회")
     val title: String,
+    @field:Schema(description = "시작 일시 (UTC 오프셋 ISO 8601)", example = "2030-01-01T10:00:00Z")
     val startedAt: Instant,
+    @field:Schema(description = "종료 일시 (UTC 오프셋 ISO 8601)", example = "2030-01-01T11:00:00Z")
     val endedAt: Instant,
     @field:NotBlank
+    @field:Schema(description = "회차 장소", example = "가상 강의실")
     val place: String,
     @field:Positive
+    @field:Schema(description = "정원", example = "30")
     val capacity: Int,
     @field:PositiveOrZero
     @param:JsonProperty(required = true)
+    @field:Schema(description = "대기 정원", example = "5")
     val waitingCapacity: Int,
     @param:JsonProperty(required = true)
+    @field:Schema(description = "모집 마감 여부", example = "false")
     val closed: Boolean,
     @field:JsonDeserialize(using = CancelDeadlineDeserializer::class)
-    @field:Schema(description = "별도 취소 마감. null 또는 생략 시 취소 차단. UTC 오프셋이 있는 ISO 8601 시각.")
+    @field:Schema(description = "별도 취소 마감. null 또는 생략 시 취소 차단. UTC 오프셋이 있는 ISO 8601 시각.", example = "2030-01-01T09:00:00Z")
     val cancelEndedAt: Instant? = null,
 ) {
     fun validatePeriod() {
@@ -64,7 +71,9 @@ class CancelDeadlineDeserializer : ValueDeserializer<Instant>() {
 data class UpdatePreregisterSessionRequest(
     @field:Positive
     @field:Max(Long.MAX_VALUE - 1)
+    @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long,
     @field:Valid
+    @field:Schema(description = "회차 전체 정의")
     val definition: PreregisterSessionRequest,
 )

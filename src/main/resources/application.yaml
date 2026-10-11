@@ -1,3 +1,16 @@
+swagger:
+  enabled: ${SWAGGER_ENABLED:false}
+  include-internal: ${SWAGGER_INCLUDE_INTERNAL:false}
+
+springdoc:
+  api-docs:
+    enabled: ${swagger.enabled}
+    path: /expo/v3/api-docs
+  swagger-ui:
+    enabled: ${swagger.enabled}
+    path: /expo/swagger-ui.html
+    disable-swagger-default-url: true
+
 spring:
   application:
     name: expo-expo-server

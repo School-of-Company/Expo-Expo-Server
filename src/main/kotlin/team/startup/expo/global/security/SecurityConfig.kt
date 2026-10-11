@@ -73,6 +73,7 @@ class SecurityConfig {
         http: HttpSecurity,
         objectMapper: ObjectMapper,
         @Value("\${EXPO_INTERNAL_TOKEN:}") internalToken: String,
+        @Value("\${swagger.enabled:false}") swaggerEnabled: Boolean,
     ): SecurityFilterChain {
         if (internalToken.isBlank()) {
             logger.warn("EXPO_INTERNAL_TOKEN is not configured; internal expo requests will be rejected")
@@ -92,7 +93,14 @@ class SecurityConfig {
                         writeError(objectMapper, response, HttpServletResponse.SC_FORBIDDEN, "접근 권한이 없습니다.")
                     }
             }.authorizeHttpRequests { requests ->
+                if (swaggerEnabled) {
+                    requests
+                        .requestMatchers(HttpMethod.GET, *SWAGGER_PATHS)
+                        .permitAll()
+                }
                 requests
+                    .requestMatchers(*SWAGGER_PATHS)
+                    .denyAll()
                     .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/image/{id}")
@@ -199,6 +207,8 @@ class SecurityConfig {
     }
 
     private companion object {
+        val SWAGGER_PATHS =
+            arrayOf("/expo/v3/api-docs", "/expo/v3/api-docs/**", "/expo/swagger-ui.html", "/expo/swagger-ui/**")
         const val ADMIN_AUTHORITY = "ROLE_ADMIN"
         val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
     }
