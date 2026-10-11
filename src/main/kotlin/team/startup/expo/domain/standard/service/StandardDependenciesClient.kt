@@ -17,7 +17,8 @@ import java.time.Duration
 class StandardDependenciesClient(
     @Value("\${expo.standard.user-service-url:}") private val userServiceUrl: String,
     @Value("\${expo.standard.application-service-url:}") private val applicationServiceUrl: String,
-    @Value("\${expo.standard.internal-token:}") private val internalToken: String,
+    @Value("\${USER_INTERNAL_TOKEN:\${expo.standard.internal-token:}}") private val userToken: String,
+    @Value("\${APPLICATION_INTERNAL_TOKEN:\${expo.standard.internal-token:}}") private val applicationToken: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
 ) {
@@ -27,7 +28,8 @@ class StandardDependenciesClient(
         expoId: String,
         phoneNumber: String,
     ): Long {
-        val response = post(userServiceUrl, "/internal/standard-participants/resolve", ResolveParticipantRequest(expoId, phoneNumber))
+        val response =
+            post(userServiceUrl, userToken, "/internal/standard-participants/resolve", ResolveParticipantRequest(expoId, phoneNumber))
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "행사 참가자를 찾지 못 했습니다.")
         if (response.statusCode() != 200) badResponse("User")
         val participantId = decode(response.body(), ResolveParticipantResponse::class.java).participantId
@@ -39,7 +41,8 @@ class StandardDependenciesClient(
         expoId: String,
         participantIds: List<Long>,
     ): List<ParticipantName> {
-        val response = post(userServiceUrl, "/internal/standard-participants/names", ParticipantNamesRequest(expoId, participantIds))
+        val response =
+            post(userServiceUrl, userToken, "/internal/standard-participants/names", ParticipantNamesRequest(expoId, participantIds))
         if (response.statusCode() != 200) badResponse("User")
         return decode(response.body(), Array<ParticipantName>::class.java).toList()
     }
@@ -54,7 +57,7 @@ class StandardDependenciesClient(
                 participant = ParticipantReference(participantId, expoId),
                 programs = programIds.map { ProgramReference(it, expoId) },
             )
-        when (post(applicationServiceUrl, "/internal/standard-program-applications", body).statusCode()) {
+        when (post(applicationServiceUrl, applicationToken, "/internal/standard-program-applications", body).statusCode()) {
             201 -> Unit
             400 -> throw ExpectedException(HttpStatus.BAD_REQUEST, "일반 프로그램 신청 정보가 올바르지 않습니다.")
             404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "일반 프로그램을 찾지 못 했습니다.")
@@ -64,14 +67,16 @@ class StandardDependenciesClient(
     }
 
     fun applications(programId: Long): List<ProgramApplication> {
-        val response = get(applicationServiceUrl, "/internal/standard-program-applications/program/$programId")
+        val response = get(applicationServiceUrl, applicationToken, "/internal/standard-program-applications/program/$programId")
         if (response.statusCode() != 200) badResponse("Application")
         return decode(response.body(), Array<ProgramApplication>::class.java).toList()
     }
 
     fun deleteApplications(programId: Long) {
         attendances.requireConfiguration()
-        if (delete(applicationServiceUrl, "/internal/standard-program-applications/program/$programId").statusCode() != 204) {
+        if (delete(applicationServiceUrl, applicationToken, "/internal/standard-program-applications/program/$programId").statusCode() !=
+            204
+        ) {
             badResponse("Application")
         }
         attendances.deleteStandard(programId)
@@ -79,11 +84,13 @@ class StandardDependenciesClient(
 
     private fun post(
         baseUrl: String,
+        token: String,
         path: String,
         body: Any,
     ): HttpResponse<String> =
         send(
             baseUrl,
+            token,
             path,
             "POST",
             HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)),
@@ -91,21 +98,24 @@ class StandardDependenciesClient(
 
     private fun get(
         baseUrl: String,
+        token: String,
         path: String,
-    ): HttpResponse<String> = send(baseUrl, path, "GET", HttpRequest.BodyPublishers.noBody())
+    ): HttpResponse<String> = send(baseUrl, token, path, "GET", HttpRequest.BodyPublishers.noBody())
 
     private fun delete(
         baseUrl: String,
+        token: String,
         path: String,
-    ): HttpResponse<String> = send(baseUrl, path, "DELETE", HttpRequest.BodyPublishers.noBody())
+    ): HttpResponse<String> = send(baseUrl, token, path, "DELETE", HttpRequest.BodyPublishers.noBody())
 
     private fun send(
         baseUrl: String,
+        token: String,
         path: String,
         method: String,
         body: HttpRequest.BodyPublisher,
     ): HttpResponse<String> {
-        if (baseUrl.isBlank() || internalToken.isBlank()) {
+        if (baseUrl.isBlank() || token.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "일반 프로그램 내부 연동이 설정되지 않았습니다.")
         }
         try {
@@ -114,7 +124,7 @@ class StandardDependenciesClient(
                     .newBuilder(URI.create("${baseUrl.trimEnd('/')}$path"))
                     .timeout(Duration.ofSeconds(5))
                     .header("Content-Type", "application/json")
-                    .header("X-Internal-Token", internalToken)
+                    .header("X-Internal-Token", token)
                     .method(method, body)
                     .build()
             return http.send(request, HttpResponse.BodyHandlers.ofString())

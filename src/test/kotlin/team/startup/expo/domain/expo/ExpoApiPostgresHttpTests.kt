@@ -397,7 +397,6 @@ class ExpoApiPostgresHttpTests {
         val calls = mutableListOf<String>()
 
         withDeletionServer { exchange ->
-            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-delete-token"
             calls += "${exchange.requestMethod} ${exchange.requestURI.path}"
             if (exchange.requestURI.path.endsWith("/purge")) {
                 objectMapper.readTree(exchange.requestBody.readAllBytes()) shouldBe
@@ -581,6 +580,9 @@ class ExpoApiPostgresHttpTests {
     private fun withDeletionServer(respond: (com.sun.net.httpserver.HttpExchange) -> Int): AutoCloseable {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
+            val target = exchange.requestURI.path.split('/')[1]
+            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe
+                if (target == "attendance") "test-delete-token" else "test-$target-token"
             val status = respond(exchange)
             exchange.sendResponseHeaders(status, -1)
             exchange.close()
@@ -590,14 +592,16 @@ class ExpoApiPostgresHttpTests {
         ReflectionTestUtils.setField(deletionClient, "applicationUrl", "$url/application")
         ReflectionTestUtils.setField(deletionClient, "formUrl", "$url/form")
         ReflectionTestUtils.setField(deletionClient, "userUrl", "$url/user")
-        ReflectionTestUtils.setField(deletionClient, "internalToken", "test-delete-token")
+        ReflectionTestUtils.setField(deletionClient, "applicationToken", "test-application-token")
+        ReflectionTestUtils.setField(deletionClient, "formToken", "test-form-token")
+        ReflectionTestUtils.setField(deletionClient, "userToken", "test-user-token")
         ReflectionTestUtils.setField(attendances, "serviceUrl", "$url/attendance")
         ReflectionTestUtils.setField(attendances, "internalToken", "test-delete-token")
         return AutoCloseable {
             server.stop(0)
             ReflectionTestUtils.setField(attendances, "serviceUrl", "http://127.0.0.1:${applicationServer.address.port}")
             ReflectionTestUtils.setField(attendances, "internalToken", "test-program-token")
-            listOf("applicationUrl", "formUrl", "userUrl", "internalToken").forEach {
+            listOf("applicationUrl", "formUrl", "userUrl", "applicationToken", "formToken", "userToken").forEach {
                 ReflectionTestUtils.setField(deletionClient, it, "")
             }
         }

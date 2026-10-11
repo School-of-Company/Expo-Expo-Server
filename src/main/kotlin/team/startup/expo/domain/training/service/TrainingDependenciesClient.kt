@@ -20,7 +20,8 @@ import java.util.UUID
 class TrainingDependenciesClient(
     @Value("\${expo.training.user-service-url:}") private val userServiceUrl: String,
     @Value("\${expo.training.application-service-url:}") private val applicationServiceUrl: String,
-    @Value("\${expo.training.internal-token:}") private val internalToken: String,
+    @Value("\${USER_INTERNAL_TOKEN:\${expo.training.internal-token:}}") private val userToken: String,
+    @Value("\${APPLICATION_INTERNAL_TOKEN:\${expo.training.internal-token:}}") private val applicationToken: String,
     @Value("\${expo.form-service-url:}") private val formServiceUrl: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
@@ -28,7 +29,7 @@ class TrainingDependenciesClient(
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
     fun requireApplicationConfiguration() {
-        if (applicationServiceUrl.isBlank() || internalToken.isBlank()) {
+        if (applicationServiceUrl.isBlank() || applicationToken.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "연수 프로그램 내부 연동이 설정되지 않았습니다.")
         }
     }
@@ -37,7 +38,7 @@ class TrainingDependenciesClient(
         expoId: String,
         traineeId: Long,
     ): String {
-        val response = get(userServiceUrl, "/internal/expos/$expoId/trainees/details?cursor=${traineeId - 1}&size=1")
+        val response = get(userServiceUrl, userToken, "/internal/expos/$expoId/trainees/details?cursor=${traineeId - 1}&size=1")
         if (response.statusCode() != 200) badResponse("User")
         return try {
             val items = mapper.readTree(response.body()).path("items")
@@ -60,7 +61,7 @@ class TrainingDependenciesClient(
         expoId: String,
         trainingId: String,
     ): Long {
-        val response = post(userServiceUrl, "/internal/trainees/resolve", ResolveTraineeRequest(expoId, trainingId))
+        val response = post(userServiceUrl, userToken, "/internal/trainees/resolve", ResolveTraineeRequest(expoId, trainingId))
         if (response.statusCode() == 400) throw ExpectedException(HttpStatus.BAD_REQUEST, "연수자 정보가 올바르지 않습니다.")
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "연수자를 찾지 못 했습니다.")
         if (response.statusCode() == 409) throw ExpectedException(HttpStatus.CONFLICT, "연수자 정보가 중복되어 신청할 수 없습니다. 관리자에게 문의해 주세요.")
@@ -73,7 +74,7 @@ class TrainingDependenciesClient(
     fun traineePreFormPeriod(expoId: String): FormPeriod {
         // 공개 폼 조회라 내부 토큰을 보내지 않는다(GetExpoValidationServiceImpl과 같은 경로)
         val response =
-            send(formServiceUrl, "/forms/$expoId?type=TRAINEE&applicationType=PRE", "GET", HttpRequest.BodyPublishers.noBody(), false)
+            send(formServiceUrl, "", "/forms/$expoId?type=TRAINEE&applicationType=PRE", "GET", HttpRequest.BodyPublishers.noBody(), false)
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "폼을 찾을 수 없습니다.")
         if (response.statusCode() != 200) badResponse("Form")
         return decode(response.body(), FormPeriod::class.java)
@@ -92,7 +93,7 @@ class TrainingDependenciesClient(
                 informationJson = request.informationJson,
                 personalInformationStatus = request.personalInformationStatus,
             )
-        val response = post(userServiceUrl, "/internal/trainees/resolve-or-create", body)
+        val response = post(userServiceUrl, userToken, "/internal/trainees/resolve-or-create", body)
         if (response.statusCode() == 400) throw ExpectedException(HttpStatus.BAD_REQUEST, "연수자 정보가 올바르지 않습니다.")
         if (response.statusCode() == 409) throw ExpectedException(HttpStatus.CONFLICT, "연수자를 등록할 수 없는 박람회입니다.")
         if (response.statusCode() != 200) badResponse("User")
@@ -105,14 +106,20 @@ class TrainingDependenciesClient(
         expoId: String,
         traineeIds: List<Long>,
     ): List<TraineeName> {
-        val response = post(userServiceUrl, "/internal/trainees/names", TraineeNamesRequest(expoId, traineeIds))
+        val response = post(userServiceUrl, userToken, "/internal/trainees/names", TraineeNamesRequest(expoId, traineeIds))
         if (response.statusCode() != 200) badResponse("User")
         return decode(response.body(), Array<TraineeName>::class.java).toList()
     }
 
     fun executeOperation(operation: TrainingOperation) {
         val response =
-            send(applicationServiceUrl, operation.path, operation.method, HttpRequest.BodyPublishers.ofString(operation.commandJson))
+            send(
+                applicationServiceUrl,
+                applicationToken,
+                operation.path,
+                operation.method,
+                HttpRequest.BodyPublishers.ofString(operation.commandJson),
+            )
         when (response.statusCode()) {
             if (operation.type == TrainingOperationType.ADD) 201 else 204 -> {
                 Unit
@@ -144,7 +151,7 @@ class TrainingDependenciesClient(
     }
 
     fun applicationVersion(traineeId: Long): Long {
-        val response = get(applicationServiceUrl, "/internal/training-program-applications/trainee/$traineeId/version")
+        val response = get(applicationServiceUrl, applicationToken, "/internal/training-program-applications/trainee/$traineeId/version")
         if (response.statusCode() != 200) badResponse("Application")
         return try {
             val version = mapper.readTree(response.body()).path("version")
@@ -156,7 +163,8 @@ class TrainingDependenciesClient(
     }
 
     fun operationReceipt(operation: TrainingOperation): TrainingOperationReceipt? {
-        val response = get(applicationServiceUrl, "/internal/training-program-applications/operations/${operation.eventId}")
+        val response =
+            get(applicationServiceUrl, applicationToken, "/internal/training-program-applications/operations/${operation.eventId}")
         if (response.statusCode() == 404) return null
         if (response.statusCode() != 200) badResponse("Application")
         return try {
@@ -209,14 +217,16 @@ class TrainingDependenciesClient(
     }
 
     fun applications(programId: Long): List<ProgramApplication> {
-        val response = get(applicationServiceUrl, "/internal/training-program-applications/program/$programId")
+        val response = get(applicationServiceUrl, applicationToken, "/internal/training-program-applications/program/$programId")
         if (response.statusCode() != 200) badResponse("Application")
         return decode(response.body(), Array<ProgramApplication>::class.java).toList()
     }
 
     fun deleteApplications(programId: Long) {
         attendances.requireConfiguration()
-        if (delete(applicationServiceUrl, "/internal/training-program-applications/program/$programId").statusCode() != 204) {
+        if (delete(applicationServiceUrl, applicationToken, "/internal/training-program-applications/program/$programId").statusCode() !=
+            204
+        ) {
             badResponse("Application")
         }
         attendances.deleteTraining(programId)
@@ -224,28 +234,32 @@ class TrainingDependenciesClient(
 
     private fun post(
         baseUrl: String,
+        token: String,
         path: String,
         body: Any,
-    ): HttpResponse<String> = send(baseUrl, path, "POST", HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
+    ): HttpResponse<String> = send(baseUrl, token, path, "POST", HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
 
     private fun get(
         baseUrl: String,
+        token: String,
         path: String,
-    ): HttpResponse<String> = send(baseUrl, path, "GET", HttpRequest.BodyPublishers.noBody())
+    ): HttpResponse<String> = send(baseUrl, token, path, "GET", HttpRequest.BodyPublishers.noBody())
 
     private fun delete(
         baseUrl: String,
+        token: String,
         path: String,
-    ): HttpResponse<String> = send(baseUrl, path, "DELETE", HttpRequest.BodyPublishers.noBody())
+    ): HttpResponse<String> = send(baseUrl, token, path, "DELETE", HttpRequest.BodyPublishers.noBody())
 
     private fun send(
         baseUrl: String,
+        token: String,
         path: String,
         method: String,
         body: HttpRequest.BodyPublisher,
         internal: Boolean = true,
     ): HttpResponse<String> {
-        if (baseUrl.isBlank() || (internal && internalToken.isBlank())) {
+        if (baseUrl.isBlank() || (internal && token.isBlank())) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "연수 프로그램 내부 연동이 설정되지 않았습니다.")
         }
         try {
@@ -255,7 +269,7 @@ class TrainingDependenciesClient(
                     .timeout(Duration.ofSeconds(5))
                     .header("Content-Type", "application/json")
                     .method(method, body)
-            if (internal) request.header("X-Internal-Token", internalToken)
+            if (internal) request.header("X-Internal-Token", token)
             return http.send(request.build(), HttpResponse.BodyHandlers.ofString())
         } catch (exception: InterruptedException) {
             Thread.currentThread().interrupt()
