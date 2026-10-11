@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "27"
+            .version.version shouldBe "28"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -447,8 +447,8 @@ class ExpoPersistenceTests {
     }
 
     @Test
-    fun `V23부터 V26에서 V27까지 기존 데이터와 migration history를 보존한다`() {
-        listOf(23, 24, 25, 26).forEach { target ->
+    fun `V23부터 V27에서 V28까지 기존 데이터와 migration history를 보존한다`() {
+        listOf(23, 24, 25, 26, 27).forEach { target ->
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
                 try {
                     Flyway
@@ -510,13 +510,15 @@ class ExpoPersistenceTests {
                         } else {
                             emptyList()
                         }
+                    val standardBefore = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_standard_program WHERE id=42")
+                    val trainingBefore = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_training_program WHERE id=42")
                     Flyway
                         .configure()
                         .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
                         .schemas("preregister_upgrade")
                         .load()
                         .migrate()
-                        .migrationsExecuted shouldBe 27 - target
+                        .migrationsExecuted shouldBe 28 - target
                     upgradeJdbc
                         .queryForList(
                             "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",
@@ -526,6 +528,17 @@ class ExpoPersistenceTests {
                     upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change") shouldBe changesBefore
                     val standard = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_standard_program WHERE id=42")
                     val training = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_training_program WHERE id=42")
+                    if (target == 27) {
+                        standard shouldBe standardBefore
+                        training shouldBe trainingBefore
+                    }
+                    upgradeJdbc.queryForObject(
+                        "SELECT count(*) FROM preregister_upgrade.tb_program_form_guard WHERE id=1",
+                        Long::class.java,
+                    ) shouldBe
+                        1L
+                    upgradeJdbc.queryForObject("SELECT count(*) FROM preregister_upgrade.tb_program_form_change", Long::class.java) shouldBe
+                        0L
                     standard["id"] shouldBe 42L
                     training["id"] shouldBe 42L
                     training["category"] shouldBe "ESSENTIAL"

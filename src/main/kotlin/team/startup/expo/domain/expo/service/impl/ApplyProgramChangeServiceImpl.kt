@@ -65,6 +65,7 @@ class ApplyProgramChangeServiceImpl(
                 val expo = expos.findLockedById(expoId) ?: missing()
                 if (expo.deletingAt != null) conflict()
                 val current = changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId } ?: return@executeWithoutResult
+                payload.mutations.mapNotNull { it.definition }.forEach(support::validateForApply)
                 payload.mutations.mapNotNull { it.previous }.forEach { previous ->
                     val actual =
                         when (previous.programType) {
