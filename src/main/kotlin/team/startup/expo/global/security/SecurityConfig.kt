@@ -103,6 +103,12 @@ class SecurityConfig {
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/internal/expo/{expo_id}/training-programs/batch")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.GET, "/internal/forms/by-id/{formId}/usage")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.PUT, "/internal/forms/by-id/{formId}/changes/{changeId}")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.DELETE, "/internal/forms/by-id/{formId}/changes/{changeId}")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.PUT, "/internal/expo/{expo_id}/standard-registrations/{participant_id}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(
