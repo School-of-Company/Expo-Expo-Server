@@ -15,4 +15,6 @@ interface StandardProgramRepository : JpaRepository<StandardProgram, Long> {
         id: Long,
         expoId: String,
     ): StandardProgram?
+
+    fun findByGroupId(groupId: java.util.UUID): List<StandardProgram>
 }

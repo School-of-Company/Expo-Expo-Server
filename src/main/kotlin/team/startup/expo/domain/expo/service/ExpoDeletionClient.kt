@@ -3,6 +3,7 @@ package team.startup.expo.domain.expo.service
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
+import team.startup.expo.global.attendance.ProgramAttendanceClient
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -19,6 +20,7 @@ class ExpoDeletionClient(
     @Value("\${expo.standard.user-service-url:}") private val userUrl: String,
     @Value("\${expo.delete-internal-token:}") private val internalToken: String,
     private val mapper: ObjectMapper,
+    private val attendances: ProgramAttendanceClient,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -26,6 +28,7 @@ class ExpoDeletionClient(
         if (applicationUrl.isBlank() || formUrl.isBlank() || userUrl.isBlank() || internalToken.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "박람회 삭제 내부 연동이 설정되지 않았습니다.")
         }
+        attendances.requireConfiguration()
     }
 
     fun deleteApplications(
@@ -45,6 +48,16 @@ class ExpoDeletionClient(
     fun deleteForms(expoId: String) = delete(formUrl, expoId, "Form")
 
     fun deleteUsers(expoId: String) = delete(userUrl, expoId, "User")
+
+    fun deleteAttendances(
+        expoId: String,
+        standardIds: List<Long>,
+        trainingIds: List<Long>,
+    ) {
+        standardIds.forEach(attendances::deleteStandard)
+        trainingIds.forEach(attendances::deleteTraining)
+        attendances.deleteExpo(expoId)
+    }
 
     private fun delete(
         baseUrl: String,

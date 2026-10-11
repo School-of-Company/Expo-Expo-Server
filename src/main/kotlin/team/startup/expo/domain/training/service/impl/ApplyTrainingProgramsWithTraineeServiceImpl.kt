@@ -4,11 +4,13 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsWithTraineeRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.ApplyTrainingProgramsWithTraineeService
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.global.exception.ExpectedException
 import java.time.Clock
 import java.time.LocalDate
@@ -19,6 +21,7 @@ import java.time.ZoneId
 @Service
 class ApplyTrainingProgramsWithTraineeServiceImpl(
     private val expos: ExpoRepository,
+    private val policies: ProgramPolicySupport,
     private val programs: TrainingProgramRepository,
     private val dependencies: TrainingDependenciesClient,
     private val sms: TrainingApplicationSmsService,
@@ -41,6 +44,10 @@ class ApplyTrainingProgramsWithTraineeServiceImpl(
                     if (today < LocalDate.parse(expo.startedDay) || today > LocalDate.parse(expo.finishedDay)) {
                         throw ExpectedException(HttpStatus.BAD_REQUEST, "해당 박람회는 진행 중인 상태가 아닙니다.")
                     }
+                    policies.ensureAvailable(expoId)
+                    if (programs.existsByExpoIdAndPolicyJsonIsNotNull(expoId)) {
+                        throw ExpectedException(HttpStatus.CONFLICT, "정책이 설정된 프로그램은 기존 일괄 교체 신청을 사용할 수 없습니다.")
+                    }
                     expo to programs.findAllByIdIn(ids)
                 },
             )
@@ -52,6 +59,6 @@ class ApplyTrainingProgramsWithTraineeServiceImpl(
         }
         dependencies.requireApplicationConfiguration()
         val traineeId = dependencies.resolveOrCreateTrainee(expoId, request)
-        sms.execute(expo, traineeId, found, "REPLACE") { dependencies.replaceApplications(expoId, traineeId, found) }
+        sms.execute(expo, traineeId, found, TrainingOperationType.REPLACE)
     }
 }

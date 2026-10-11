@@ -126,7 +126,10 @@ class StandardApiPostgresHttpTests {
         list[0].get("id").asLong() shouldBe 1L
         list[0].get("startedAt").asString() shouldBe "2026-09-24T09:00"
         list[0].get("endedAt").asString() shouldBe "2026-09-24T10:00"
-        list[0].size() shouldBe 4
+        list[0].size() shouldBe 10
+        list[0].get("programType").asString() shouldBe "STANDARD"
+        list[0].get("revision").asLong() shouldBe 1L
+        list[0].get("policy").isNull shouldBe true
 
         val update = """{"id":999,"title":"수정","startedAt":"2026-09-24 11:00","endedAt":"2026-09-24 12:00"}"""
         request("PATCH", "/standard/1", update).statusCode() shouldBe 204
@@ -306,6 +309,8 @@ class StandardApiPostgresHttpTests {
             registry.add("expo.standard.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.standard.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.standard.internal-token") { "test-internal-token" }
+            registry.add("expo.attention.service-url") { "http://127.0.0.1:${upstream.address.port}" }
+            registry.add("expo.attention.internal-token") { "test-attention-token" }
         }
 
         private fun respond(exchange: HttpExchange) {
@@ -325,6 +330,7 @@ class StandardApiPostgresHttpTests {
                     "/internal/standard-participants/names" -> userNamesStatus
                     "/internal/standard-program-applications" -> applicationCreateStatus
                     "/internal/standard-program-applications/program/1" -> programStatus
+                    "/internal/program-attendances/standard/1" -> 204
                     else -> 404
                 }
             val body =

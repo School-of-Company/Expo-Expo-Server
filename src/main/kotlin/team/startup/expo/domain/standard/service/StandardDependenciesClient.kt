@@ -3,6 +3,7 @@ package team.startup.expo.domain.standard.service
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
+import team.startup.expo.global.attendance.ProgramAttendanceClient
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -18,6 +19,7 @@ class StandardDependenciesClient(
     @Value("\${expo.standard.application-service-url:}") private val applicationServiceUrl: String,
     @Value("\${expo.standard.internal-token:}") private val internalToken: String,
     private val mapper: ObjectMapper,
+    private val attendances: ProgramAttendanceClient,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -68,9 +70,11 @@ class StandardDependenciesClient(
     }
 
     fun deleteApplications(programId: Long) {
+        attendances.requireConfiguration()
         if (delete(applicationServiceUrl, "/internal/standard-program-applications/program/$programId").statusCode() != 204) {
             badResponse("Application")
         }
+        attendances.deleteStandard(programId)
     }
 
     private fun post(

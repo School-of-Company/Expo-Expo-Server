@@ -4,16 +4,19 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.ApplyTrainingProgramListService
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class ApplyTrainingProgramListServiceImpl(
     private val expos: ExpoRepository,
+    private val policies: ProgramPolicySupport,
     private val programs: TrainingProgramRepository,
     private val dependencies: TrainingDependenciesClient,
     private val sms: TrainingApplicationSmsService,
@@ -38,8 +41,9 @@ class ApplyTrainingProgramListServiceImpl(
                 },
             )
         val expoId = expo.id
+        policies.ensureAdmission(expo.id, found.firstOrNull { it.policyJson != null }?.policyJson)
         dependencies.requireApplicationConfiguration()
         val traineeId = dependencies.resolveTrainee(expoId, request.trainingId)
-        sms.execute(expo, traineeId, found, "ADD") { dependencies.apply(expoId, traineeId, found) }
+        sms.execute(expo, traineeId, found, TrainingOperationType.ADD)
     }
 }

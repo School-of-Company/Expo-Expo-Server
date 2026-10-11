@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.presentation.dto.request.TrainingProgramBatchRequest
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramResponse
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
@@ -16,6 +17,7 @@ import java.time.LocalDateTime
 @Service
 class GetTrainingProgramBatchServiceImpl(
     private val expoRepository: ExpoRepository,
+    private val policies: ProgramPolicySupport,
     private val trainingProgramRepository: TrainingProgramRepository,
 ) : GetTrainingProgramBatchService {
     @Transactional(readOnly = true)
@@ -27,6 +29,7 @@ class GetTrainingProgramBatchServiceImpl(
             ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
 
         // 중복 ID는 한 번만 반환하고, 없는 ID나 다른 박람회 ID가 하나라도 있으면 일부만 돌려주지 않는다
+        policies.ensureAvailable(expoId)
         val programIds = request.programIds.distinct()
         val programs = trainingProgramRepository.findAllByIdIn(programIds).filter { it.expo?.id == expoId }
         if (programs.size != programIds.size) {
@@ -37,6 +40,10 @@ class GetTrainingProgramBatchServiceImpl(
             TrainingProgramResponse(
                 id = requireNotNull(program.id),
                 title = program.title,
+                expoId = expoId,
+                groupId = program.groupId,
+                policy = policies.policy(program.policyJson),
+                revision = program.revision,
                 startedAt = program.startedAt.toProgramDateTimeText(),
                 endedAt = program.endedAt.toProgramDateTimeText(),
                 category = program.category,
