@@ -71,6 +71,9 @@ class ProgramPoliciesPostgresHttpTests {
         lostResponse = false
         beforeReply = null
         wrongFormExpo = false
+        unrestrictedForm = false
+        wrongFormPurpose = false
+        lateFormStart = false
         malformedForm = false
         shortFormPeriod = false
         calls.clear()
@@ -125,6 +128,37 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `nullable form participant type allows standard and training create and policy update`() {
+        unrestrictedForm = true
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", body(type)).statusCode() shouldBe 201
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            request("/$type/1", "PATCH", body(type, policy = policy(form = form, capacity = 3), id = 1, revision = 1)).statusCode() shouldBe
+                204
+            list(type)[0].get("revision").asLong() shouldBe 2L
+            calls.count { it.first == "/internal/forms/by-id/$form" } shouldBe 2
+        }
+        calls.any { it.first.startsWith("/internal/program-forms/") } shouldBe false
+    }
+
+    @Test
+    fun `unrestricted forms still enforce expo purpose and both period boundaries without rows`() {
+        unrestrictedForm = true
+        wrongFormExpo = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        wrongFormExpo = false
+        wrongFormPurpose = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        wrongFormPurpose = false
+        lateFormStart = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        lateFormStart = false
+        shortFormPeriod = true
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
+        list("standard").size() shouldBe 0
+    }
+
+    @Test
     fun `all create paths validate capacity occupation time form and group scope without partial rows`() {
         create("standard")
         request("/training/$OTHER", "POST", body("training", policy = null)).statusCode() shouldBe 201
@@ -150,6 +184,7 @@ class ProgramPoliciesPostgresHttpTests {
         request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
         wrongFormExpo = false
         request("/standard/$EXPO", "POST", body("standard", policy = policy(form = TRAINING_FORM))).statusCode() shouldBe 400
+        request("/training/$EXPO", "POST", body("training", policy = policy(form = STANDARD_FORM))).statusCode() shouldBe 400
         request("/standard/$EXPO", "POST", body("standard", policy = policy(form = UUID.randomUUID().toString()))).statusCode() shouldBe 404
         malformedForm = true
         request("/training/list/$EXPO", "POST", "[${body("training")}]").statusCode() shouldBe 502
@@ -686,6 +721,12 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var wrongFormExpo = false
 
+        @Volatile private var unrestrictedForm = false
+
+        @Volatile private var wrongFormPurpose = false
+
+        @Volatile private var lateFormStart = false
+
         @Volatile private var malformedForm = false
 
         @Volatile private var shortFormPeriod = false
@@ -699,15 +740,18 @@ class ProgramPoliciesPostgresHttpTests {
                         val path = exchange.requestURI.path
                         val body = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8)
                         calls += path to body
-                        if (path.startsWith("/internal/program-forms/")) {
+                        if (path.startsWith("/internal/forms/by-id/")) {
                             val id = path.substringAfterLast('/')
                             val type = if (id == TRAINING_FORM) "TRAINEE" else "STANDARD"
                             val expo = if (wrongFormExpo) OTHER else EXPO
+                            val purpose = if (wrongFormPurpose) "REGISTRATION" else "PROGRAM"
+                            val participantType = if (unrestrictedForm) "null" else "\"$type\""
+                            val startDate = if (lateFormStart) "2026-10-11T01:00:00Z" else "2026-10-01T00:00:00Z"
                             val response =
                                 if (malformedForm) {
                                     "{}"
                                 } else {
-                                    """{"id":"$id","expoId":"$expo","purpose":"PROGRAM","participantType":"$type","startDate":"2026-10-01T00:00:00Z","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
+                                    """{"id":"$id","expoId":"$expo","purpose":"$purpose","version":1,"title":"form","informationText":"","dynamicForm":[],"participantType":$participantType,"startDate":"$startDate","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
                                 }
                             val bytes = response.toByteArray()
                             exchange.sendResponseHeaders(if (id in listOf(STANDARD_FORM, TRAINING_FORM)) 200 else 404, bytes.size.toLong())

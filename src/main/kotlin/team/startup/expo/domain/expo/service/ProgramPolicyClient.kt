@@ -28,7 +28,7 @@ class ProgramPolicyClient(
 
     fun validateForm(definition: ProgramDefinition) {
         val policy = definition.policy ?: return
-        val response = send(formUrl, formToken, "/internal/program-forms/${policy.formId}", "GET", "")
+        val response = send(formUrl, formToken, "/internal/forms/by-id/${policy.formId}", "GET", "")
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "프로그램 폼을 찾지 못 했습니다.")
         if (response.statusCode() != 200) badResponse()
         val form =
@@ -38,7 +38,10 @@ class ProgramPolicyClient(
                 badResponse()
             }
         if (form.id != policy.formId || form.expoId != definition.expoId || form.purpose != "PROGRAM" ||
-            form.participantType != if (definition.programType.name == "STANDARD") "STANDARD" else "TRAINEE"
+            (
+                form.participantType != null &&
+                    form.participantType != if (definition.programType.name == "STANDARD") "STANDARD" else "TRAINEE"
+            )
         ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 폼의 행사 또는 참여 유형이 일치하지 않습니다.")
         }
@@ -103,7 +106,7 @@ class ProgramPolicyClient(
         val id: UUID,
         val expoId: String,
         val purpose: String,
-        val participantType: String,
+        val participantType: String?,
         val startDate: Instant,
         val endDate: Instant,
     )
