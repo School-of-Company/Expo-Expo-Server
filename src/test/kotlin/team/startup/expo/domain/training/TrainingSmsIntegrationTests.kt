@@ -208,7 +208,10 @@ class TrainingSmsIntegrationTests {
                 jdbc.queryForObject("SELECT payload FROM tb_training_sms_outbox", String::class.java) shouldBe null
                 jdbc.queryForObject("SELECT first_publish_attempt_at IS NULL FROM tb_training_sms_outbox", Boolean::class.java) shouldBe
                     true
-                jdbc.queryForObject("SELECT next_attempt_at > CURRENT_TIMESTAMP FROM tb_training_sms_outbox", Boolean::class.java) shouldBe
+                jdbc.queryForObject(
+                    "SELECT next_attempt_at = updated_at + INTERVAL '30 seconds' FROM tb_training_sms_outbox",
+                    Boolean::class.java,
+                ) shouldBe
                     true
             }
             consumer.poll(Duration.ofMillis(500)).isEmpty shouldBe true
