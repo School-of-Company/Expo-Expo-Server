@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "26"
+            .version.version shouldBe "27"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -447,8 +447,8 @@ class ExpoPersistenceTests {
     }
 
     @Test
-    fun `V23 V24 V25에서 V26까지 기존 데이터와 migration history를 보존한다`() {
-        listOf(23, 24, 25).forEach { target ->
+    fun `V23부터 V26에서 V27까지 기존 데이터와 migration history를 보존한다`() {
+        listOf(23, 24, 25, 26).forEach { target ->
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
                 try {
                     Flyway
@@ -476,6 +476,12 @@ class ExpoPersistenceTests {
                     connection.createStatement().use { statement ->
                         statement.execute(
                             "INSERT INTO tb_training_sms_outbox (event_id,expo_id,trainee_id,fingerprint,state) VALUES ('legacy-event','$EXPO_ID',42,'ADD:1','SENT')",
+                        )
+                        statement.execute(
+                            "INSERT INTO tb_standard_program (id,title,started_at,ended_at,expo_id) VALUES (42,'동일 제목','2026-10-31T09:00','2026-10-31T10:00','$EXPO_ID')",
+                        )
+                        statement.execute(
+                            "INSERT INTO tb_training_program (id,title,started_at,ended_at,category,expo_id) VALUES (42,'동일 제목','2026-10-31T09:00','2026-10-31T10:00','ESSENTIAL','$EXPO_ID')",
                         )
                         if (target >= 24) {
                             statement.execute(
@@ -510,7 +516,7 @@ class ExpoPersistenceTests {
                         .schemas("preregister_upgrade")
                         .load()
                         .migrate()
-                        .migrationsExecuted shouldBe 26 - target
+                        .migrationsExecuted shouldBe 27 - target
                     upgradeJdbc
                         .queryForList(
                             "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",
@@ -518,6 +524,18 @@ class ExpoPersistenceTests {
                         historyBefore
                     upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session") shouldBe sessionsBefore
                     upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change") shouldBe changesBefore
+                    val standard = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_standard_program WHERE id=42")
+                    val training = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_training_program WHERE id=42")
+                    standard["id"] shouldBe 42L
+                    training["id"] shouldBe 42L
+                    training["category"] shouldBe "ESSENTIAL"
+                    standard["expo_id"] shouldBe EXPO_ID
+                    training["expo_id"] shouldBe EXPO_ID
+                    standard["revision"] shouldBe 1L
+                    training["revision"] shouldBe 1L
+                    standard["policy_json"] shouldBe null
+                    training["policy_json"] shouldBe null
+                    (standard["group_id"] != training["group_id"]) shouldBe true
                     connection.createStatement().use { statement ->
                         statement.executeQuery("SELECT title,application_person FROM tb_expo").use { result ->
                             result.next() shouldBe true

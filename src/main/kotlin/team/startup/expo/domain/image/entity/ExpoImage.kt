@@ -47,7 +47,20 @@ class ExpoImage(
     var detachedAt: Instant? = null
         protected set
 
+    @field:Column(name = "reserved_expo_id", length = 36)
+    var reservedExpoId: String? = null
+        protected set
+
+    fun reserve(expoId: String) {
+        reservedExpoId = expoId
+    }
+
+    fun releaseReservation(expoId: String) {
+        if (reservedExpoId == expoId) reservedExpoId = null
+    }
+
     fun attach(expoId: String) {
+        reservedExpoId = null
         status = ATTACHED
         this.expoId = expoId
         attachedAt = Instant.now()

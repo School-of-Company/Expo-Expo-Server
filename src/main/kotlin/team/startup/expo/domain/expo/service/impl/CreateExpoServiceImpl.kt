@@ -7,8 +7,10 @@ import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.CreateExpoService
+import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.image.service.AttachExpoImageService
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
@@ -20,6 +22,7 @@ import team.startup.expo.global.exception.ExpectedException
 @Service
 class CreateExpoServiceImpl(
     private val expoRepository: ExpoRepository,
+    private val policies: ProgramPolicySupport,
     private val standardProgramRepository: StandardProgramRepository,
     private val trainingProgramRepository: TrainingProgramRepository,
     private val expoIdGenerator: ExpoIdGenerator,
@@ -45,22 +48,46 @@ class CreateExpoServiceImpl(
 
         standardProgramRepository.saveAllAndFlush(
             request.addStandardProRequestDto.map { program ->
+                val definition =
+                    policies.create(
+                        expo.id,
+                        ProgramType.STANDARD,
+                        program.title,
+                        program.startedAt.toString(),
+                        program.endedAt.toString(),
+                        null,
+                        program.policy,
+                    )
                 StandardProgram(
                     title = program.title,
                     startedAt = program.startedAt.toString(),
                     endedAt = program.endedAt.toString(),
                     expo = expo,
+                    groupId = definition.groupId,
+                    policyJson = policies.json(definition.policy),
                 )
             },
         )
         trainingProgramRepository.saveAllAndFlush(
             request.addTrainingProRequestDto.map { program ->
+                val definition =
+                    policies.create(
+                        expo.id,
+                        ProgramType.TRAINING,
+                        program.title,
+                        program.startedAt.toString(),
+                        program.endedAt.toString(),
+                        program.category,
+                        program.policy,
+                    )
                 TrainingProgram(
                     title = program.title,
                     startedAt = program.startedAt.toString(),
                     endedAt = program.endedAt.toString(),
                     category = program.category,
                     expo = expo,
+                    groupId = definition.groupId,
+                    policyJson = policies.json(definition.policy),
                 )
             },
         )

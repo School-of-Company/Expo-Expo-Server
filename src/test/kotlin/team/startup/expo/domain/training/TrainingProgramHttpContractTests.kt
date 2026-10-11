@@ -92,7 +92,15 @@ class TrainingProgramHttpContractTests {
         created.statusCode() shouldBe 201
         created.body() shouldBe ""
         listed.statusCode() shouldBe 200
-        val program = objectMapper.readTree(listed.body()).single()
+        val program = objectMapper.readTree(listed.body()).single() as tools.jackson.databind.node.ObjectNode
+        program.get("programType").asString() shouldBe "TRAINING"
+        program.get("expoId").asString() shouldBe "training-test-expo"
+        program.get("revision").asLong() shouldBe 1L
+        program.get("policy").isNull shouldBe true
+        java.util.UUID
+            .fromString(program.get("groupId").asString())
+            .toString() shouldBe program.get("groupId").asString()
+        listOf("expoId", "programType", "groupId", "policy", "revision", "pendingRevision").forEach { program.remove(it) }
         program.toString() shouldBe
             """{"id":1,"title":"연수","startedAt":"2026-09-24T10:00","endedAt":"2026-09-24T11:00","category":"ESSENTIAL"}"""
     }

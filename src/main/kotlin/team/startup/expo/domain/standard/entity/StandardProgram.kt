@@ -12,6 +12,7 @@ import jakarta.persistence.Table
 import org.hibernate.annotations.OnDelete
 import org.hibernate.annotations.OnDeleteAction
 import team.startup.expo.domain.expo.entity.Expo
+import java.util.UUID
 
 @Entity
 @Table(name = "tb_standard_program")
@@ -33,4 +34,12 @@ class StandardProgram(
     @field:JoinColumn(name = "expo_id")
     @field:OnDelete(action = OnDeleteAction.CASCADE)
     val expo: Expo?,
+    @field:Column(name = "group_id", nullable = false)
+    val groupId: UUID = UUID.randomUUID(),
+
+    @field:Column(name = "policy_json", columnDefinition = "TEXT")
+    val policyJson: String? = null,
+
+    @field:Column(nullable = false)
+    val revision: Long = 1,
 )

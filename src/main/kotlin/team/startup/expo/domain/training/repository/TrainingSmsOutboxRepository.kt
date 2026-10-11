@@ -35,6 +35,32 @@ class TrainingSmsOutboxRepository(
                             command.trainee.expoId,
                         ).firstOrNull() ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
                 if (deleting) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
+                if (type == TrainingOperationType.REPLACE &&
+                    jdbc.queryForObject(
+                        "SELECT EXISTS (SELECT 1 FROM tb_training_program WHERE expo_id=? AND policy_json IS NOT NULL)",
+                        Boolean::class.java,
+                        command.trainee.expoId,
+                    ) == true
+                ) {
+                    throw ExpectedException(HttpStatus.CONFLICT, "정책이 설정된 프로그램은 기존 일괄 교체 신청을 사용할 수 없습니다.")
+                }
+                if (jdbc.queryForObject(
+                        "SELECT EXISTS (SELECT 1 FROM tb_program_change WHERE expo_id=?)",
+                        Boolean::class.java,
+                        command.trainee.expoId,
+                    ) == true ||
+                    (
+                        command.programs.isNotEmpty() &&
+                            jdbc.queryForObject(
+                                "SELECT EXISTS (SELECT 1 FROM tb_training_program WHERE id IN (" +
+                                    command.programs.joinToString(",") { "?" } + ") AND policy_json IS NOT NULL)",
+                                Boolean::class.java,
+                                *command.programs.map { it.id }.toTypedArray(),
+                            ) == true
+                    )
+                ) {
+                    throw ExpectedException(HttpStatus.CONFLICT, "정책이 설정됐거나 변경 중인 프로그램에는 기존 신청을 사용할 수 없습니다.")
+                }
                 val eventId = command.operationId.toString()
                 val token = UUID.randomUUID().toString()
                 val method = if (type == TrainingOperationType.ADD) "POST" else "PUT"
