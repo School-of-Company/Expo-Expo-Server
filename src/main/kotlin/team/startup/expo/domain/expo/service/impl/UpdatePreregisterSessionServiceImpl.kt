@@ -49,6 +49,7 @@ class UpdatePreregisterSessionServiceImpl(
                         capacity = definition.capacity,
                         waitingCapacity = definition.waitingCapacity,
                         closed = definition.closed,
+                        cancelEndedAt = definition.cancelEndedAt?.truncatedTo(ChronoUnit.MICROS),
                     )
                 if (current.revision != request.revision) {
                     if (current.revision > 1 && request.revision == current.revision - 1 && original == desired) return@execute null

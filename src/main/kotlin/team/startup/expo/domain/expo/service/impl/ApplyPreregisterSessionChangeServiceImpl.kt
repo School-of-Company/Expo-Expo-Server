@@ -73,6 +73,7 @@ class ApplyPreregisterSessionChangeServiceImpl(
                             waitingCapacity = updated.waitingCapacity,
                             closed = updated.closed,
                             revision = updated.revision,
+                            cancelEndedAt = updated.cancelEndedAt,
                         ),
                     )
                 }
