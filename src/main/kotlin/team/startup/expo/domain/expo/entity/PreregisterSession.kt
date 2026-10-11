@@ -48,4 +48,7 @@ class PreregisterSession(
 
     @field:Column(nullable = false)
     val revision: Long = 1,
+
+    @field:Column(name = "cancel_ended_at")
+    val cancelEndedAt: Instant? = null,
 )

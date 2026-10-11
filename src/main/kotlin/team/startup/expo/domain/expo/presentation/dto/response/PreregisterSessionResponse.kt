@@ -14,7 +14,20 @@ data class PreregisterSessionResponse(
     val waitingCapacity: Int,
     val closed: Boolean,
     val revision: Long,
+    val cancelEndedAt: Instant? = null,
 )
 
 fun PreregisterSession.toResponse(): PreregisterSessionResponse =
-    PreregisterSessionResponse(requireNotNull(id), expo.id, title, startedAt, endedAt, place, capacity, waitingCapacity, closed, revision)
+    PreregisterSessionResponse(
+        requireNotNull(id),
+        expo.id,
+        title,
+        startedAt,
+        endedAt,
+        place,
+        capacity,
+        waitingCapacity,
+        closed,
+        revision,
+        cancelEndedAt,
+    )
