@@ -4,4 +4,6 @@ data class ExpoPeriodResponse(
     val title: String,
     val startedDay: String,
     val finishedDay: String,
+    val participantPhoneVerificationRequired: Boolean,
+    val participantPhoneVerificationRevision: Long,
 )

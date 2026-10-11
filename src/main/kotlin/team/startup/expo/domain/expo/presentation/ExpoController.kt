@@ -19,15 +19,18 @@ import org.springframework.web.bind.annotation.RestController
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.request.ExpoPageRequest
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoRequest
+import team.startup.expo.domain.expo.presentation.dto.request.UpdateParticipantPhoneVerificationRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoDetailResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationResponse
+import team.startup.expo.domain.expo.presentation.dto.response.ParticipantPhoneVerificationResponse
 import team.startup.expo.domain.expo.service.CreateExpoService
 import team.startup.expo.domain.expo.service.DeleteExpoService
 import team.startup.expo.domain.expo.service.GetExpoDetailService
 import team.startup.expo.domain.expo.service.GetExpoListService
 import team.startup.expo.domain.expo.service.GetExpoValidationService
 import team.startup.expo.domain.expo.service.UpdateExpoService
+import team.startup.expo.domain.expo.service.UpdateParticipantPhoneVerificationService
 
 @RestController
 @RequestMapping("/expo")
@@ -38,7 +41,16 @@ class ExpoController(
     private val updateExpoService: UpdateExpoService,
     private val deleteExpoService: DeleteExpoService,
     private val getExpoValidationService: GetExpoValidationService,
+    private val updateParticipantPhoneVerificationService: UpdateParticipantPhoneVerificationService,
 ) {
+    @Operation(summary = "참가자 전화번호 인증 설정 변경", description = "실제 값 변경 시 revision을 증가시킵니다. 없는 박람회는 404, 삭제 또는 변경 중이면 409를 반환합니다.")
+    @PatchMapping("/{expo_id}/participant-phone-verification")
+    fun updateParticipantPhoneVerification(
+        @PathVariable("expo_id") expoId: String,
+        @Valid @RequestBody request: UpdateParticipantPhoneVerificationRequest,
+    ): ResponseEntity<ParticipantPhoneVerificationResponse> =
+        ResponseEntity.ok(updateParticipantPhoneVerificationService.execute(expoId, request))
+
     @PostMapping
     fun createExpo(
         @Valid @RequestBody request: CreateExpoRequest,

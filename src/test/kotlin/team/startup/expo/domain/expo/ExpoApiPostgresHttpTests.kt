@@ -754,14 +754,16 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `내부 박람회 조회는 공유 토큰으로 제목과 날짜만 반환하고 없는 박람회는 404다`() {
+    fun `내부 박람회 조회는 공유 토큰으로 기간과 전화번호 인증 기본값을 반환하고 없는 박람회는 404다`() {
         val expoId = createExpo()
 
         val response = request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token")
         val period = objectMapper.readTree(response.body())
 
         response.statusCode() shouldBe 200
-        period.size() shouldBe 3
+        period.size() shouldBe 5
+        period.get("participantPhoneVerificationRequired").asBoolean() shouldBe false
+        period.get("participantPhoneVerificationRevision").asLong() shouldBe 0L
         period.get("title").asString() shouldBe "2026 박람회"
         period.get("startedDay").asString() shouldBe "2026-09-24"
         period.get("finishedDay").asString() shouldBe "2026-09-25"
@@ -770,6 +772,190 @@ class ExpoApiPostgresHttpTests {
             expectedStatus = 404,
             expectedMessage = "박람회를 찾을 수 없습니다.",
         )
+    }
+
+    @Test
+    fun `참가자 전화번호 인증 설정은 관리자만 변경하고 내부 조회에 값과 revision을 반영한다`() {
+        val expoId = createExpo()
+        val otherExpoId = createExpo()
+        val path = "/expo/$expoId/participant-phone-verification"
+        val enabled = """{"participantPhoneVerificationRequired":true}"""
+        assertError(request(path, "PATCH", enabled, authority = null), 401, "인증이 필요합니다.")
+        assertError(request(path, "PATCH", enabled, authority = "ROLE_USER"), 403, "접근 권한이 없습니다.")
+        for (body in listOf(
+            "{}",
+            """{"participantPhoneVerificationRequired":null}""",
+            """{"participantPhoneVerificationRequired":"invalid"}""",
+        )) {
+            assertError(request(path, "PATCH", body), 400, "잘못된 요청입니다.")
+        }
+        expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 0L
+        for ((required, revision) in listOf(true to 1L, true to 1L, false to 2L, false to 2L)) {
+            val response = request(path, "PATCH", """{"participantPhoneVerificationRequired":$required}""")
+            response.statusCode() shouldBe 200
+            val updated = objectMapper.readTree(response.body())
+            updated.size() shouldBe 2
+            updated.get("participantPhoneVerificationRequired").asBoolean() shouldBe required
+            updated.get("participantPhoneVerificationRevision").asLong() shouldBe revision
+            val lookup = request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token")
+            lookup.statusCode() shouldBe 200
+            val internal = objectMapper.readTree(lookup.body())
+            internal.get("participantPhoneVerificationRequired").asBoolean() shouldBe required
+            internal.get("participantPhoneVerificationRevision").asLong() shouldBe revision
+            val persisted = expoRepository.findById(expoId).orElseThrow()
+            persisted.participantPhoneVerificationRequired shouldBe required
+            persisted.participantPhoneVerificationRevision shouldBe revision
+            val other = expoRepository.findById(otherExpoId).orElseThrow()
+            other.participantPhoneVerificationRequired shouldBe false
+            other.participantPhoneVerificationRevision shouldBe 0L
+        }
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        request(
+            "/expo/$expoId",
+            "PATCH",
+            updateRequest(
+                standardProgramRepository.findByExpo(expo).single().id!!,
+                trainingProgramRepository.findByExpo(expo).single().id!!,
+            ),
+        ).statusCode() shouldBe 204
+        expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 2L
+    }
+
+    @Test
+    fun `전화번호 인증 설정은 진행 중인 행사 변경을 거부하고 다른 행사는 허용한다`() {
+        val expoId = createExpo()
+        val otherExpoId = createExpo()
+        jdbcTemplate.update(
+            "INSERT INTO tb_program_change (expo_id, change_id, command_json, payload_json) VALUES (?, ?, '{}', '{}')",
+            expoId,
+            java.util.UUID.randomUUID(),
+        )
+        val enabled = """{"participantPhoneVerificationRequired":true}"""
+        assertError(
+            request("/expo/$expoId/participant-phone-verification", "PATCH", enabled),
+            409,
+            "진행 중인 프로그램 변경을 먼저 재시도해 주세요.",
+        )
+        assertError(
+            request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token"),
+            409,
+            "진행 중인 프로그램 변경을 먼저 재시도해 주세요.",
+        )
+        expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 0L
+        request("/expo/$otherExpoId/participant-phone-verification", "PATCH", enabled).statusCode() shouldBe 200
+    }
+
+    @Test
+    fun `내부 조회는 미커밋 전화 인증 설정을 노출하지 않고 커밋 후 새 revision을 읽는다`() {
+        val expoId = createExpo()
+        postgres.createConnection("").use { connection ->
+            connection.autoCommit = false
+            try {
+                connection
+                    .prepareStatement(
+                        "UPDATE tb_expo SET participant_phone_verification_required=true, participant_phone_verification_revision=1 WHERE id=?",
+                    ).use { statement ->
+                        statement.setString(1, expoId)
+                        statement.executeUpdate() shouldBe 1
+                    }
+
+                fun lookup() = request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token")
+                val before = lookup()
+                before.statusCode() shouldBe 200
+                objectMapper.readTree(before.body()).get("participantPhoneVerificationRevision").asLong() shouldBe 0L
+                objectMapper.readTree(before.body()).get("participantPhoneVerificationRequired").asBoolean() shouldBe false
+                connection.commit()
+                val after = lookup()
+                after.statusCode() shouldBe 200
+                objectMapper.readTree(after.body()).get("participantPhoneVerificationRevision").asLong() shouldBe 1L
+                objectMapper.readTree(after.body()).get("participantPhoneVerificationRequired").asBoolean() shouldBe true
+            } finally {
+                connection.rollback()
+            }
+        }
+    }
+
+    @Test
+    fun `전화번호 인증 설정 변경과 내부 조회는 없는 박람회와 삭제 중인 박람회를 명시적으로 거부한다`() {
+        val enabled = """{"participantPhoneVerificationRequired":true}"""
+        assertError(request("/expo/not-found/participant-phone-verification", "PATCH", enabled), 404, "박람회를 찾을 수 없습니다.")
+        val expoId = createExpo()
+        jdbcTemplate.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", expoId)
+        assertError(request("/expo/$expoId/participant-phone-verification", "PATCH", enabled), 409, "삭제 중인 박람회입니다.")
+        assertError(
+            request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token"),
+            409,
+            "삭제 중인 박람회입니다.",
+        )
+        expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 0L
+    }
+
+    @Test
+    fun `동시에 같은 전화 인증 설정을 요청해도 revision은 한 번만 증가한다`() {
+        val expoId = createExpo()
+        postgres.createConnection("").use { connection ->
+            connection.autoCommit = false
+            try {
+                connection.prepareStatement("SELECT id FROM tb_expo WHERE id=? FOR UPDATE").use { statement ->
+                    statement.setString(1, expoId)
+                    statement.executeQuery().close()
+                }
+                val changes =
+                    List(2) {
+                        CompletableFuture.supplyAsync {
+                            request(
+                                "/expo/$expoId/participant-phone-verification",
+                                "PATCH",
+                                """{"participantPhoneVerificationRequired":true}""",
+                            )
+                        }
+                    }
+                awaitPatchRowLock() shouldBe true
+                connection.commit()
+                changes.forEach { change ->
+                    val response = change.get(10, TimeUnit.SECONDS)
+                    response.statusCode() shouldBe 200
+                    objectMapper.readTree(response.body()).get("participantPhoneVerificationRevision").asLong() shouldBe 1L
+                }
+                val persisted = expoRepository.findById(expoId).orElseThrow()
+                persisted.participantPhoneVerificationRequired shouldBe true
+                persisted.participantPhoneVerificationRevision shouldBe 1L
+            } finally {
+                connection.rollback()
+            }
+        }
+    }
+
+    @Test
+    fun `전화번호 인증 설정 변경은 락 대기 중 커밋된 삭제 표식을 확인한다`() {
+        val expoId = createExpo()
+        postgres.createConnection("").use { connection ->
+            connection.autoCommit = false
+            try {
+                connection.prepareStatement("SELECT id FROM tb_expo WHERE id=? FOR UPDATE").use { statement ->
+                    statement.setString(1, expoId)
+                    statement.executeQuery().close()
+                }
+                val change =
+                    CompletableFuture.supplyAsync {
+                        request(
+                            "/expo/$expoId/participant-phone-verification",
+                            "PATCH",
+                            """{"participantPhoneVerificationRequired":true}""",
+                        )
+                    }
+                awaitPatchRowLock() shouldBe true
+                connection.prepareStatement("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?").use { statement ->
+                    statement.setString(1, expoId)
+                    statement.executeUpdate() shouldBe 1
+                }
+                connection.commit()
+                assertError(change.get(10, TimeUnit.SECONDS), 409, "삭제 중인 박람회입니다.")
+                expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 0L
+            } finally {
+                connection.rollback()
+            }
+        }
     }
 
     @Test
