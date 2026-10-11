@@ -149,7 +149,7 @@ class ServiceInternalTokenHttpTests {
                         """{"participantId":1,"traineeId":1}"""
                     }
 
-                    path.startsWith("/internal/program-forms/") -> {
+                    path.startsWith("/internal/forms/by-id/") -> {
                         """{"id":"$FORM_ID","expoId":"expo","purpose":"PROGRAM","participantType":"STANDARD","startDate":"$START","endDate":"$END"}"""
                     }
 

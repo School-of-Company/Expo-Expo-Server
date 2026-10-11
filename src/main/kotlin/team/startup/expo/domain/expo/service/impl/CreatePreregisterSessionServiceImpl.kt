@@ -37,6 +37,7 @@ class CreatePreregisterSessionServiceImpl(
                     capacity = request.capacity,
                     waitingCapacity = request.waitingCapacity,
                     closed = request.closed,
+                    cancelEndedAt = request.cancelEndedAt?.truncatedTo(ChronoUnit.MICROS),
                 ),
             ).toResponse()
     }

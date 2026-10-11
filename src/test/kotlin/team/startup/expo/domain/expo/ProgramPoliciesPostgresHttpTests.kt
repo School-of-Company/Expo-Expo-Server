@@ -138,7 +138,7 @@ class ProgramPoliciesPostgresHttpTests {
             request("/$type/1", "PATCH", body(type, policy = policy(form = form, capacity = 3), id = 1, revision = 1)).statusCode() shouldBe
                 204
             list(type)[0].get("revision").asLong() shouldBe 2L
-            calls.count { it.first == "/internal/forms/by-id/$form" } shouldBe 2
+            calls.count { it.first == "/internal/forms/by-id/$form" } shouldBe 3
         }
         calls.any { it.first.startsWith("/internal/program-forms/") } shouldBe false
     }
