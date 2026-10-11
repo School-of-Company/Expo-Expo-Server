@@ -801,7 +801,7 @@ class ExpoApiPostgresHttpTests {
         val empty = internalBatch(expoId, """{"programIds":[]}""")
 
         response.statusCode() shouldBe 200
-        objectMapper.readTree(response.body()) shouldBe
+        legacyProgramFields(objectMapper.readTree(response.body())) shouldBe
             objectMapper.readTree(
                 """[
                     {"id":$firstId,"title":"연수 프로그램","startedAt":"2026-09-24 10:00","endedAt":"2026-09-24 11:00","category":"ESSENTIAL"},
@@ -842,7 +842,8 @@ class ExpoApiPostgresHttpTests {
         val response = internalStandard(expoId, programId.toString())
 
         response.statusCode() shouldBe 200
-        objectMapper.readTree(response.body()) shouldBe objectMapper.readTree("""{"id":$programId,"title":"일반 프로그램"}""")
+        legacyProgramFields(objectMapper.readTree(response.body()), titleOnly = true) shouldBe
+            objectMapper.readTree("""{"id":$programId,"title":"일반 프로그램"}""")
         assertError(internalStandard(expoId, otherProgramId.toString()), 404, "일반 프로그램을 찾지 못 했습니다.")
         assertError(internalStandard(expoId, "999999"), 404, "일반 프로그램을 찾지 못 했습니다.")
         assertError(internalStandard("not-found", programId.toString()), 404, "박람회를 찾을 수 없습니다.")
@@ -900,21 +901,21 @@ class ExpoApiPostgresHttpTests {
         val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
         statistics.clear()
         val standardResponse = request("/standard/program/$expoId", "GET")
-        statistics.prepareStatementCount shouldBe 2L
+        statistics.prepareStatementCount shouldBe 3L
         statistics.clear()
         val trainingResponse = request("/training/program/$expoId", "GET")
-        statistics.prepareStatementCount shouldBe 2L
+        statistics.prepareStatementCount shouldBe 3L
 
         standardResponse.statusCode() shouldBe 200
         trainingResponse.statusCode() shouldBe 200
-        objectMapper.readTree(standardResponse.body()) shouldBe
+        legacyProgramFields(objectMapper.readTree(standardResponse.body())) shouldBe
             objectMapper.readTree(
                 """[
                     {"id":$standardId,"title":"일반 프로그램","startedAt":"2026-09-24T09:00","endedAt":"2026-09-24T10:00"},
                     {"id":$secondStandardId,"title":"두 번째 일반","startedAt":"2026-09-24 12:00","endedAt":"2026-09-24 13:00"}
                 ]""",
             )
-        objectMapper.readTree(trainingResponse.body()) shouldBe
+        legacyProgramFields(objectMapper.readTree(trainingResponse.body())) shouldBe
             objectMapper.readTree(
                 """[
                     {"id":$trainingId,"title":"연수 프로그램","startedAt":"2026-09-24T10:00","endedAt":"2026-09-24T11:00","category":"ESSENTIAL"},
@@ -1449,6 +1450,23 @@ class ExpoApiPostgresHttpTests {
         val response = postExpo(VALID_REQUEST_JSON, authority = "ROLE_ADMIN")
         response.statusCode() shouldBe 201
         return objectMapper.readTree(response.body()).get("expoId").asString()
+    }
+
+    private fun legacyProgramFields(
+        tree: tools.jackson.databind.JsonNode,
+        titleOnly: Boolean = false,
+    ): tools.jackson.databind.JsonNode {
+        fun project(node: tools.jackson.databind.JsonNode): ObjectNode {
+            val copy = objectMapper.readTree(node.toString()) as ObjectNode
+            copy.get("revision").asLong() shouldBe 1L
+            copy.get("policy").isNull shouldBe true
+            copy.get("pendingRevision").isNull shouldBe true
+            UUID.fromString(copy.get("groupId").asString()).toString() shouldBe copy.get("groupId").asString()
+            listOf("expoId", "programType", "groupId", "policy", "revision", "pendingRevision").forEach { copy.remove(it) }
+            if (titleOnly) listOf("startedAt", "endedAt").forEach { copy.remove(it) }
+            return copy
+        }
+        return if (tree.isArray) objectMapper.createArrayNode().also { array -> tree.forEach { array.add(project(it)) } } else project(tree)
     }
 
     private fun databaseSnapshot(expoId: String): Map<String, List<Map<String, Any?>>> =

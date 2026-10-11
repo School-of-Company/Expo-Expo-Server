@@ -4,7 +4,9 @@ import jakarta.validation.Validator
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.presentation.dto.request.AddStandardProgramRequest
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
@@ -14,6 +16,7 @@ import team.startup.expo.global.exception.ExpectedException
 @Service
 class CreateStandardProgramListServiceImpl(
     private val expos: ExpoRepository,
+    private val policies: ProgramPolicySupport,
     private val programs: StandardProgramRepository,
     private val validator: Validator,
 ) : CreateStandardProgramListService {
@@ -31,11 +34,23 @@ class CreateStandardProgramListServiceImpl(
         if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
         programs.saveAll(
             requests.map { request ->
+                val definition =
+                    policies.create(
+                        expoId,
+                        ProgramType.STANDARD,
+                        request.title,
+                        request.startedAt.toString(),
+                        request.endedAt.toString(),
+                        null,
+                        request.policy,
+                    )
                 StandardProgram(
                     title = request.title,
                     startedAt = request.startedAt.toString(),
                     endedAt = request.endedAt.toString(),
                     expo = expo,
+                    groupId = definition.groupId,
+                    policyJson = policies.json(definition.policy),
                 )
             },
         )

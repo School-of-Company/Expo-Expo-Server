@@ -1,8 +1,10 @@
 package team.startup.expo.domain.training.presentation.dto.request
 
 import com.fasterxml.jackson.annotation.JsonFormat
+import jakarta.validation.Valid
 import jakarta.validation.constraints.NotNull
 import org.hibernate.validator.constraints.CodePointLength
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.training.entity.Category
 import java.time.LocalDateTime
 
@@ -18,6 +20,8 @@ data class AddTrainingProgramRequest(
     val endedAt: LocalDateTime,
     @field:NotNull
     val category: Category,
+    @field:Valid
+    val policy: ProgramPolicyRequest? = null,
 )
 
 data class UpdateTrainingProgramRequest(
@@ -34,4 +38,8 @@ data class UpdateTrainingProgramRequest(
     val endedAt: LocalDateTime,
     @field:NotNull
     val category: Category,
+    @field:Valid
+    val policy: ProgramPolicyRequest? = null,
+    @field:jakarta.validation.constraints.Positive
+    val revision: Long? = null,
 )

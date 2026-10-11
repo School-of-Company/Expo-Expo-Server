@@ -96,6 +96,9 @@ class TrainingSmsIntegrationTests {
     private lateinit var mapper: ObjectMapper
 
     @Autowired
+    private lateinit var policies: team.startup.expo.domain.expo.service.ProgramPolicySupport
+
+    @Autowired
     private lateinit var relay: PublishTrainingSmsService
 
     @Autowired
@@ -547,7 +550,7 @@ class TrainingSmsIntegrationTests {
                 team.startup.expo.global.attendance
                     .ProgramAttendanceClient("", "", mapper),
             )
-        val service = ApplyTrainingProgramListServiceImpl(expos, programs, missing, applicationSms, dbTransactions)
+        val service = ApplyTrainingProgramListServiceImpl(expos, policies, programs, missing, applicationSms, dbTransactions)
         val error = assertThrows(ExpectedException::class.java) { service.execute(ApplyTrainingProgramsRequest("training-1", listOf(1))) }
         error.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
         count() shouldBe 0L

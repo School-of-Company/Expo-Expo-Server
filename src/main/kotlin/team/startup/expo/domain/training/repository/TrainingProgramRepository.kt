@@ -12,4 +12,8 @@ interface TrainingProgramRepository : JpaRepository<TrainingProgram, Long> {
     fun findByExpoIdOrderByIdAsc(expoId: String): List<TrainingProgram>
 
     fun findAllByIdIn(ids: List<Long>): List<TrainingProgram>
+
+    fun existsByExpoIdAndPolicyJsonIsNotNull(expoId: String): Boolean
+
+    fun findByGroupId(groupId: java.util.UUID): List<TrainingProgram>
 }

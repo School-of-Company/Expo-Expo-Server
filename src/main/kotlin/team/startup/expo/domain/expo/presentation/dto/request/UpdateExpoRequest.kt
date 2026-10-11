@@ -5,6 +5,7 @@ import jakarta.validation.Valid
 import jakarta.validation.constraints.Positive
 import jakarta.validation.constraints.Size
 import org.hibernate.validator.constraints.CodePointLength
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.training.entity.Category
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -38,6 +39,10 @@ data class UpdateStandardProgramRequest(
     val startedAt: LocalDateTime,
     @field:JsonFormat(pattern = "yyyy-MM-dd HH:mm")
     val endedAt: LocalDateTime,
+    @field:Valid
+    val policy: ProgramPolicyRequest? = null,
+    @field:jakarta.validation.constraints.Positive
+    val revision: Long? = null,
 )
 
 data class UpdateTrainingProgramRequest(
@@ -50,4 +55,8 @@ data class UpdateTrainingProgramRequest(
     @field:JsonFormat(pattern = "yyyy-MM-dd HH:mm")
     val endedAt: LocalDateTime,
     val category: Category,
+    @field:Valid
+    val policy: ProgramPolicyRequest? = null,
+    @field:jakarta.validation.constraints.Positive
+    val revision: Long? = null,
 )

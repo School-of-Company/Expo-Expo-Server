@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.ApplyTrainingProgramService
@@ -16,6 +17,7 @@ import team.startup.expo.global.exception.ExpectedException
 @Service
 class ApplyTrainingProgramServiceImpl(
     private val expos: ExpoRepository,
+    private val policies: ProgramPolicySupport,
     private val programs: TrainingProgramRepository,
     private val dependencies: TrainingDependenciesClient,
     private val sms: TrainingApplicationSmsService,
@@ -35,6 +37,7 @@ class ApplyTrainingProgramServiceImpl(
                     expo to program
                 },
             )
+        policies.ensureAdmission(expo.id, program.policyJson)
         dependencies.requireApplicationConfiguration()
         val traineeId = dependencies.resolveTrainee(expo.id, request.trainingId)
         sms.execute(expo, traineeId, listOf(program), TrainingOperationType.ADD, sendSms = false)
