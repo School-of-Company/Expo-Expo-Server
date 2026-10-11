@@ -123,6 +123,20 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `기본 문서 경로는 박람회 ID로 처리하거나 변경하지 않는다`() {
+        val expoId = createExpo()
+        val before = databaseSnapshot(expoId)
+        listOf("/expo/v3/api-docs", "/expo/swagger-ui.html", "/expo/swagger-ui/index.html").forEach { path ->
+            request(path, "GET", authority = null).statusCode() shouldBe 401
+            listOf("GET", "PATCH", "DELETE").forEach { method ->
+                request(path, method).statusCode() shouldBe 403
+            }
+        }
+        request("/expo/$expoId", "GET").statusCode() shouldBe 200
+        databaseSnapshot(expoId) shouldBe before
+    }
+
+    @Test
     fun `v1 검증 오류는 message 안에 기존 DTO 이름과 필드 오류를 담는다`() {
         val payload = VALID_REQUEST_JSON.replace("\"설명\"", "\"${"가".repeat(1001)}\"")
         val response = postExpo(payload, "ROLE_ADMIN")
