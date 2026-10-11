@@ -162,6 +162,8 @@ class SecurityConfig {
                     .permitAll()
                     .requestMatchers(HttpMethod.PATCH, "/expo/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
+                    .requestMatchers(HttpMethod.PATCH, "/expo/{expo_id}/participant-phone-verification")
+                    .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.DELETE, "/expo/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .anyRequest()

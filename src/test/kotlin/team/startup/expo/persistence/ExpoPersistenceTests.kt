@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "29"
+            .version.version shouldBe "30"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -447,8 +447,8 @@ class ExpoPersistenceTests {
     }
 
     @Test
-    fun `V23부터 V28에서 V29까지 기존 데이터와 migration history를 보존한다`() {
-        listOf(23, 24, 25, 26, 27, 28).forEach { target ->
+    fun `V23부터 V29에서 V30까지 기존 데이터와 migration history를 보존한다`() {
+        listOf(23, 24, 25, 26, 27, 28, 29).forEach { target ->
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
                 try {
                     Flyway
@@ -518,7 +518,10 @@ class ExpoPersistenceTests {
                         .schemas("preregister_upgrade")
                         .load()
                         .migrate()
-                        .migrationsExecuted shouldBe 29 - target
+                        .migrationsExecuted shouldBe 30 - target
+                    val expo = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_expo WHERE id='$EXPO_ID'")
+                    expo["participant_phone_verification_required"] shouldBe false
+                    expo["participant_phone_verification_revision"] shouldBe 0L
                     upgradeJdbc
                         .queryForList(
                             "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",
@@ -526,7 +529,7 @@ class ExpoPersistenceTests {
                         historyBefore
                     val upgradedSessions = upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session")
                     upgradedSessions.forEach { it["cancel_ended_at"] shouldBe null }
-                    upgradedSessions.map { it - "cancel_ended_at" } shouldBe sessionsBefore
+                    upgradedSessions.map { it - "cancel_ended_at" } shouldBe sessionsBefore.map { it - "cancel_ended_at" }
                     upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change") shouldBe changesBefore
                     val standard = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_standard_program WHERE id=42")
                     val training = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_training_program WHERE id=42")

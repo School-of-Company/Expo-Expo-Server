@@ -1,5 +1,7 @@
 package team.startup.expo.domain.expo.presentation
 
+import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.responses.ApiResponse
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
@@ -23,6 +25,14 @@ class InternalExpoController(
     private val getTrainingProgramBatchService: GetTrainingProgramBatchService,
     private val getStandardProgramService: GetStandardProgramService,
 ) {
+    @Operation(
+        summary = "박람회 기간 및 참가자 전화번호 인증 설정 조회",
+        description = "Expo에 저장된 전화번호 인증 설정과 revision을 반환합니다. 조회 실패를 false로 처리하지 않습니다.",
+    )
+    @ApiResponse(responseCode = "200", description = "현재 설정과 revision. 기존 박람회 기본값은 false, 0입니다.")
+    @ApiResponse(responseCode = "401", description = "내부 토큰 누락 또는 불일치")
+    @ApiResponse(responseCode = "404", description = "박람회 없음")
+    @ApiResponse(responseCode = "409", description = "삭제 또는 변경 중인 박람회")
     @GetMapping("/{expo_id}")
     fun getExpoPeriod(
         @PathVariable("expo_id") expoId: String,
