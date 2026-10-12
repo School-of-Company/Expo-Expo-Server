@@ -56,11 +56,9 @@ expo:
   standard-created:
     enabled: ${KAFKA_STANDARD_CREATED_ENABLED:false}
   form-service-url: ${FORM_SERVICE_URL:}
-  delete-internal-token: ${EXPO_DELETE_INTERNAL_TOKEN:}
   standard:
     user-service-url: ${USER_SERVICE_URL:}
     application-service-url: ${APPLICATION_SERVICE_URL:}
-    internal-token: ${STANDARD_INTERNAL_TOKEN:}
   training:
     sms:
       enabled: ${KAFKA_TRAINING_SMS_ENABLED:false}
@@ -69,7 +67,6 @@ expo:
       batch-size: ${KAFKA_TRAINING_SMS_BATCH_SIZE:20}
     user-service-url: ${USER_SERVICE_URL:}
     application-service-url: ${APPLICATION_SERVICE_URL:}
-    internal-token: ${TRAINING_INTERNAL_TOKEN:}
   attention:
     service-url: ${ATTENTION_SERVICE_URL:}
     internal-token: ${ATTENTION_INTERNAL_TOKEN:}

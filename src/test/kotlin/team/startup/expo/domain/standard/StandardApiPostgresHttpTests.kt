@@ -309,7 +309,6 @@ class StandardApiPostgresHttpTests {
         fun dependencyProperties(registry: DynamicPropertyRegistry) {
             registry.add("expo.standard.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.standard.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
-            registry.add("expo.standard.internal-token") { "test-internal-token" }
             registry.add("USER_INTERNAL_TOKEN") { "test-user-token" }
             registry.add("APPLICATION_INTERNAL_TOKEN") { "test-application-token" }
             registry.add("expo.attention.service-url") { "http://127.0.0.1:${upstream.address.port}" }

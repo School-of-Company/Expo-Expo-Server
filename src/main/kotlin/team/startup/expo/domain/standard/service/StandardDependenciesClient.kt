@@ -17,8 +17,8 @@ import java.time.Duration
 class StandardDependenciesClient(
     @Value("\${expo.standard.user-service-url:}") private val userServiceUrl: String,
     @Value("\${expo.standard.application-service-url:}") private val applicationServiceUrl: String,
-    @Value("\${USER_INTERNAL_TOKEN:\${expo.standard.internal-token:}}") private val userToken: String,
-    @Value("\${APPLICATION_INTERNAL_TOKEN:\${expo.standard.internal-token:}}") private val applicationToken: String,
+    @Value("\${USER_INTERNAL_TOKEN:}") private val userToken: String,
+    @Value("\${APPLICATION_INTERNAL_TOKEN:}") private val applicationToken: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
 ) {
