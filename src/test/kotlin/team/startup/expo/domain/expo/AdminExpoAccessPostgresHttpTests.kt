@@ -87,6 +87,46 @@ class AdminExpoAccessPostgresHttpTests {
     }
 
     @Test
+    fun `cancel requires an explicit event grant and observes committed revocation with the same JWT`() {
+        val jwt = TestJwt.token("ROLE_ADMIN")
+        val path = "/internal/expo/$EXPO/admin-application-cancel-access"
+        request(path, jwt, token = null).statusCode() shouldBe 401
+        request(path).statusCode() shouldBe 401
+        request(path, "forged").statusCode() shouldBe 401
+        request(path, TestJwt.token("ROLE_ADMIN", ttlSeconds = -1)).statusCode() shouldBe 401
+        request(path, TestJwt.token("ROLE_STANDARD")).statusCode() shouldBe 403
+        access(jwt = jwt).statusCode() shouldBe 200
+        request("$path?permission=APPLICATION_CANCEL&adminId=999", jwt).statusCode() shouldBe 403
+        jdbc.update("INSERT INTO tb_admin_application_cancel_access(expo_id,admin_id) VALUES (?,1)", EXPO)
+        val response = request(path, jwt)
+        response.statusCode() shouldBe 200
+        val body = mapper.readTree(response.body())
+        body.get("expoId").asString() shouldBe EXPO
+        body.get("adminId").asLong() shouldBe 1L
+        body.get("permission").asString() shouldBe "APPLICATION_CANCEL"
+        body.get("policyVersion").asString() shouldBe "EXPO_ADMIN_APPLICATION_CANCEL_V1"
+        body.get("scope").asString() shouldBe "EXPO_ADMIN"
+        response.headers().firstValue("Cache-Control").orElse("") shouldBe "no-store"
+        forwardedOriginalJwt shouldBe true
+        request(path, TestJwt.token("ROLE_ADMIN", subject = "2")).statusCode() shouldBe 403
+        request("/internal/expo/$OTHER/admin-application-cancel-access", jwt).statusCode() shouldBe 403
+        request("/internal/expo/missing/admin-application-cancel-access", jwt).statusCode() shouldBe 404
+        userStatus = 403
+        request(path, jwt).statusCode() shouldBe 403
+        userStatus = 401
+        request(path, jwt).statusCode() shouldBe 401
+        userStatus = 503
+        request(path, jwt).statusCode() shouldBe 503
+        userStatus = 200
+        jdbc.update("DELETE FROM tb_admin_application_cancel_access WHERE expo_id=? AND admin_id=1", EXPO)
+        request(path, jwt).statusCode() shouldBe 403
+        access(jwt = jwt).statusCode() shouldBe 200
+        jdbc.update("INSERT INTO tb_admin_application_cancel_access(expo_id,admin_id) VALUES (?,1)", EXPO)
+        jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        request(path, jwt).statusCode() shouldBe 503
+    }
+
+    @Test
     fun `original JWT and service token are independently mandatory and spoofed identity is ignored`() {
         access(token = null).statusCode() shouldBe 401
         access(jwt = null).statusCode() shouldBe 401
