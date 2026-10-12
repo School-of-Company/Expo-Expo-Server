@@ -11,6 +11,7 @@ import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayl
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.repository.ProgramFormChangeRepository
@@ -36,6 +37,7 @@ class ProgramPolicySupport(
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
     private val forms: ProgramFormChangeRepository,
+    private val history: AdminChangeHistoryRepository,
 ) {
     fun command(vararg values: Any?): String = mapper.writeValueAsString(values)
 
@@ -161,7 +163,14 @@ class ProgramPolicySupport(
             val payload = build(expo)
             if (payload.mutations.any { it.previous?.revision == Long.MAX_VALUE }) conflict("프로그램 버전을 더 늘릴 수 없습니다.")
             if (payload.mutations.isEmpty() && payload.expoUpdate == null) return@execute null
-            changes.saveAndFlush(ProgramChange(expoId, commandJson = command, payloadJson = mapper.writeValueAsString(payload)))
+            changes.saveAndFlush(
+                ProgramChange(
+                    expoId,
+                    commandJson = command,
+                    payloadJson = mapper.writeValueAsString(payload),
+                    adminId = history.currentAdminId(),
+                ),
+            )
         }
 
     private fun validate(

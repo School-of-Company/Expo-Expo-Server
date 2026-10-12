@@ -276,6 +276,84 @@ class AdminExpoAccessPostgresHttpTests {
     private val supply get() = "/internal/expo/$EXPO/program-sessions"
 
     @Test
+    fun `history requires original current authority and isolates events with stable filtered pages`() {
+        val path = "/expo/$EXPO/admin-change-history"
+        request(path, token = null).statusCode() shouldBe 401
+        request(path, jwt = "forged", token = null).statusCode() shouldBe 401
+        request(path, jwt = TestJwt.token("ROLE_USER"), token = null).statusCode() shouldBe 403
+
+        fun history(query: String = "") = request(path + query, jwt = TestJwt.token("ROLE_ADMIN"), token = null)
+        history().statusCode() shouldBe 200
+        mapper.readTree(history().body()).get("totalElements").asLong() shouldBe 0L
+        listOf(EXPO, EXPO, OTHER).forEachIndexed { index, expo ->
+            jdbc.update(
+                "INSERT INTO tb_admin_change_history(expo_id,type,target_type,target_id,summary,admin_id,occurred_at) " +
+                    "VALUES (?,'SESSION_UPDATE','PREREGISTER_SESSION',?,'closed',?,'2026-10-12T01:00:00Z')",
+                expo,
+                index + 1,
+                if (index == 0) null else 1L,
+            )
+        }
+        val first = history("?size=1")
+        first.statusCode() shouldBe 200
+        first.headers().firstValue("Cache-Control").orElse("") shouldBe "no-store"
+        val page = mapper.readTree(first.body())
+        page.get("totalElements").asLong() shouldBe 2L
+        page.get("items")[0].get("targetId").asLong() shouldBe 2L
+        page.get("items")[0].get("adminId").asLong() shouldBe 1L
+        val second = mapper.readTree(history("?size=1&page=1").body())
+        second.get("items")[0].get("targetId").asLong() shouldBe 1L
+        second.get("items")[0].get("adminId").isNull shouldBe true
+        mapper.readTree(history("?type=PROGRAM_DELETE").body()).get("totalElements").asLong() shouldBe 0L
+        mapper
+            .readTree(history("?type=SESSION_UPDATE&from=2026-10-12T01:00:00Z&to=2026-10-12T02:00:00Z").body())
+            .get("totalElements")
+            .asLong() shouldBe 2L
+        mapper.readTree(history("?to=2026-10-12T01:00:00Z").body()).get("totalElements").asLong() shouldBe 0L
+        listOf(
+            "?page=-1",
+            "?size=0",
+            "?size=101",
+            "?type=invalid",
+            "?from=invalid",
+            "?from=2026-10-12T01:00:00Z&to=2026-10-12T01:00:00Z",
+            "?from=2026-10-12T02:00:00Z&to=2026-10-12T01:00:00Z",
+        ).forEach {
+            history(it).statusCode() shouldBe 400
+        }
+        userStatus = 403
+        history().statusCode() shouldBe 403
+        userStatus = 503
+        history().statusCode() shouldBe 503
+        userStatus = 200
+        request("/expo/missing/admin-change-history", jwt = TestJwt.token("ROLE_ADMIN"), token = null).statusCode() shouldBe 404
+        forwardedOriginalJwt shouldBe true
+    }
+
+    @Test
+    fun `history applies database page limits and excludes other events from counts`() {
+        jdbc.update(
+            "INSERT INTO tb_admin_change_history(expo_id,type,target_type,target_id,summary) " +
+                "SELECT ?,'PROGRAM_CREATE','STANDARD',n,'session' FROM generate_series(1,105) n",
+            EXPO,
+        )
+        jdbc.update(
+            "INSERT INTO tb_admin_change_history(expo_id,type,target_type,target_id,summary) VALUES (?,'PROGRAM_CREATE','STANDARD',1,'foreign')",
+            OTHER,
+        )
+
+        fun page(query: String) =
+            mapper.readTree(request("/expo/$EXPO/admin-change-history$query", jwt = TestJwt.token("ROLE_ADMIN"), token = null).body())
+        val first = page("?size=100")
+        first.get("items").size() shouldBe 100
+        first.get("totalElements").asLong() shouldBe 105L
+        page("?size=100&page=1").get("items").size() shouldBe 5
+        page("?size=100&page=2").get("items").size() shouldBe 0
+        jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        request("/expo/$EXPO/admin-change-history", jwt = TestJwt.token("ROLE_ADMIN"), token = null).statusCode() shouldBe 503
+    }
+
+    @Test
     fun `count items and version use one Postgres snapshot despite concurrent committed change`() {
         val transaction =
             TransactionTemplate(transactions).apply {

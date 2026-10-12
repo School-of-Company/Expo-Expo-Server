@@ -8,6 +8,7 @@ import team.startup.expo.domain.expo.entity.PreregisterSessionChange
 import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
 import team.startup.expo.domain.expo.presentation.dto.request.UpdatePreregisterSessionRequest
 import team.startup.expo.domain.expo.presentation.dto.response.toResponse
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
@@ -25,6 +26,7 @@ class UpdatePreregisterSessionServiceImpl(
     private val applyChange: ApplyPreregisterSessionChangeService,
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
+    private val history: AdminChangeHistoryRepository,
 ) : UpdatePreregisterSessionService {
     override fun execute(
         expoId: String,
@@ -73,6 +75,7 @@ class UpdatePreregisterSessionServiceImpl(
                         PreregisterSessionChangeOperation.UPDATE,
                         original.copy(closed = desired.closed) != desired,
                         definitionJson,
+                        adminId = history.currentAdminId(),
                     ),
                 )
             } ?: return

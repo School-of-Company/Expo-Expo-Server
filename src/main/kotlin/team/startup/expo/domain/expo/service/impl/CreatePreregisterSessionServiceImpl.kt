@@ -7,6 +7,7 @@ import team.startup.expo.domain.expo.entity.PreregisterSession
 import team.startup.expo.domain.expo.presentation.dto.request.PreregisterSessionRequest
 import team.startup.expo.domain.expo.presentation.dto.response.PreregisterSessionResponse
 import team.startup.expo.domain.expo.presentation.dto.response.toResponse
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.CreatePreregisterSessionService
@@ -17,6 +18,7 @@ import java.time.temporal.ChronoUnit
 class CreatePreregisterSessionServiceImpl(
     private val expos: ExpoRepository,
     private val sessions: PreregisterSessionRepository,
+    private val history: AdminChangeHistoryRepository,
 ) : CreatePreregisterSessionService {
     @Transactional
     override fun execute(
@@ -40,5 +42,8 @@ class CreatePreregisterSessionServiceImpl(
                     cancelEndedAt = request.cancelEndedAt?.truncatedTo(ChronoUnit.MICROS),
                 ),
             ).toResponse()
+            .also {
+                history.record(expoId, "SESSION_CREATE", "PREREGISTER_SESSION", it.id, it.title, history.currentAdminId())
+            }
     }
 }

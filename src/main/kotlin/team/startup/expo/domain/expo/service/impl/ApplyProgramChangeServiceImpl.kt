@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.service.ApplyProgramChangeService
@@ -34,6 +35,7 @@ class ApplyProgramChangeServiceImpl(
     private val images: AttachExpoImageService,
     private val attachment: ImageAttachmentSupport,
     private val transactions: TransactionTemplate,
+    private val history: AdminChangeHistoryRepository,
 ) : ApplyProgramChangeService {
     override fun execute(
         expoId: String,
@@ -92,33 +94,51 @@ class ApplyProgramChangeServiceImpl(
                 payload.mutations.mapNotNull { it.definition }.forEach { definition ->
                     when (definition.programType) {
                         ProgramType.STANDARD -> {
-                            standards.save(
-                                StandardProgram(
-                                    id = definition.id,
-                                    title = definition.title,
-                                    startedAt = definition.startedAt,
-                                    endedAt = definition.endedAt,
-                                    expo = updatedExpo,
-                                    groupId = definition.groupId,
-                                    policyJson = support.json(definition.policy),
-                                    revision = definition.revision,
-                                ),
+                            val saved =
+                                standards.save(
+                                    StandardProgram(
+                                        id = definition.id,
+                                        title = definition.title,
+                                        startedAt = definition.startedAt,
+                                        endedAt = definition.endedAt,
+                                        expo = updatedExpo,
+                                        groupId = definition.groupId,
+                                        policyJson = support.json(definition.policy),
+                                        revision = definition.revision,
+                                    ),
+                                )
+                            history.record(
+                                expoId,
+                                if (definition.id == null) "PROGRAM_CREATE" else "PROGRAM_UPDATE",
+                                definition.programType.name,
+                                requireNotNull(saved.id),
+                                definition.title,
+                                current.adminId,
                             )
                         }
 
                         ProgramType.TRAINING -> {
-                            trainings.save(
-                                TrainingProgram(
-                                    id = definition.id,
-                                    title = definition.title,
-                                    startedAt = definition.startedAt,
-                                    endedAt = definition.endedAt,
-                                    category = requireNotNull(definition.category),
-                                    expo = updatedExpo,
-                                    groupId = definition.groupId,
-                                    policyJson = support.json(definition.policy),
-                                    revision = definition.revision,
-                                ),
+                            val saved =
+                                trainings.save(
+                                    TrainingProgram(
+                                        id = definition.id,
+                                        title = definition.title,
+                                        startedAt = definition.startedAt,
+                                        endedAt = definition.endedAt,
+                                        category = requireNotNull(definition.category),
+                                        expo = updatedExpo,
+                                        groupId = definition.groupId,
+                                        policyJson = support.json(definition.policy),
+                                        revision = definition.revision,
+                                    ),
+                                )
+                            history.record(
+                                expoId,
+                                if (definition.id == null) "PROGRAM_CREATE" else "PROGRAM_UPDATE",
+                                definition.programType.name,
+                                requireNotNull(saved.id),
+                                definition.title,
+                                current.adminId,
                             )
                         }
                     }
@@ -127,6 +147,14 @@ class ApplyProgramChangeServiceImpl(
                 trainings.flush()
                 payload.mutations.filter { it.definition == null }.forEach { mutation ->
                     val previous = requireNotNull(mutation.previous)
+                    history.record(
+                        expoId,
+                        "PROGRAM_DELETE",
+                        previous.programType.name,
+                        requireNotNull(previous.id),
+                        previous.title,
+                        current.adminId,
+                    )
                     when (previous.programType) {
                         ProgramType.STANDARD -> {
                             standardDependencies.deleteApplications(requireNotNull(previous.id))

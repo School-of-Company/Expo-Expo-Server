@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.standard.entity.StandardProgram
@@ -19,6 +20,7 @@ class CreateStandardProgramServiceImpl(
     private val policies: ProgramPolicySupport,
     private val programs: StandardProgramRepository,
     private val validator: Validator,
+    private val history: AdminChangeHistoryRepository,
 ) : CreateStandardProgramService {
     @Transactional
     override fun execute(
@@ -42,15 +44,18 @@ class CreateStandardProgramServiceImpl(
                 null,
                 request.policy,
             )
-        programs.save(
-            StandardProgram(
-                title = request.title,
-                startedAt = request.startedAt.toString(),
-                endedAt = request.endedAt.toString(),
-                expo = expo,
-                groupId = definition.groupId,
-                policyJson = policies.json(definition.policy),
-            ),
-        )
+        programs
+            .save(
+                StandardProgram(
+                    title = request.title,
+                    startedAt = request.startedAt.toString(),
+                    endedAt = request.endedAt.toString(),
+                    expo = expo,
+                    groupId = definition.groupId,
+                    policyJson = policies.json(definition.policy),
+                ),
+            ).also {
+                history.record(expoId, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())
+            }
     }
 }
