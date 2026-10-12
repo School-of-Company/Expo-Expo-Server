@@ -18,9 +18,9 @@ class ExpoDeletionClient(
     @Value("\${expo.standard.application-service-url:}") private val applicationUrl: String,
     @Value("\${expo.form-service-url:}") private val formUrl: String,
     @Value("\${expo.standard.user-service-url:}") private val userUrl: String,
-    @Value("\${APPLICATION_INTERNAL_TOKEN:\${expo.delete-internal-token:}}") private val applicationToken: String,
-    @Value("\${FORM_INTERNAL_TOKEN:\${expo.delete-internal-token:}}") private val formToken: String,
-    @Value("\${USER_INTERNAL_TOKEN:\${expo.delete-internal-token:}}") private val userToken: String,
+    @Value("\${APPLICATION_INTERNAL_TOKEN:}") private val applicationToken: String,
+    @Value("\${FORM_INTERNAL_TOKEN:}") private val formToken: String,
+    @Value("\${USER_INTERNAL_TOKEN:}") private val userToken: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
 ) {
@@ -81,6 +81,9 @@ class ExpoDeletionClient(
         body: HttpRequest.BodyPublisher,
         service: String,
     ) {
+        if (baseUrl.isBlank() || token.isBlank()) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "박람회 삭제 내부 연동이 설정되지 않았습니다.")
+        }
         try {
             val request =
                 HttpRequest

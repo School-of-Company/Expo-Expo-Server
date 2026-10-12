@@ -1135,11 +1135,11 @@ class ProgramPoliciesPostgresHttpTests {
             registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
             registry.add("expo.standard.application-service-url") { url }
             registry.add("expo.standard.user-service-url") { url }
-            registry.add("expo.standard.internal-token") { "application-token" }
+            registry.add("USER_INTERNAL_TOKEN") { "user-token" }
+            registry.add("APPLICATION_INTERNAL_TOKEN") { "application-token" }
             registry.add("expo.training.application-service-url") { url }
-            registry.add("expo.training.internal-token") { "application-token" }
             registry.add("expo.form-service-url") { url }
-            registry.add("expo.form.internal-token") { "form-token" }
+            registry.add("FORM_INTERNAL_TOKEN") { "form-token" }
             registry.add("expo.attention.service-url") { url }
             registry.add("expo.attention.internal-token") { "attendance-token" }
         }

@@ -488,7 +488,7 @@ class ExpoApiPostgresHttpTests {
         withDeletionServer { exchange ->
             if (exchange.requestURI.path.startsWith("/attendance")) {
                 exchange.requestMethod shouldBe "DELETE"
-                exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-delete-token"
+                exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-attention-token"
                 calls.add(exchange.requestURI.path)
             }
             204
@@ -515,7 +515,7 @@ class ExpoApiPostgresHttpTests {
             ReflectionTestUtils.setField(attendances, "internalToken", "")
             request("/expo/$expoId", "DELETE").statusCode() shouldBe 503
             expoRepository.findById(expoId).orElseThrow().deletingAt shouldBe null
-            ReflectionTestUtils.setField(attendances, "internalToken", "test-delete-token")
+            ReflectionTestUtils.setField(attendances, "internalToken", "test-attention-token")
             val closed = java.net.ServerSocket(0)
             val closedPort = closed.localPort
             closed.close()
@@ -596,7 +596,7 @@ class ExpoApiPostgresHttpTests {
         server.createContext("/") { exchange ->
             val target = exchange.requestURI.path.split('/')[1]
             exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe
-                if (target == "attendance") "test-delete-token" else "test-$target-token"
+                if (target == "attendance") "test-attention-token" else "test-$target-token"
             val status = respond(exchange)
             exchange.sendResponseHeaders(status, -1)
             exchange.close()
@@ -610,7 +610,7 @@ class ExpoApiPostgresHttpTests {
         ReflectionTestUtils.setField(deletionClient, "formToken", "test-form-token")
         ReflectionTestUtils.setField(deletionClient, "userToken", "test-user-token")
         ReflectionTestUtils.setField(attendances, "serviceUrl", "$url/attendance")
-        ReflectionTestUtils.setField(attendances, "internalToken", "test-delete-token")
+        ReflectionTestUtils.setField(attendances, "internalToken", "test-attention-token")
         return AutoCloseable {
             server.stop(0)
             ReflectionTestUtils.setField(attendances, "serviceUrl", "http://127.0.0.1:${applicationServer.address.port}")
@@ -1612,9 +1612,9 @@ class ExpoApiPostgresHttpTests {
         fun applicationProperties(registry: DynamicPropertyRegistry) {
             registry.add("expo.attention.service-url") { "http://127.0.0.1:${applicationServer.address.port}" }
             registry.add("expo.attention.internal-token") { "test-program-token" }
+            registry.add("APPLICATION_INTERNAL_TOKEN") { "test-program-token" }
             for (domain in listOf("standard", "training")) {
                 registry.add("expo.$domain.application-service-url") { "http://127.0.0.1:${applicationServer.address.port}" }
-                registry.add("expo.$domain.internal-token") { "test-program-token" }
             }
         }
 

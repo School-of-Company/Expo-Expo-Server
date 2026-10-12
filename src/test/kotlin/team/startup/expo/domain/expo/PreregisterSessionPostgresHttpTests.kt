@@ -765,7 +765,7 @@ class PreregisterSessionPostgresHttpTests {
         fun properties(registry: DynamicPropertyRegistry) {
             registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
             registry.add("expo.standard.application-service-url") { applicationUrl }
-            registry.add("expo.standard.internal-token") { "test-application-token" }
+            registry.add("APPLICATION_INTERNAL_TOKEN") { "test-application-token" }
         }
 
         @JvmStatic

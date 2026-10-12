@@ -633,7 +633,7 @@ class TrainingSmsIntegrationTests {
             TrainingDependenciesClient(
                 "http://127.0.0.1:${upstream.address.port}",
                 "",
-                "test-training-token",
+                "test-user-token",
                 "test-application-token",
                 "",
                 mapper,
@@ -1028,7 +1028,7 @@ class TrainingSmsIntegrationTests {
                     val requestBody = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8)
                     var applicationStatus: Int? = null
                     if (path.contains("training-program-applications") && exchange.requestMethod in setOf("POST", "PUT")) {
-                        check(exchange.requestHeaders.getFirst("X-Internal-Token") == "test-training-token")
+                        check(exchange.requestHeaders.getFirst("X-Internal-Token") == "test-application-token")
                         beforeApplicationWrite(requestBody)
                         applicationCalls.incrementAndGet()
                         if (applicationDelayMillis > 0) Thread.sleep(applicationDelayMillis)
@@ -1052,7 +1052,7 @@ class TrainingSmsIntegrationTests {
                     if (path.contains("/trainees/details")) {
                         recipientCalls.incrementAndGet()
                         check(exchange.requestURI.rawQuery in setOf("cursor=41&size=1", "cursor=42&size=1"))
-                        check(exchange.requestHeaders.getFirst("X-Internal-Token") == "test-training-token")
+                        check(exchange.requestHeaders.getFirst("X-Internal-Token") == "test-user-token")
                     }
                     val status =
                         when {
@@ -1101,7 +1101,8 @@ class TrainingSmsIntegrationTests {
             registry.add("expo.training.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.form-service-url") { "http://127.0.0.1:${upstream.address.port}" }
-            registry.add("expo.training.internal-token") { "test-training-token" }
+            registry.add("USER_INTERNAL_TOKEN") { "test-user-token" }
+            registry.add("APPLICATION_INTERNAL_TOKEN") { "test-application-token" }
         }
 
         @Container

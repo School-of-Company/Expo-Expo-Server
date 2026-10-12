@@ -16,7 +16,7 @@ import java.time.Duration
 @Component
 class PreregisterSessionChangesClient(
     @Value("\${expo.standard.application-service-url:}") private val applicationUrl: String,
-    @Value("\${APPLICATION_INTERNAL_TOKEN:\${expo.standard.internal-token:}}") private val internalToken: String,
+    @Value("\${APPLICATION_INTERNAL_TOKEN:}") private val internalToken: String,
     private val mapper: ObjectMapper,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
