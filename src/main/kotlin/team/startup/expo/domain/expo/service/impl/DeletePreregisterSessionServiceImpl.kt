@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.entity.PreregisterSessionChange
 import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
@@ -20,6 +21,7 @@ class DeletePreregisterSessionServiceImpl(
     private val pendingChanges: PreregisterSessionChangeRepository,
     private val applyChange: ApplyPreregisterSessionChangeService,
     private val transactions: TransactionTemplate,
+    private val history: AdminChangeHistoryRepository,
 ) : DeletePreregisterSessionService {
     override fun execute(
         expoId: String,
@@ -46,7 +48,16 @@ class DeletePreregisterSessionServiceImpl(
                     }
                     return@execute existing
                 }
-                pendingChanges.save(PreregisterSessionChange(sessionId, revision + 1, PreregisterSessionChangeOperation.DELETE, true, null))
+                pendingChanges.save(
+                    PreregisterSessionChange(
+                        sessionId,
+                        revision + 1,
+                        PreregisterSessionChangeOperation.DELETE,
+                        true,
+                        null,
+                        adminId = history.currentAdminId(),
+                    ),
+                )
             } ?: return
         applyChange.execute(expoId, sessionId, pending.changeId)
     }

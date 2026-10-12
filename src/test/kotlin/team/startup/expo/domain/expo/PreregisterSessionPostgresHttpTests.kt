@@ -622,6 +622,35 @@ class PreregisterSessionPostgresHttpTests {
 
     private fun path(expoId: String = EXPO_ID): String = "/expo/$expoId/preregister-sessions"
 
+    @Test
+    fun `history records committed changes once and rolls back with the definition`() {
+        val id = create()
+
+        fun count() = jdbc.queryForObject("SELECT count(*) FROM tb_admin_change_history WHERE expo_id=?", Long::class.java, EXPO_ID)
+        count() shouldBe 1L
+        forcedStatus = 503
+        request(path(id), "PATCH", updateBody()).statusCode() shouldBe 502
+        count() shouldBe 1L
+        forcedStatus = null
+        request(path(id) + "/changes/retry", "POST", subject = "2").statusCode() shouldBe 204
+        request(path(id) + "/changes/retry", "POST").statusCode() shouldBe 204
+        count() shouldBe 2L
+        jdbc.queryForList("SELECT admin_id FROM tb_admin_change_history", Long::class.java) shouldBe listOf(1L, 1L)
+        jdbc.execute("ALTER TABLE tb_admin_change_history ADD CONSTRAINT test_reject_history CHECK (type <> 'SESSION_DELETE')")
+        try {
+            request(path(id) + "?revision=2", "DELETE").statusCode() shouldBe 500
+            read(id).get("revision").asLong() shouldBe 2L
+            count() shouldBe 2L
+        } finally {
+            jdbc.execute("ALTER TABLE tb_admin_change_history DROP CONSTRAINT test_reject_history")
+        }
+        request(path(id) + "/changes/retry", "POST").statusCode() shouldBe 204
+        request(path(id) + "/changes/retry", "POST").statusCode() shouldBe 204
+        count() shouldBe 3L
+        jdbc.queryForList("SELECT type FROM tb_admin_change_history ORDER BY id", String::class.java) shouldBe
+            listOf("SESSION_CREATE", "SESSION_UPDATE", "SESSION_DELETE")
+    }
+
     private fun path(
         id: Long,
         expoId: String = EXPO_ID,
@@ -659,6 +688,7 @@ class PreregisterSessionPostgresHttpTests {
         body: String = "",
         role: String? = "ROLE_ADMIN",
         token: String? = null,
+        subject: String = "1",
     ): HttpResponse<String> {
         val request =
             HttpRequest
@@ -666,7 +696,7 @@ class PreregisterSessionPostgresHttpTests {
                 .timeout(java.time.Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
                 .apply {
-                    role?.let { header("Authorization", "Bearer ${TestJwt.token(it)}") }
+                    role?.let { header("Authorization", "Bearer ${TestJwt.token(it, subject = subject)}") }
                     token?.let { header("X-Internal-Token", it) }
                 }.method(method, if (body.isEmpty()) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofString(body))
                 .build()
