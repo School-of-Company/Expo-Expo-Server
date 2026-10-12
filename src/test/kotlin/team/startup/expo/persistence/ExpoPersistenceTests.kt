@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "29"
+            .version.version shouldBe "30"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -447,8 +447,8 @@ class ExpoPersistenceTests {
     }
 
     @Test
-    fun `V23부터 V28에서 V29까지 기존 데이터와 migration history를 보존한다`() {
-        listOf(23, 24, 25, 26, 27, 28).forEach { target ->
+    fun `V23부터 V29에서 V30까지 기존 데이터와 migration history를 보존한다`() {
+        listOf(23, 24, 25, 26, 27, 28, 29).forEach { target ->
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
                 try {
                     Flyway
@@ -493,6 +493,12 @@ class ExpoPersistenceTests {
                                 "INSERT INTO tb_preregister_session_change (session_id,change_id,next_revision,operation,definition_changed) VALUES (1,'00000000-0000-0000-0000-000000000001',2,'DELETE',false)",
                             )
                         }
+                        if (target >= 27) {
+                            statement.execute(
+                                "INSERT INTO tb_program_change(expo_id,change_id,command_json,payload_json) " +
+                                    "VALUES ('$EXPO_ID','00000000-0000-0000-0000-000000000002','[]','{}')",
+                            )
+                        }
                     }
                     val sessionsBefore =
                         if (target >=
@@ -518,7 +524,7 @@ class ExpoPersistenceTests {
                         .schemas("preregister_upgrade")
                         .load()
                         .migrate()
-                        .migrationsExecuted shouldBe 29 - target
+                        .migrationsExecuted shouldBe 30 - target
                     upgradeJdbc
                         .queryForList(
                             "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",
@@ -526,8 +532,21 @@ class ExpoPersistenceTests {
                         historyBefore
                     val upgradedSessions = upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session")
                     upgradedSessions.forEach { it["cancel_ended_at"] shouldBe null }
-                    upgradedSessions.map { it - "cancel_ended_at" } shouldBe sessionsBefore
-                    upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change") shouldBe changesBefore
+                    upgradedSessions.map { it - "cancel_ended_at" } shouldBe sessionsBefore.map { it - "cancel_ended_at" }
+                    val upgradedChanges = upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change")
+                    upgradedChanges.forEach { it["admin_id"] shouldBe null }
+                    upgradedChanges.map { it - "admin_id" } shouldBe changesBefore
+                    val programChanges = upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_program_change")
+                    programChanges.size shouldBe if (target >= 27) 1 else 0
+                    programChanges.forEach {
+                        it["admin_id"] shouldBe null
+                        it["command_json"] shouldBe "[]"
+                        it["payload_json"] shouldBe "{}"
+                    }
+                    upgradeJdbc.queryForObject(
+                        "SELECT count(*) FROM preregister_upgrade.tb_admin_change_history",
+                        Long::class.java,
+                    ) shouldBe 0L
                     val standard = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_standard_program WHERE id=42")
                     val training = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_training_program WHERE id=42")
                     if (target >= 27) {

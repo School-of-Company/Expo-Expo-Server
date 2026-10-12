@@ -460,6 +460,7 @@ class ProgramPoliciesPostgresHttpTests {
         list("standard", id).size() shouldBe 1
         list("standard", id)[0].get("policy").isNull shouldBe true
         list("standard", id)[0].get("groupId").isString shouldBe true
+        jdbc.queryForObject("SELECT count(*) FROM tb_admin_change_history WHERE expo_id=?", Long::class.java, id) shouldBe 1L
     }
 
     @Test
@@ -472,6 +473,8 @@ class ProgramPoliciesPostgresHttpTests {
         request("/training/1", "DELETE").statusCode() shouldBe 204
         list("standard").size() shouldBe 0
         list("training").size() shouldBe 0
+        jdbc.queryForList("SELECT type FROM tb_admin_change_history ORDER BY id", String::class.java) shouldBe
+            listOf("PROGRAM_CREATE", "PROGRAM_CREATE", "PROGRAM_DELETE", "PROGRAM_DELETE")
         calls.any { it.first == "/internal/program-attendances/standard/1" } shouldBe true
         calls.any { it.first == "/internal/program-attendances/training/1" } shouldBe true
         val changes = calls.filter { it.first.contains("/program-changes/") }
@@ -607,6 +610,29 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     private fun pending(): Long = jdbc.queryForObject("SELECT count(*) FROM tb_program_change", Long::class.java)!!
+
+    @Test
+    fun `program policy history shares the commit and no-op retries add no records`() {
+        create("standard")
+        create("training")
+        val id = list("standard").first().get("id").asLong()
+        update(id, policy(capacity = 3)).statusCode() shouldBe 204
+        update(id, policy(capacity = 3)).statusCode() shouldBe 204
+        jdbc.queryForList("SELECT type FROM tb_admin_change_history ORDER BY id", String::class.java) shouldBe
+            listOf("PROGRAM_CREATE", "PROGRAM_CREATE", "PROGRAM_UPDATE")
+        jdbc.queryForList("SELECT admin_id FROM tb_admin_change_history ORDER BY id", Long::class.java) shouldBe listOf(1L, 1L, 1L)
+        jdbc.execute("ALTER TABLE tb_admin_change_history ADD CONSTRAINT test_reject_history CHECK (type <> 'PROGRAM_UPDATE') NOT VALID")
+        try {
+            update(id, policy(capacity = 4), revision = 2).statusCode() shouldBe 500
+            readPolicy(id).get("capacity").asInt() shouldBe 3
+            jdbc.queryForObject("SELECT count(*) FROM tb_admin_change_history", Long::class.java) shouldBe 3L
+        } finally {
+            jdbc.execute("ALTER TABLE tb_admin_change_history DROP CONSTRAINT test_reject_history")
+        }
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        readPolicy(id).get("capacity").asInt() shouldBe 4
+        jdbc.queryForObject("SELECT count(*) FROM tb_admin_change_history", Long::class.java) shouldBe 4L
+    }
 
     private fun formChange(
         form: String = STANDARD_FORM,

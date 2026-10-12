@@ -7,6 +7,7 @@ import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.entity.PreregisterSession
 import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
 import team.startup.expo.domain.expo.presentation.dto.response.PreregisterSessionResponse
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
@@ -24,6 +25,7 @@ class ApplyPreregisterSessionChangeServiceImpl(
     private val changes: PreregisterSessionChangesClient,
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
+    private val history: AdminChangeHistoryRepository,
 ) : ApplyPreregisterSessionChangeService {
     override fun execute(
         expoId: String,
@@ -58,6 +60,14 @@ class ApplyPreregisterSessionChangeServiceImpl(
             if (current.revision != pending.nextRevision - 1) throw ExpectedException(HttpStatus.CONFLICT, "회차 버전이 변경됐습니다. 다시 조회해 주세요.")
             pendingChanges.delete(currentPending)
             pendingChanges.flush()
+            history.record(
+                expoId,
+                "SESSION_${pending.operation.name}",
+                "PREREGISTER_SESSION",
+                sessionId,
+                definition?.title ?: current.title,
+                currentPending.adminId,
+            )
             when (pending.operation) {
                 PreregisterSessionChangeOperation.UPDATE -> {
                     val updated = requireNotNull(definition)

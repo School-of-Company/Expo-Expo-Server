@@ -18,4 +18,6 @@ class ProgramChange(
     val commandJson: String,
     @field:Column(name = "payload_json", nullable = false, columnDefinition = "TEXT")
     val payloadJson: String,
+    @field:Column(name = "admin_id")
+    val adminId: Long? = null,
 )

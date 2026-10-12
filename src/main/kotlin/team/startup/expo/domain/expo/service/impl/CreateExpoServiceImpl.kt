@@ -8,6 +8,7 @@ import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.CreateExpoService
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
@@ -27,6 +28,7 @@ class CreateExpoServiceImpl(
     private val trainingProgramRepository: TrainingProgramRepository,
     private val expoIdGenerator: ExpoIdGenerator,
     private val attachExpoImageService: AttachExpoImageService,
+    private val history: AdminChangeHistoryRepository,
 ) : CreateExpoService {
     @Transactional
     override fun execute(request: CreateExpoRequest): CreateExpoResponse {
@@ -46,51 +48,57 @@ class CreateExpoServiceImpl(
             )
         expoRepository.saveAndFlush(expo)
 
-        standardProgramRepository.saveAllAndFlush(
-            request.addStandardProRequestDto.map { program ->
-                val definition =
-                    policies.create(
-                        expo.id,
-                        ProgramType.STANDARD,
-                        program.title,
-                        program.startedAt.toString(),
-                        program.endedAt.toString(),
-                        null,
-                        program.policy,
+        standardProgramRepository
+            .saveAllAndFlush(
+                request.addStandardProRequestDto.map { program ->
+                    val definition =
+                        policies.create(
+                            expo.id,
+                            ProgramType.STANDARD,
+                            program.title,
+                            program.startedAt.toString(),
+                            program.endedAt.toString(),
+                            null,
+                            program.policy,
+                        )
+                    StandardProgram(
+                        title = program.title,
+                        startedAt = program.startedAt.toString(),
+                        endedAt = program.endedAt.toString(),
+                        expo = expo,
+                        groupId = definition.groupId,
+                        policyJson = policies.json(definition.policy),
                     )
-                StandardProgram(
-                    title = program.title,
-                    startedAt = program.startedAt.toString(),
-                    endedAt = program.endedAt.toString(),
-                    expo = expo,
-                    groupId = definition.groupId,
-                    policyJson = policies.json(definition.policy),
-                )
-            },
-        )
-        trainingProgramRepository.saveAllAndFlush(
-            request.addTrainingProRequestDto.map { program ->
-                val definition =
-                    policies.create(
-                        expo.id,
-                        ProgramType.TRAINING,
-                        program.title,
-                        program.startedAt.toString(),
-                        program.endedAt.toString(),
-                        program.category,
-                        program.policy,
+                },
+            ).forEach {
+                history.record(expo.id, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())
+            }
+        trainingProgramRepository
+            .saveAllAndFlush(
+                request.addTrainingProRequestDto.map { program ->
+                    val definition =
+                        policies.create(
+                            expo.id,
+                            ProgramType.TRAINING,
+                            program.title,
+                            program.startedAt.toString(),
+                            program.endedAt.toString(),
+                            program.category,
+                            program.policy,
+                        )
+                    TrainingProgram(
+                        title = program.title,
+                        startedAt = program.startedAt.toString(),
+                        endedAt = program.endedAt.toString(),
+                        category = program.category,
+                        expo = expo,
+                        groupId = definition.groupId,
+                        policyJson = policies.json(definition.policy),
                     )
-                TrainingProgram(
-                    title = program.title,
-                    startedAt = program.startedAt.toString(),
-                    endedAt = program.endedAt.toString(),
-                    category = program.category,
-                    expo = expo,
-                    groupId = definition.groupId,
-                    policyJson = policies.json(definition.policy),
-                )
-            },
-        )
+                },
+            ).forEach {
+                history.record(expo.id, "PROGRAM_CREATE", "TRAINING", requireNotNull(it.id), it.title, history.currentAdminId())
+            }
 
         val uploadedBy =
             SecurityContextHolder.getContext().authentication?.name

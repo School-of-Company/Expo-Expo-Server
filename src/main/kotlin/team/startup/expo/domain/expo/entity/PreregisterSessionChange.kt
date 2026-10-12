@@ -30,6 +30,8 @@ class PreregisterSessionChange(
 
     @field:Column(name = "change_id", nullable = false)
     val changeId: UUID = UUID.randomUUID(),
+    @field:Column(name = "admin_id")
+    val adminId: Long? = null,
 )
 
 enum class PreregisterSessionChangeOperation {

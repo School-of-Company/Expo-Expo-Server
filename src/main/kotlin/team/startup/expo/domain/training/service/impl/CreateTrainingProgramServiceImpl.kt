@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.entity.TrainingProgram
@@ -19,6 +20,7 @@ class CreateTrainingProgramServiceImpl(
     private val policies: ProgramPolicySupport,
     private val programs: TrainingProgramRepository,
     private val validator: Validator,
+    private val history: AdminChangeHistoryRepository,
 ) : CreateTrainingProgramService {
     @Transactional
     override fun execute(
@@ -40,16 +42,19 @@ class CreateTrainingProgramServiceImpl(
                 request.category,
                 request.policy,
             )
-        programs.save(
-            TrainingProgram(
-                title = request.title,
-                startedAt = request.startedAt.toString(),
-                endedAt = request.endedAt.toString(),
-                category = request.category,
-                expo = expo,
-                groupId = definition.groupId,
-                policyJson = policies.json(definition.policy),
-            ),
-        )
+        programs
+            .save(
+                TrainingProgram(
+                    title = request.title,
+                    startedAt = request.startedAt.toString(),
+                    endedAt = request.endedAt.toString(),
+                    category = request.category,
+                    expo = expo,
+                    groupId = definition.groupId,
+                    policyJson = policies.json(definition.policy),
+                ),
+            ).also {
+                history.record(expoId, "PROGRAM_CREATE", "TRAINING", requireNotNull(it.id), it.title, history.currentAdminId())
+            }
     }
 }

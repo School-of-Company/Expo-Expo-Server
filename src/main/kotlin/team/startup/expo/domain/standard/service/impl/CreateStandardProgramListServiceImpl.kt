@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.standard.entity.StandardProgram
@@ -19,6 +20,7 @@ class CreateStandardProgramListServiceImpl(
     private val policies: ProgramPolicySupport,
     private val programs: StandardProgramRepository,
     private val validator: Validator,
+    private val history: AdminChangeHistoryRepository,
 ) : CreateStandardProgramListService {
     @Transactional
     override fun execute(
@@ -32,27 +34,30 @@ class CreateStandardProgramListServiceImpl(
             expos.findLockedById(expoId)
                 ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
         if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
-        programs.saveAll(
-            requests.map { request ->
-                val definition =
-                    policies.create(
-                        expoId,
-                        ProgramType.STANDARD,
-                        request.title,
-                        request.startedAt.toString(),
-                        request.endedAt.toString(),
-                        null,
-                        request.policy,
+        programs
+            .saveAll(
+                requests.map { request ->
+                    val definition =
+                        policies.create(
+                            expoId,
+                            ProgramType.STANDARD,
+                            request.title,
+                            request.startedAt.toString(),
+                            request.endedAt.toString(),
+                            null,
+                            request.policy,
+                        )
+                    StandardProgram(
+                        title = request.title,
+                        startedAt = request.startedAt.toString(),
+                        endedAt = request.endedAt.toString(),
+                        expo = expo,
+                        groupId = definition.groupId,
+                        policyJson = policies.json(definition.policy),
                     )
-                StandardProgram(
-                    title = request.title,
-                    startedAt = request.startedAt.toString(),
-                    endedAt = request.endedAt.toString(),
-                    expo = expo,
-                    groupId = definition.groupId,
-                    policyJson = policies.json(definition.policy),
-                )
-            },
-        )
+                },
+            ).forEach {
+                history.record(expoId, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())
+            }
     }
 }
