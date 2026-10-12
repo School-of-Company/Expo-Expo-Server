@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "29"
+            .version.version shouldBe "31"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -447,7 +447,7 @@ class ExpoPersistenceTests {
     }
 
     @Test
-    fun `V23부터 V28에서 V29까지 기존 데이터와 migration history를 보존한다`() {
+    fun `V23부터 V28에서 최신 버전까지 기존 데이터와 migration history를 보존한다`() {
         listOf(23, 24, 25, 26, 27, 28).forEach { target ->
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
                 try {
@@ -517,8 +517,10 @@ class ExpoPersistenceTests {
                         .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
                         .schemas("preregister_upgrade")
                         .load()
-                        .migrate()
-                        .migrationsExecuted shouldBe 29 - target
+                        .let { upgrade ->
+                            val pending = upgrade.info().pending().size
+                            upgrade.migrate().migrationsExecuted shouldBe pending
+                        }
                     upgradeJdbc
                         .queryForList(
                             "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",

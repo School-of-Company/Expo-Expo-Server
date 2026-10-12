@@ -107,8 +107,11 @@ class SecurityConfig {
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/image")
                     .hasAuthority(ADMIN_AUTHORITY)
-                    .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/admin-access")
-                    .authenticated()
+                    .requestMatchers(
+                        HttpMethod.GET,
+                        "/internal/expo/{expo_id}/admin-access",
+                        "/internal/expo/{expo_id}/admin-application-cancel-access",
+                    ).authenticated()
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/program-sessions")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}", "/internal/expo/{expo_id}/standard-programs/{program_id}")
