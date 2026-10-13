@@ -10,8 +10,10 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.persistence.autoconfigure.EntityScan
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
+import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+import org.springframework.context.annotation.Bean
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -28,6 +30,9 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
@@ -1155,5 +1160,12 @@ class ProgramPoliciesPostgresHttpTests {
         @Container
         @ServiceConnection
         val postgres = PostgreSQLContainer("postgres:17-alpine")
+    }
+
+    // Fixture expos run 2026-10-11..12 (Asia/Seoul); pin "today" so date checks do not fail after that period.
+    @TestConfiguration
+    class ClockConfig {
+        @Bean
+        fun testClock(): Clock = Clock.fixed(Instant.parse("2026-10-11T12:00:00+09:00"), ZoneId.of("Asia/Seoul"))
     }
 }
