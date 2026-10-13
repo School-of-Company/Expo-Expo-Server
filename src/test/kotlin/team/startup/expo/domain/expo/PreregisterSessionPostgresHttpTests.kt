@@ -1,6 +1,7 @@
 package team.startup.expo.domain.expo
 
 import com.sun.net.httpserver.HttpServer
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.AfterAll
@@ -623,6 +624,40 @@ class PreregisterSessionPostgresHttpTests {
     private fun path(expoId: String = EXPO_ID): String = "/expo/$expoId/preregister-sessions"
 
     @Test
+    fun `대기 정원 채택은 관리자만 기대값을 신청 서비스 내부 API로 전달하고 응답 상태를 변환한다`() {
+        val id = create()
+        val target = path(id) + "/waiting-capacity"
+        request(target, "PUT", """{"expected":10}""", role = null).statusCode() shouldBe 401
+        request(target, "PUT", """{"expected":10}""", role = "ROLE_USER").statusCode() shouldBe 403
+        listOf("""{"expected":-1}""", "{}", """{"expected":2147483648}""").forEach {
+            withClue(it) { request(target, "PUT", it).statusCode() shouldBe 400 }
+        }
+        request(path(id, OTHER_EXPO_ID) + "/waiting-capacity", "PUT", """{"expected":10}""").statusCode() shouldBe 404
+        request(path(id + 1) + "/waiting-capacity", "PUT", """{"expected":10}""").statusCode() shouldBe 404
+        calls.size shouldBe 0
+
+        request(target, "PUT", """{"expected":10}""").statusCode() shouldBe 204
+        calls.single().let {
+            it.method shouldBe "PUT"
+            it.path shouldBe "/internal/expos/$EXPO_ID/preregister-sessions/$id/waiting-capacity"
+            it.token shouldBe "test-application-token"
+            mapper.readTree(it.body) shouldBe mapper.readTree("""{"expected":10}""")
+        }
+        mapOf(404 to 404, 409 to 409, 400 to 502, 401 to 502, 500 to 502, 503 to 502).forEach { (remote, local) ->
+            forcedStatus = remote
+            request(target, "PUT", """{"expected":10}""").statusCode() shouldBe local
+        }
+        forcedStatus = null
+        read(id).get("revision").asLong() shouldBe 1L
+        journalCount(id) shouldBe 0L
+
+        jdbc.update("UPDATE tb_expo SET deleting_at=now() WHERE id=?", EXPO_ID)
+        calls.clear()
+        request(target, "PUT", """{"expected":10}""").statusCode() shouldBe 409
+        calls.size shouldBe 0
+    }
+
+    @Test
     fun `history records committed changes once and rolls back with the definition`() {
         val id = create()
 
@@ -741,11 +776,13 @@ class PreregisterSessionPostgresHttpTests {
                             path,
                             exchange.requestHeaders.getFirst("X-Internal-Token"),
                             body,
-                            tree.get("operation").asString(),
+                            tree.get("operation")?.asString() ?: "ADOPT",
                         )
                     calls += call
                     val status =
-                        forcedStatus ?: if (id in histories && tree.get("definitionChanged").asBoolean()) {
+                        forcedStatus ?: if (call.operation == "ADOPT") {
+                            204
+                        } else if (id in histories && tree.get("definitionChanged").asBoolean()) {
                             409
                         } else {
                             val previous = pending.putIfAbsent(path, body)
