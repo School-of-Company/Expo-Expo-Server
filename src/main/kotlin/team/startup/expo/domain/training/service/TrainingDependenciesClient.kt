@@ -20,8 +20,8 @@ import java.util.UUID
 class TrainingDependenciesClient(
     @Value("\${expo.training.user-service-url:}") private val userServiceUrl: String,
     @Value("\${expo.training.application-service-url:}") private val applicationServiceUrl: String,
-    @Value("\${USER_INTERNAL_TOKEN:\${expo.training.internal-token:}}") private val userToken: String,
-    @Value("\${APPLICATION_INTERNAL_TOKEN:\${expo.training.internal-token:}}") private val applicationToken: String,
+    @Value("\${USER_INTERNAL_TOKEN:}") private val userToken: String,
+    @Value("\${APPLICATION_INTERNAL_TOKEN:}") private val applicationToken: String,
     @Value("\${expo.form-service-url:}") private val formServiceUrl: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,

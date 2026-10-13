@@ -691,7 +691,6 @@ class TrainingApplicationHttpContractTests {
             registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
             registry.add("expo.training.user-service-url") { "http://127.0.0.1:${upstream.address.port}" }
             registry.add("expo.training.application-service-url") { "http://127.0.0.1:${upstream.address.port}" }
-            registry.add("expo.training.internal-token") { "test-training-internal-token" }
             registry.add("USER_INTERNAL_TOKEN") { "test-user-token" }
             registry.add("APPLICATION_INTERNAL_TOKEN") { "test-application-token" }
             registry.add("expo.attention.service-url") { "http://127.0.0.1:${upstream.address.port}" }

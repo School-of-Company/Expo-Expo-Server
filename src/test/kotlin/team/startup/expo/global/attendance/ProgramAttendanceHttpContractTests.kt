@@ -168,7 +168,8 @@ class ProgramAttendanceHttpContractTests {
             attention.path shouldBe "/internal/program-attendances/${kind.path}/1"
             attention.token shouldBe "test-attention-token"
             val names = calls.single { it.path.endsWith("/names") }
-            names.token shouldBe "test-${kind.path}-token"
+            names.token shouldBe "test-user-token"
+            calls.single { it.path.endsWith("/program/1") }.token shouldBe "test-application-token"
             mapper.readTree(names.body).get("${id}s").toString() shouldBe "[44,42,43]"
         }
     }
@@ -282,10 +283,10 @@ class ProgramAttendanceHttpContractTests {
             registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
             registry.add("expo.standard.user-service-url") { url }
             registry.add("expo.standard.application-service-url") { url }
-            registry.add("expo.standard.internal-token") { "test-standard-token" }
+            registry.add("USER_INTERNAL_TOKEN") { "test-user-token" }
             registry.add("expo.training.user-service-url") { url }
             registry.add("expo.training.application-service-url") { url }
-            registry.add("expo.training.internal-token") { "test-training-token" }
+            registry.add("APPLICATION_INTERNAL_TOKEN") { "test-application-token" }
             registry.add("expo.attention.service-url") { url }
             registry.add("expo.attention.internal-token") { "test-attention-token" }
         }

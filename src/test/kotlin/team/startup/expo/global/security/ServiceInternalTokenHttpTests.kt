@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer
+import org.springframework.boot.test.context.assertj.AssertableApplicationContext
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramOccupation
@@ -26,155 +28,193 @@ import java.util.UUID
 
 class ServiceInternalTokenHttpTests {
     @Test
-    fun `explicit receiver tokens override conflicting legacy tokens even with the same service URL`() {
-        verifyCalls(
-            listOf(
-                "USER_INTERNAL_TOKEN=receiver-user",
-                "APPLICATION_INTERNAL_TOKEN=receiver-application",
-                "FORM_INTERNAL_TOKEN=receiver-form",
-            ),
-            "receiver-user",
-            "receiver-application",
-            "receiver-user",
-            "receiver-application",
-            "receiver-application",
-            "receiver-form",
-            "receiver-application",
-            "receiver-application",
-            "receiver-form",
-            "receiver-user",
-        )
-    }
-
-    @Test
-    fun `absent receiver tokens retain each callers legacy configuration`() {
-        verifyCalls(
-            emptyList(),
-            "legacy-standard",
-            "legacy-standard",
-            "legacy-training",
-            "legacy-training",
-            "legacy-standard",
-            "legacy-form",
-            "legacy-standard",
-            "legacy-delete",
-            "legacy-delete",
-            "legacy-delete",
-        )
-    }
-
-    @Test
-    fun `partial receiver configuration falls back only for absent targets`() {
-        verifyCalls(
-            listOf("USER_INTERNAL_TOKEN=receiver-user"),
-            "receiver-user",
-            "legacy-standard",
-            "receiver-user",
-            "legacy-training",
-            "legacy-standard",
-            "legacy-form",
-            "legacy-standard",
-            "legacy-delete",
-            "legacy-delete",
-            "receiver-user",
-        )
-    }
-
-    @Test
-    fun `explicit blank receiver tokens reject calls without falling back`() {
-        withServer { runner, calls ->
-            runner.withPropertyValues("USER_INTERNAL_TOKEN=", "APPLICATION_INTERNAL_TOKEN=", "FORM_INTERNAL_TOKEN=").run { context ->
+    fun `each receiver gets only its own token even when legacy tokens are configured`() {
+        withServers { runner, calls ->
+            runner.withPropertyValues(*(TARGET_TOKENS + LEGACY_TOKENS).toTypedArray()).run { context ->
                 context.startupFailure shouldBe null
-                val standard = context.getBean(StandardDependenciesClient::class.java)
-                val training = context.getBean(TrainingDependenciesClient::class.java)
-                val policy = context.getBean(ProgramPolicyClient::class.java)
-                val actions =
-                    listOf<() -> Unit>(
-                        { standard.resolveParticipant("expo", "01000000000") },
-                        { standard.applications(1) },
-                        { training.resolveTrainee("expo", "training") },
-                        { training.requireApplicationConfiguration() },
-                        { context.getBean(ExpoDeletionClient::class.java).requireConfiguration() },
-                        { context.getBean(PreregisterSessionChangesClient::class.java).prepare("expo", 1, 2, "UPDATE", true, null) },
-                        { policy.validateForm(definition()) },
-                        { policy.prepare("expo", UUID.randomUUID(), payload()) },
+                callAll(context).forEach { (_, action) -> action() }
+                calls shouldBe
+                    listOf(
+                        "user" to USER,
+                        "application" to APPLICATION,
+                        "user" to USER,
+                        "application" to APPLICATION,
+                        "application" to APPLICATION,
+                        "application" to APPLICATION,
+                        "form" to FORM,
+                        "application" to APPLICATION,
+                        "application" to APPLICATION,
+                        "form" to FORM,
+                        "user" to USER,
+                        "attention" to ATTENTION,
+                        "attention" to ATTENTION,
+                        "attention" to ATTENTION,
                     )
-                actions.forEach { action ->
-                    assertThrows(ExpectedException::class.java) { action() }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
-                }
+                context.getBean(TrainingDependenciesClient::class.java).traineePreFormPeriod("expo")
+                calls.last() shouldBe ("form" to null)
+            }
+        }
+    }
+
+    @Test
+    fun `legacy tokens alone no longer authenticate outgoing calls and startup still succeeds`() {
+        withServers { runner, calls ->
+            runner.withPropertyValues(*LEGACY_TOKENS.toTypedArray()).run { context ->
+                context.startupFailure shouldBe null
+                assertUnconfigured(context, "user", "application", "form", "attention")
                 calls shouldBe emptyList()
             }
         }
     }
 
-    private fun verifyCalls(
-        properties: List<String>,
-        vararg expected: String,
-    ) {
-        withServer { runner, calls ->
-            runner.withPropertyValues(*properties.toTypedArray()).run { context ->
+    @Test
+    fun `explicit blank target tokens reject calls without sending requests`() {
+        withServers { runner, calls ->
+            runner
+                .withPropertyValues(
+                    "USER_INTERNAL_TOKEN=",
+                    "APPLICATION_INTERNAL_TOKEN=",
+                    "FORM_INTERNAL_TOKEN=",
+                    "ATTENTION_INTERNAL_TOKEN=",
+                    *LEGACY_TOKENS.toTypedArray(),
+                ).run { context ->
+                    context.startupFailure shouldBe null
+                    assertUnconfigured(context, "user", "application", "form", "attention")
+                    calls shouldBe emptyList()
+                }
+        }
+    }
+
+    @Test
+    fun `partial target configuration serves configured receivers and rejects the rest`() {
+        withServers { runner, calls ->
+            runner.withPropertyValues("USER_INTERNAL_TOKEN=$USER", *LEGACY_TOKENS.toTypedArray()).run { context ->
                 context.startupFailure shouldBe null
-                val standard = context.getBean(StandardDependenciesClient::class.java)
-                standard.resolveParticipant("expo", "01000000000")
-                standard.applications(1)
-                val training = context.getBean(TrainingDependenciesClient::class.java)
-                training.resolveTrainee("expo", "training")
-                training.applications(1)
-                context.getBean(PreregisterSessionChangesClient::class.java).prepare("expo", 1, 2, "UPDATE", true, null)
-                val policy = context.getBean(ProgramPolicyClient::class.java)
-                policy.validateForm(definition())
-                policy.prepare("expo", UUID.randomUUID(), payload())
-                val deletion = context.getBean(ExpoDeletionClient::class.java)
-                deletion.requireConfiguration()
-                deletion.deleteApplications("expo", listOf(1), listOf(2))
-                deletion.deleteForms("expo")
-                deletion.deleteUsers("expo")
-                calls shouldBe expected.toList()
-                training.traineePreFormPeriod("expo")
-                calls.last() shouldBe null
+                callAll(context).filter { it.first == "user" }.forEach { (_, action) -> action() }
+                calls shouldBe List(3) { "user" to USER }
+                assertUnconfigured(context, "application", "form", "attention")
+                calls.size shouldBe 3
             }
         }
     }
 
-    private fun withServer(action: (ApplicationContextRunner, MutableList<String?>) -> Unit) {
-        val calls = mutableListOf<String?>()
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/") { exchange ->
-            calls.add(exchange.requestHeaders.getFirst("X-Internal-Token"))
-            exchange.requestBody.use { it.readAllBytes() }
-            val path = exchange.requestURI.path
-            val body =
-                when {
-                    path.endsWith("/resolve") -> {
-                        """{"participantId":1,"traineeId":1}"""
+    @Test
+    fun `receiver 401 for a mismatched token is reported as failure`() {
+        withServers { runner, calls ->
+            runner
+                .withPropertyValues(
+                    "USER_INTERNAL_TOKEN=$APPLICATION",
+                    "APPLICATION_INTERNAL_TOKEN=$FORM",
+                    "FORM_INTERNAL_TOKEN=$ATTENTION",
+                    "ATTENTION_INTERNAL_TOKEN=$USER",
+                ).run { context ->
+                    context.startupFailure shouldBe null
+                    callAll(context).forEach { (_, action) ->
+                        assertThrows(ExpectedException::class.java) { action() }.status shouldBe HttpStatus.BAD_GATEWAY
                     }
-
-                    path.startsWith("/internal/forms/by-id/") -> {
-                        """{"id":"$FORM_ID","expoId":"expo","purpose":"PROGRAM","participantType":"STANDARD","startDate":"$START","endDate":"$END"}"""
-                    }
-
-                    path.startsWith("/forms/") -> {
-                        """{"startDate":"$START","endDate":"$END"}"""
-                    }
-
-                    path.contains("/program/") -> {
-                        "[]"
-                    }
-
-                    else -> {
-                        ""
-                    }
+                    calls.size shouldBe 12
                 }
-            val status = if (body.isEmpty()) 204 else 200
-            exchange.sendResponseHeaders(status, if (status == 204) -1 else body.toByteArray().size.toLong())
-            exchange.responseBody.use { if (body.isNotEmpty()) it.write(body.toByteArray()) }
-            exchange.close()
         }
-        server.start()
+    }
+
+    private fun assertUnconfigured(
+        context: AssertableApplicationContext,
+        vararg targets: String,
+    ) {
+        val deletion = context.getBean(ExpoDeletionClient::class.java)
+        assertThrows(ExpectedException::class.java) { deletion.requireConfiguration() }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
+        callAll(context).filter { it.first in targets }.forEach { (_, action) ->
+            assertThrows(ExpectedException::class.java) { action() }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
+        }
+        if ("application" in targets) {
+            assertThrows(ExpectedException::class.java) {
+                context.getBean(TrainingDependenciesClient::class.java).requireApplicationConfiguration()
+            }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
+        }
+    }
+
+    // ExpoDeletionClient keeps Application -> Form -> User -> Attention order, as DeleteExpoServiceImpl calls it.
+    private fun callAll(context: AssertableApplicationContext): List<Pair<String, () -> Unit>> {
+        val standard = context.getBean(StandardDependenciesClient::class.java)
+        val training = context.getBean(TrainingDependenciesClient::class.java)
+        val preregister = context.getBean(PreregisterSessionChangesClient::class.java)
+        val policy = context.getBean(ProgramPolicyClient::class.java)
+        val deletion = context.getBean(ExpoDeletionClient::class.java)
+        return listOf(
+            "user" to { standard.resolveParticipant("expo", "01000000000") },
+            "application" to { standard.applications(1) },
+            "user" to { training.resolveTrainee("expo", "training") },
+            "application" to { training.applications(1) },
+            "application" to { preregister.prepare("expo", 1, 2, "UPDATE", true, null) },
+            "application" to { preregister.adoptWaitingCapacity("expo", 1, 0) },
+            "form" to { policy.validateForm(definition()) },
+            "application" to { policy.prepare("expo", UUID.randomUUID(), payload()) },
+            "application" to { deletion.deleteApplications("expo", listOf(1), listOf(2)) },
+            "form" to { deletion.deleteForms("expo") },
+            "user" to { deletion.deleteUsers("expo") },
+            "attention" to { deletion.deleteAttendances("expo", listOf(1), listOf(2)) },
+        )
+    }
+
+    private fun withServers(action: (ApplicationContextRunner, MutableList<Pair<String, String?>>) -> Unit) {
+        val calls = mutableListOf<Pair<String, String?>>()
+        val expected = mapOf("user" to USER, "application" to APPLICATION, "form" to FORM, "attention" to ATTENTION)
+        val servers =
+            expected.mapValues { (service, token) ->
+                HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+                    createContext("/") { exchange ->
+                        val supplied = exchange.requestHeaders.getFirst("X-Internal-Token")
+                        synchronized(calls) { calls.add(service to supplied) }
+                        exchange.requestBody.use { it.readAllBytes() }
+                        val path = exchange.requestURI.path
+                        val publicForm = service == "form" && path.startsWith("/forms/")
+                        val body =
+                            when {
+                                !publicForm && supplied != token -> {
+                                    null
+                                }
+
+                                path.endsWith("/resolve") -> {
+                                    """{"participantId":1,"traineeId":1}"""
+                                }
+
+                                path.startsWith("/internal/forms/by-id/") -> {
+                                    """{"id":"$FORM_ID","expoId":"expo","purpose":"PROGRAM","participantType":"STANDARD","startDate":"$START","endDate":"$END"}"""
+                                }
+
+                                publicForm -> {
+                                    """{"startDate":"$START","endDate":"$END"}"""
+                                }
+
+                                path.contains("/program/") -> {
+                                    "[]"
+                                }
+
+                                else -> {
+                                    ""
+                                }
+                            }
+                        val status =
+                            if (body == null) {
+                                401
+                            } else if (body.isEmpty()) {
+                                204
+                            } else {
+                                200
+                            }
+                        exchange.sendResponseHeaders(status, if (body.isNullOrEmpty()) -1 else body.toByteArray().size.toLong())
+                        exchange.responseBody.use { if (!body.isNullOrEmpty()) it.write(body.toByteArray()) }
+                        exchange.close()
+                    }
+                    start()
+                }
+            }
         try {
-            val url = "http://127.0.0.1:${server.address.port}"
+            fun url(service: String) = "http://127.0.0.1:${servers.getValue(service).address.port}"
             val runner =
                 ApplicationContextRunner()
+                    // Load application.yaml so legacy environment variable names are exercised through the real mapping.
+                    .withInitializer(ConfigDataApplicationContextInitializer())
                     .withBean(tools.jackson.databind.ObjectMapper::class.java, { jacksonObjectMapper() })
                     .withUserConfiguration(
                         StandardDependenciesClient::class.java,
@@ -184,21 +224,16 @@ class ServiceInternalTokenHttpTests {
                         ProgramPolicyClient::class.java,
                         ProgramAttendanceClient::class.java,
                     ).withPropertyValues(
-                        "expo.standard.user-service-url=$url",
-                        "expo.standard.application-service-url=$url",
-                        "expo.training.user-service-url=$url",
-                        "expo.training.application-service-url=$url",
-                        "expo.form-service-url=$url",
-                        "expo.attention.service-url=$url",
-                        "expo.standard.internal-token=legacy-standard",
-                        "expo.training.internal-token=legacy-training",
-                        "expo.delete-internal-token=legacy-delete",
-                        "expo.form.internal-token=legacy-form",
-                        "expo.attention.internal-token=attendance",
+                        "expo.standard.user-service-url=${url("user")}",
+                        "expo.standard.application-service-url=${url("application")}",
+                        "expo.training.user-service-url=${url("user")}",
+                        "expo.training.application-service-url=${url("application")}",
+                        "expo.form-service-url=${url("form")}",
+                        "expo.attention.service-url=${url("attention")}",
                     )
             action(runner, calls)
         } finally {
-            server.stop(0)
+            servers.values.forEach { it.stop(0) }
         }
     }
 
@@ -229,6 +264,29 @@ class ServiceInternalTokenHttpTests {
     private fun payload() = definition().let { ProgramChangePayload(listOf(ProgramMutation(it, it.copy(revision = 2)))) }
 
     private companion object {
+        const val USER = "fake-user-token"
+        const val APPLICATION = "fake-application-token"
+        const val FORM = "fake-form-token"
+        const val ATTENTION = "fake-attention-token"
+        val TARGET_TOKENS =
+            listOf(
+                "USER_INTERNAL_TOKEN=$USER",
+                "APPLICATION_INTERNAL_TOKEN=$APPLICATION",
+                "FORM_INTERNAL_TOKEN=$FORM",
+                "ATTENTION_INTERNAL_TOKEN=$ATTENTION",
+            )
+
+        // Former common variables and the properties the removed nested @Value fallbacks read.
+        val LEGACY_TOKENS =
+            listOf(
+                "STANDARD_INTERNAL_TOKEN=legacy-standard",
+                "TRAINING_INTERNAL_TOKEN=legacy-training",
+                "EXPO_DELETE_INTERNAL_TOKEN=legacy-delete",
+                "expo.standard.internal-token=legacy-standard",
+                "expo.training.internal-token=legacy-training",
+                "expo.delete-internal-token=legacy-delete",
+                "expo.form.internal-token=legacy-form",
+            )
         val FORM_ID: UUID = UUID.fromString("00000000-0000-0000-0000-000000000001")
         val START: Instant = Instant.parse("2026-10-11T00:00:00Z")
         val END: Instant = Instant.parse("2026-10-12T00:00:00Z")
