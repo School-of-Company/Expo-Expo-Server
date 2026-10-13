@@ -40,6 +40,7 @@ class ServiceInternalTokenHttpTests {
                         "user" to USER,
                         "application" to APPLICATION,
                         "application" to APPLICATION,
+                        "application" to APPLICATION,
                         "form" to FORM,
                         "application" to APPLICATION,
                         "application" to APPLICATION,
@@ -111,7 +112,7 @@ class ServiceInternalTokenHttpTests {
                     callAll(context).forEach { (_, action) ->
                         assertThrows(ExpectedException::class.java) { action() }.status shouldBe HttpStatus.BAD_GATEWAY
                     }
-                    calls.size shouldBe 11
+                    calls.size shouldBe 12
                 }
         }
     }
@@ -145,6 +146,7 @@ class ServiceInternalTokenHttpTests {
             "user" to { training.resolveTrainee("expo", "training") },
             "application" to { training.applications(1) },
             "application" to { preregister.prepare("expo", 1, 2, "UPDATE", true, null) },
+            "application" to { preregister.adoptWaitingCapacity("expo", 1, 0) },
             "form" to { policy.validateForm(definition()) },
             "application" to { policy.prepare("expo", UUID.randomUUID(), payload()) },
             "application" to { deletion.deleteApplications("expo", listOf(1), listOf(2)) },

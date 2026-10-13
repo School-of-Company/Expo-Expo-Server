@@ -145,6 +145,8 @@ class SecurityConfig {
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.DELETE, "/expo/{expo_id}/preregister-sessions/{session_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
+                    .requestMatchers(HttpMethod.PUT, "/expo/{expo_id}/preregister-sessions/{session_id}/waiting-capacity")
+                    .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/expo")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/expo/{expo_id}/program-changes/retry")
