@@ -39,7 +39,7 @@ class ReserveProgramFormChangeServiceImpl(
             }
 
             ProgramFormChangeKind.SHRINK -> {
-                if (usage.referenced &&
+                if (usage.referenced && usage.applicationStartedAt != null &&
                     (
                         requireNotNull(request.startDate).isAfter(usage.applicationStartedAt) ||
                             requireNotNull(request.endDate).isBefore(usage.applicationEndedAt)
