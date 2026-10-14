@@ -407,6 +407,51 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `bulk application period applies valid programs and reports failures and skips`() {
+        create("standard")
+        val lateDeadlines =
+            policy()
+                .replace("\"2026-10-12T00:00:00Z\",\"promotionEndedAt\"", "\"2026-10-20T00:00:00Z\",\"promotionEndedAt\"")
+                .replace("\"promotionEndedAt\":\"2026-10-12T00:00:00Z\"", "\"promotionEndedAt\":\"2026-10-20T00:00:00Z\"")
+        request("/standard/$EXPO", "POST", body("standard", policy = lateDeadlines)).statusCode() shouldBe 201
+        request("/training/$EXPO", "POST", body("training", policy = null)).statusCode() shouldBe 201
+        val path = "/expo/$EXPO/programs/application-period"
+        val period = """{"applicationStartedAt":"2026-10-13T00:00:00Z","applicationEndedAt":"2026-10-14T00:00:00Z"}"""
+        request(path, "PATCH", """{"applicationStartedAt":"2026-10-13T00:00:00Z"}""").statusCode() shouldBe 400
+        request(path, "PATCH", """{"applicationStartedAt":null,"applicationEndedAt":null}""").statusCode() shouldBe 400
+        request(path, "PATCH", """{"applicationStartedAt":"2026-10-14T00:00:00Z","applicationEndedAt":"2026-10-13T00:00:00Z"}""")
+            .statusCode() shouldBe 400
+        request(path, "PATCH", period, role = null).statusCode() shouldBe 401
+        request("/expo/missing/programs/application-period", "PATCH", period).statusCode() shouldBe 404
+
+        val applied = request(path, "PATCH", period)
+        applied.statusCode() shouldBe 200
+        val results =
+            mapper.readTree(applied.body()).get("results").associate {
+                "${it.get("programType").asString()}-${it.get("id").asLong()}" to
+                    it
+            }
+        results.getValue("STANDARD-1").get("status").asString() shouldBe "FAILED"
+        results.getValue("STANDARD-1").get("reason").asString() shouldBe "프로그램 모집 정책이 올바르지 않습니다."
+        results.getValue("STANDARD-2").get("status").asString() shouldBe "UPDATED"
+        results.getValue("TRAINING-1").get("status").asString() shouldBe "SKIPPED_NO_POLICY"
+        readPolicy(1).get("applicationStartedAt").asString() shouldBe "2026-10-11T00:00:00Z"
+        readPolicy(2).get("applicationStartedAt").asString() shouldBe "2026-10-13T00:00:00Z"
+        readPolicy(2).get("applicationEndedAt").asString() shouldBe "2026-10-14T00:00:00Z"
+        list("standard")[1].get("revision").asLong() shouldBe 2L
+
+        val repeated = request(path, "PATCH", period)
+        repeated.statusCode() shouldBe 200
+        mapper
+            .readTree(repeated.body())
+            .get("results")
+            .toList()
+            .map { it.get("status").asString() } shouldBe
+            listOf("FAILED", "UNCHANGED", "SKIPPED_NO_POLICY")
+        pending() shouldBe 0L
+    }
+
+    @Test
     fun `policy-free legacy requests retain unlimited standard and training category semantics`() {
         request("/standard/$EXPO", "POST", body("standard", policy = null)).statusCode() shouldBe 201
         request("/training/list/$EXPO", "POST", "[${body("training", policy = null)}]").statusCode() shouldBe 201
