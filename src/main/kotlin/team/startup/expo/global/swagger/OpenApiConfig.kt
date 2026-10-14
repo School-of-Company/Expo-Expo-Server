@@ -1,5 +1,6 @@
 package team.startup.expo.global.swagger
 
+import com.fasterxml.jackson.annotation.JsonFormat
 import io.swagger.v3.core.converter.ModelConverters
 import io.swagger.v3.core.util.Json
 import io.swagger.v3.oas.models.Components
@@ -13,8 +14,10 @@ import io.swagger.v3.oas.models.responses.ApiResponse
 import io.swagger.v3.oas.models.security.SecurityRequirement
 import io.swagger.v3.oas.models.security.SecurityScheme
 import io.swagger.v3.oas.models.servers.Server
+import org.hibernate.validator.constraints.CodePointLength
 import org.springdoc.core.customizers.OpenApiCustomizer
 import org.springdoc.core.customizers.OperationCustomizer
+import org.springdoc.core.customizers.PropertyCustomizer
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.context.annotation.Bean
@@ -60,12 +63,33 @@ class OpenApiConfig(
             operation
         }
 
+    // swagger-core가 읽지 않는 요청 형식 제약을 스키마에 옮긴다
+    @Bean
+    fun requestFormatConstraints(): PropertyCustomizer =
+        PropertyCustomizer { property, type ->
+            type.ctxAnnotations?.forEach { annotation ->
+                when (annotation) {
+                    is CodePointLength -> {
+                        property.maxLength(annotation.max)
+                    }
+
+                    // ponytail: 프로젝트에서 쓰는 비 ISO 일시 형식은 이것 하나뿐이다. 다른 pattern이 생기면 여기에 추가한다
+                    is JsonFormat -> {
+                        if (annotation.pattern == "yyyy-MM-dd HH:mm") {
+                            property.format(null).pattern("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$")
+                        }
+                    }
+                }
+            }
+            property
+        }
+
     @Bean
     fun expoDocumentation(): OpenApiCustomizer =
         OpenApiCustomizer { api ->
             val components = api.components
-            ModelConverters.getInstance().readAll(ErrorResponse::class.java).forEach(components::addSchemas)
-            ModelConverters.getInstance().readAll(ExpoPageResponse::class.java).forEach(components::addSchemas)
+            ModelConverters.getInstance(true).readAll(ErrorResponse::class.java).forEach(components::addSchemas)
+            ModelConverters.getInstance(true).readAll(ExpoPageResponse::class.java).forEach(components::addSchemas)
             api.paths["/expo"]
                 ?.get
                 ?.responses

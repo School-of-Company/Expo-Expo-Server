@@ -3,6 +3,7 @@ package team.startup.expo.domain.expo.presentation
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.responses.ApiResponse
 import jakarta.validation.Valid
+import org.springdoc.core.annotations.ParameterObject
 import org.springframework.http.CacheControl
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
@@ -35,7 +36,7 @@ class AdminChangeHistoryController(
     fun get(
         @PathVariable("expo_id") expoId: String,
         @RequestHeader("Authorization") authorization: String,
-        @Valid @ModelAttribute request: AdminChangeHistoryRequest,
+        @ParameterObject @Valid @ModelAttribute request: AdminChangeHistoryRequest,
     ): ResponseEntity<AdminChangeHistoryPage> =
         ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(history.execute(expoId, authorization, request))
 }
