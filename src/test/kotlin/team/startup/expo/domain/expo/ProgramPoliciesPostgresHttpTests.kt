@@ -407,6 +407,96 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `bulk application period applies valid programs reports failures and clears to closed`() {
+        create("standard")
+        val lateCancel =
+            policy()
+                .replace("\"cancelEndedAt\":\"2026-10-12T00:00:00Z\"", "\"cancelEndedAt\":\"2026-10-20T00:00:00Z\"")
+                .replace("\"promotionEndedAt\":\"2026-10-12T00:00:00Z\"", "\"promotionEndedAt\":null")
+        request("/standard/$EXPO", "POST", body("standard", policy = lateCancel)).statusCode() shouldBe 201
+        request("/training/$EXPO", "POST", body("training", policy = null)).statusCode() shouldBe 201
+        val path = "/expo/$EXPO/programs/application-period"
+        request(path, "PATCH", """{"applicationStartedAt":"2026-10-13T00:00:00Z"}""").statusCode() shouldBe 400
+        request(
+            path,
+            "PATCH",
+            """{"applicationStartedAt":"2026-10-13T00:00:00Z","applicationEndedAt":"2026-10-14T00:00:00Z"}""",
+            role = null,
+        ).statusCode() shouldBe 401
+
+        val applied =
+            request(path, "PATCH", """{"applicationStartedAt":"2026-10-13T00:00:00Z","applicationEndedAt":"2026-10-14T00:00:00Z"}""")
+        applied.statusCode() shouldBe 200
+        val results =
+            mapper.readTree(applied.body()).get("results").associate {
+                "${it.get("programType").asString()}-${it.get("id").asLong()}" to
+                    it
+            }
+        results.getValue("STANDARD-1").get("status").asString() shouldBe "FAILED"
+        results.getValue("STANDARD-2").get("status").asString() shouldBe "UPDATED"
+        results.getValue("TRAINING-1").get("status").asString() shouldBe "SKIPPED_NO_POLICY"
+        readPolicy(1).get("applicationStartedAt").asString() shouldBe "2026-10-11T00:00:00Z"
+        readPolicy(2).get("applicationStartedAt").asString() shouldBe "2026-10-13T00:00:00Z"
+
+        val cleared = request(path, "PATCH", """{"applicationStartedAt":null,"applicationEndedAt":null}""")
+        cleared.statusCode() shouldBe 200
+        mapper
+            .readTree(cleared.body())
+            .get("results")
+            .toList()
+            .map { it.get("status").asString() } shouldBe
+            listOf("UPDATED", "UPDATED", "SKIPPED_NO_POLICY")
+        listOf(1L, 2L).forEach {
+            readPolicy(it).get("applicationStartedAt").isNull shouldBe true
+            readPolicy(it).get("applicationEndedAt").isNull shouldBe true
+        }
+        request(path, "PATCH", """{}""").let { repeat ->
+            repeat.statusCode() shouldBe 200
+            mapper
+                .readTree(repeat.body())
+                .get("results")
+                .toList()
+                .map { it.get("status").asString() } shouldBe
+                listOf("UNCHANGED", "UNCHANGED", "SKIPPED_NO_POLICY")
+        }
+        pending() shouldBe 0L
+    }
+
+    @Test
+    fun `bulk promotion mode counts modes and sends mode to application`() {
+        create("standard")
+        create("training")
+        request("/standard/$EXPO", "POST", body("standard", policy = null)).statusCode() shouldBe 201
+        val modes = "/expo/$EXPO/programs/promotion-modes"
+        mapper.readTree(request(modes).body()).let {
+            it.get("total").asInt() shouldBe 2
+            it.get("auto").asInt() shouldBe 2
+            it.get("manual").asInt() shouldBe 0
+        }
+        request("/expo/missing/programs/promotion-modes").statusCode() shouldBe 404
+
+        val changed = request("/expo/$EXPO/programs/promotion-mode", "PATCH", """{"promotionMode":"MANUAL"}""")
+        changed.statusCode() shouldBe 200
+        mapper.readTree(request(modes).body()).let {
+            it.get("auto").asInt() shouldBe 0
+            it.get("manual").asInt() shouldBe 2
+            it.get("programs")[0].get("promotionEndedAt").isNull shouldBe true
+        }
+        val prepared = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")
+        prepared.size() shouldBe 2
+        prepared.all {
+            it
+                .get("definition")
+                .get("policy")
+                .get("promotionMode")
+                .asString() == "MANUAL"
+        } shouldBe true
+        assertThrows(DataIntegrityViolationException::class.java) {
+            jdbc.update("UPDATE tb_standard_program SET policy_json=replace(policy_json,'\"MANUAL\"','\"OTHER\"') WHERE id=1")
+        }
+    }
+
+    @Test
     fun `policy-free legacy requests retain unlimited standard and training category semantics`() {
         request("/standard/$EXPO", "POST", body("standard", policy = null)).statusCode() shouldBe 201
         request("/training/list/$EXPO", "POST", "[${body("training", policy = null)}]").statusCode() shouldBe 201

@@ -10,6 +10,8 @@ import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyReque
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramPolicyBulkResult
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramPolicyBulkStatus
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
@@ -172,6 +174,61 @@ class ProgramPolicySupport(
                 ),
             )
         }
+
+    // 프로그램마다 따로 검증하고 통과한 변경만 하나의 ProgramChange로 묶는다. 같은 명령의 재시도는 결과 목록이 비어 있다.
+    fun stageBulk(
+        expoId: String,
+        command: String,
+        change: (ProgramPolicyRequest) -> ProgramPolicyRequest,
+    ): Pair<ProgramChange?, List<ProgramPolicyBulkResult>> {
+        val results = mutableListOf<ProgramPolicyBulkResult>()
+        val pending =
+            stage(expoId, command) {
+                val currents =
+                    standards.findByExpoIdOrderByIdAsc(expoId).map(::definition) +
+                        trainings.findByExpoIdOrderByIdAsc(expoId).map(::definition)
+                val mutations =
+                    currents.mapNotNull { current ->
+                        val policy = current.policy
+                        val result = { status: ProgramPolicyBulkStatus, reason: String? ->
+                            results +=
+                                ProgramPolicyBulkResult(current.programType, requireNotNull(current.id), current.title, status, reason)
+                        }
+                        if (policy == null) {
+                            result(ProgramPolicyBulkStatus.SKIPPED_NO_POLICY, null)
+                            return@mapNotNull null
+                        }
+                        try {
+                            update(
+                                current,
+                                current.title,
+                                current.startedAt,
+                                current.endedAt,
+                                current.category,
+                                change(policy),
+                                current.revision,
+                            ).also {
+                                result(
+                                    if (it ==
+                                        null
+                                    ) {
+                                        ProgramPolicyBulkStatus.UNCHANGED
+                                    } else {
+                                        ProgramPolicyBulkStatus.UPDATED
+                                    },
+                                    null,
+                                )
+                            }
+                        } catch (exception: ExpectedException) {
+                            if (exception.status.is5xxServerError) throw exception
+                            result(ProgramPolicyBulkStatus.FAILED, exception.message)
+                            null
+                        }
+                    }
+                ProgramChangePayload(mutations)
+            }
+        return pending to results
+    }
 
     private fun validate(
         definition: ProgramDefinition,

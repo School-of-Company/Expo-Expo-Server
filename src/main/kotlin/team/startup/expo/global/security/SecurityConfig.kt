@@ -155,6 +155,13 @@ class SecurityConfig {
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/expo/{expo_id}/admin-change-history")
                     .hasAuthority(ADMIN_AUTHORITY)
+                    .requestMatchers(
+                        HttpMethod.PATCH,
+                        "/expo/{expo_id}/programs/application-period",
+                        "/expo/{expo_id}/programs/promotion-mode",
+                    ).hasAuthority(ADMIN_AUTHORITY)
+                    .requestMatchers(HttpMethod.GET, "/expo/{expo_id}/programs/promotion-modes")
+                    .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/standard/program/{expo_id}", "/training/program/{expo_id}")
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/standard/application/{expo_id}")
