@@ -212,6 +212,62 @@ class SwaggerEnabledHttpTests : SwaggerHttpSupport() {
     }
 
     @Test
+    fun `요청 계약의 필수 필드·일시 형식·길이 제한과 응답 nullable을 실제와 같게 표기한다`() {
+        val api = document()
+        val schemas = api.path("components").path("schemas")
+
+        fun required(schema: String): Set<String> =
+            schemas
+                .path(schema)
+                .path("required")
+                .toList()
+                .map { it.asString() }
+                .toSet()
+
+        fun property(
+            schema: String,
+            name: String,
+        ): JsonNode = schemas.path(schema).path("properties").path(name)
+
+        required("ProgramPolicyRequest") shouldBe
+            setOf(
+                "formId",
+                "allowedOccupations",
+                "capacity",
+                "waitingCapacity",
+                "applicationStartedAt",
+                "applicationEndedAt",
+                "cancelEndedAt",
+                "promotionEndedAt",
+                "closed",
+            )
+        required("CreateExpoRequest").containsAll(listOf("title", "startedDay", "coverImage", "x", "y")) shouldBe true
+
+        val startedAt = property("AddStandardProgramRequest", "startedAt")
+        startedAt.has("format") shouldBe false
+        Regex(startedAt.path("pattern").asString()).matches("2030-01-01 10:00") shouldBe true
+        Regex(startedAt.path("pattern").asString()).matches("2030-01-01 10:00:00") shouldBe false
+        property("AddStandardProgramRequest", "title").path("maxLength").asInt() shouldBe 50
+        property("CreateExpoRequest", "x").path("maxLength").asInt() shouldBe 15
+
+        property("ExpoSummaryResponse", "coverImage").path("type").toList().map { it.asString() } shouldBe listOf("string", "null")
+
+        listOf("/expo", "/expo/{expo_id}/admin-change-history").forEach { path ->
+            val queries =
+                api
+                    .path("paths")
+                    .path(path)
+                    .path("get")
+                    .path("parameters")
+                    .toList()
+                    .filter { it.path("in").asString() == "query" }
+                    .map { it.path("name").asString() }
+            queries.containsAll(listOf("page", "size")) shouldBe true
+            queries.contains("request") shouldBe false
+        }
+    }
+
+    @Test
     fun `UI 진입과 HTML에서 참조하는 모든 리소스는 expo 접두사로 응답한다`() {
         val redirect = request("/expo/swagger-ui.html")
         redirect.statusCode() shouldBe 302

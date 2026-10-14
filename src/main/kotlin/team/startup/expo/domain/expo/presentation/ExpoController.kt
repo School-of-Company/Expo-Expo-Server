@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.media.Content
 import io.swagger.v3.oas.annotations.media.ExampleObject
 import io.swagger.v3.oas.annotations.responses.ApiResponse
 import jakarta.validation.Valid
+import org.springdoc.core.annotations.ParameterObject
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.DeleteMapping
@@ -74,7 +75,7 @@ class ExpoController(
     @GetMapping
     @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
     fun getExpoList(
-        @Valid @ModelAttribute request: ExpoPageRequest,
+        @ParameterObject @Valid @ModelAttribute request: ExpoPageRequest,
     ): ResponseEntity<Any> = ResponseEntity.ok(getExpoListService.execute(request))
 
     @GetMapping("/{expo_id}")
