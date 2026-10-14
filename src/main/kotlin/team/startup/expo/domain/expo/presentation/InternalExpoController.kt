@@ -27,8 +27,11 @@ class InternalExpoController(
     private val getStandardProgramService: GetStandardProgramService,
 ) {
     @GetMapping("/{expo_id}")
-    @Operation(summary = "내부 박람회 기간 조회")
-    @ApiResponse(responseCode = "200", description = "처리 성공")
+    @Operation(
+        summary = "내부 박람회 기간 및 참가자 전화번호 인증 설정 조회",
+        description = "Expo에 저장된 전화번호 인증 설정과 revision을 반환합니다. 조회 실패를 false로 처리하지 않습니다.",
+    )
+    @ApiResponse(responseCode = "200", description = "현재 설정과 revision. 기존 박람회 기본값은 false, 0입니다.")
     @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
     fun getExpoPeriod(
         @PathVariable("expo_id") expoId: String,

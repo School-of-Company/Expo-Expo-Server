@@ -20,15 +20,18 @@ import org.springframework.web.bind.annotation.RestController
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.request.ExpoPageRequest
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoRequest
+import team.startup.expo.domain.expo.presentation.dto.request.UpdateParticipantPhoneVerificationRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoDetailResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationResponse
+import team.startup.expo.domain.expo.presentation.dto.response.ParticipantPhoneVerificationResponse
 import team.startup.expo.domain.expo.service.CreateExpoService
 import team.startup.expo.domain.expo.service.DeleteExpoService
 import team.startup.expo.domain.expo.service.GetExpoDetailService
 import team.startup.expo.domain.expo.service.GetExpoListService
 import team.startup.expo.domain.expo.service.GetExpoValidationService
 import team.startup.expo.domain.expo.service.UpdateExpoService
+import team.startup.expo.domain.expo.service.UpdateParticipantPhoneVerificationService
 import team.startup.expo.global.swagger.ApiError
 
 @RestController
@@ -40,7 +43,20 @@ class ExpoController(
     private val updateExpoService: UpdateExpoService,
     private val deleteExpoService: DeleteExpoService,
     private val getExpoValidationService: GetExpoValidationService,
+    private val updateParticipantPhoneVerificationService: UpdateParticipantPhoneVerificationService,
 ) {
+    @PatchMapping("/{expo_id}/participant-phone-verification")
+    @Operation(summary = "참가자 전화번호 인증 설정 변경", description = "실제 값이 바뀔 때만 revision을 증가시킵니다.")
+    @ApiResponse(responseCode = "200", description = "처리 성공")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiError(status = 409, description = "삭제·변경 진행 상태, 버전, 신청 이력, 정원 또는 이미지 연결이 충돌합니다.")
+    fun updateParticipantPhoneVerification(
+        @PathVariable("expo_id") expoId: String,
+        @Valid @RequestBody request: UpdateParticipantPhoneVerificationRequest,
+    ): ResponseEntity<ParticipantPhoneVerificationResponse> =
+        ResponseEntity.ok(updateParticipantPhoneVerificationService.execute(expoId, request))
+
     @PostMapping
     @Operation(summary = "박람회 생성")
     @ApiResponse(responseCode = "201", description = "처리 성공")

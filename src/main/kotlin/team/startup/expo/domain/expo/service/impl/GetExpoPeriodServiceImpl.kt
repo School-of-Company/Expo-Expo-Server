@@ -18,6 +18,12 @@ class GetExpoPeriodServiceImpl(
         val expo =
             expoRepository.findByIdOrNull(expoId)
                 ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
-        return ExpoPeriodResponse(title = expo.title, startedDay = expo.startedDay, finishedDay = expo.finishedDay)
+        return ExpoPeriodResponse(
+            title = expo.title,
+            startedDay = expo.startedDay,
+            finishedDay = expo.finishedDay,
+            participantPhoneVerificationRequired = expo.participantPhoneVerificationRequired,
+            participantPhoneVerificationRevision = expo.participantPhoneVerificationRevision,
+        )
     }
 }
