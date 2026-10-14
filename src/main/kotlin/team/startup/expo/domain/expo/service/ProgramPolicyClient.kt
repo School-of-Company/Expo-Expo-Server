@@ -45,8 +45,7 @@ class ProgramPolicyClient(
         ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 폼의 행사 또는 참여 유형이 일치하지 않습니다.")
         }
-        val start = policy.applicationStartedAt ?: return
-        if (form.startDate.isAfter(start) || form.endDate.isBefore(policy.applicationEndedAt)) {
+        if (form.startDate.isAfter(policy.applicationStartedAt) || form.endDate.isBefore(policy.applicationEndedAt)) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "폼 기간이 프로그램 모집 기간을 포함해야 합니다.")
         }
     }

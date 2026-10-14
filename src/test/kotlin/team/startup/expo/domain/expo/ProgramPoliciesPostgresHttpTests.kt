@@ -407,25 +407,24 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
-    fun `bulk application period applies valid programs reports failures and clears to closed`() {
+    fun `bulk application period applies valid programs and reports failures and skips`() {
         create("standard")
-        val lateCancel =
+        val lateDeadlines =
             policy()
-                .replace("\"cancelEndedAt\":\"2026-10-12T00:00:00Z\"", "\"cancelEndedAt\":\"2026-10-20T00:00:00Z\"")
-                .replace("\"promotionEndedAt\":\"2026-10-12T00:00:00Z\"", "\"promotionEndedAt\":null")
-        request("/standard/$EXPO", "POST", body("standard", policy = lateCancel)).statusCode() shouldBe 201
+                .replace("\"2026-10-12T00:00:00Z\",\"promotionEndedAt\"", "\"2026-10-20T00:00:00Z\",\"promotionEndedAt\"")
+                .replace("\"promotionEndedAt\":\"2026-10-12T00:00:00Z\"", "\"promotionEndedAt\":\"2026-10-20T00:00:00Z\"")
+        request("/standard/$EXPO", "POST", body("standard", policy = lateDeadlines)).statusCode() shouldBe 201
         request("/training/$EXPO", "POST", body("training", policy = null)).statusCode() shouldBe 201
         val path = "/expo/$EXPO/programs/application-period"
+        val period = """{"applicationStartedAt":"2026-10-13T00:00:00Z","applicationEndedAt":"2026-10-14T00:00:00Z"}"""
         request(path, "PATCH", """{"applicationStartedAt":"2026-10-13T00:00:00Z"}""").statusCode() shouldBe 400
-        request(
-            path,
-            "PATCH",
-            """{"applicationStartedAt":"2026-10-13T00:00:00Z","applicationEndedAt":"2026-10-14T00:00:00Z"}""",
-            role = null,
-        ).statusCode() shouldBe 401
+        request(path, "PATCH", """{"applicationStartedAt":null,"applicationEndedAt":null}""").statusCode() shouldBe 400
+        request(path, "PATCH", """{"applicationStartedAt":"2026-10-14T00:00:00Z","applicationEndedAt":"2026-10-13T00:00:00Z"}""")
+            .statusCode() shouldBe 400
+        request(path, "PATCH", period, role = null).statusCode() shouldBe 401
+        request("/expo/missing/programs/application-period", "PATCH", period).statusCode() shouldBe 404
 
-        val applied =
-            request(path, "PATCH", """{"applicationStartedAt":"2026-10-13T00:00:00Z","applicationEndedAt":"2026-10-14T00:00:00Z"}""")
+        val applied = request(path, "PATCH", period)
         applied.statusCode() shouldBe 200
         val results =
             mapper.readTree(applied.body()).get("results").associate {
@@ -433,67 +432,23 @@ class ProgramPoliciesPostgresHttpTests {
                     it
             }
         results.getValue("STANDARD-1").get("status").asString() shouldBe "FAILED"
+        results.getValue("STANDARD-1").get("reason").asString() shouldBe "프로그램 모집 정책이 올바르지 않습니다."
         results.getValue("STANDARD-2").get("status").asString() shouldBe "UPDATED"
         results.getValue("TRAINING-1").get("status").asString() shouldBe "SKIPPED_NO_POLICY"
         readPolicy(1).get("applicationStartedAt").asString() shouldBe "2026-10-11T00:00:00Z"
         readPolicy(2).get("applicationStartedAt").asString() shouldBe "2026-10-13T00:00:00Z"
+        readPolicy(2).get("applicationEndedAt").asString() shouldBe "2026-10-14T00:00:00Z"
+        list("standard")[1].get("revision").asLong() shouldBe 2L
 
-        val cleared = request(path, "PATCH", """{"applicationStartedAt":null,"applicationEndedAt":null}""")
-        cleared.statusCode() shouldBe 200
+        val repeated = request(path, "PATCH", period)
+        repeated.statusCode() shouldBe 200
         mapper
-            .readTree(cleared.body())
+            .readTree(repeated.body())
             .get("results")
             .toList()
             .map { it.get("status").asString() } shouldBe
-            listOf("UPDATED", "UPDATED", "SKIPPED_NO_POLICY")
-        listOf(1L, 2L).forEach {
-            readPolicy(it).get("applicationStartedAt").isNull shouldBe true
-            readPolicy(it).get("applicationEndedAt").isNull shouldBe true
-        }
-        request(path, "PATCH", """{}""").let { repeat ->
-            repeat.statusCode() shouldBe 200
-            mapper
-                .readTree(repeat.body())
-                .get("results")
-                .toList()
-                .map { it.get("status").asString() } shouldBe
-                listOf("UNCHANGED", "UNCHANGED", "SKIPPED_NO_POLICY")
-        }
+            listOf("FAILED", "UNCHANGED", "SKIPPED_NO_POLICY")
         pending() shouldBe 0L
-    }
-
-    @Test
-    fun `bulk promotion mode counts modes and sends mode to application`() {
-        create("standard")
-        create("training")
-        request("/standard/$EXPO", "POST", body("standard", policy = null)).statusCode() shouldBe 201
-        val modes = "/expo/$EXPO/programs/promotion-modes"
-        mapper.readTree(request(modes).body()).let {
-            it.get("total").asInt() shouldBe 2
-            it.get("auto").asInt() shouldBe 2
-            it.get("manual").asInt() shouldBe 0
-        }
-        request("/expo/missing/programs/promotion-modes").statusCode() shouldBe 404
-
-        val changed = request("/expo/$EXPO/programs/promotion-mode", "PATCH", """{"promotionMode":"MANUAL"}""")
-        changed.statusCode() shouldBe 200
-        mapper.readTree(request(modes).body()).let {
-            it.get("auto").asInt() shouldBe 0
-            it.get("manual").asInt() shouldBe 2
-            it.get("programs")[0].get("promotionEndedAt").isNull shouldBe true
-        }
-        val prepared = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")
-        prepared.size() shouldBe 2
-        prepared.all {
-            it
-                .get("definition")
-                .get("policy")
-                .get("promotionMode")
-                .asString() == "MANUAL"
-        } shouldBe true
-        assertThrows(DataIntegrityViolationException::class.java) {
-            jdbc.update("UPDATE tb_standard_program SET policy_json=replace(policy_json,'\"MANUAL\"','\"OTHER\"') WHERE id=1")
-        }
     }
 
     @Test

@@ -235,7 +235,10 @@ class SwaggerEnabledHttpTests : SwaggerHttpSupport() {
                 "allowedOccupations",
                 "capacity",
                 "waitingCapacity",
+                "applicationStartedAt",
+                "applicationEndedAt",
                 "cancelEndedAt",
+                "promotionEndedAt",
                 "closed",
             )
         required("CreateExpoRequest").containsAll(listOf("title", "startedDay", "coverImage", "x", "y")) shouldBe true

@@ -33,12 +33,6 @@ class ProgramPolicyValidationTests {
     }
 
     @Test
-    fun `cleared application period and open-ended promotion are valid`() {
-        policy.copy(applicationStartedAt = null, applicationEndedAt = null).validate()
-        policy.copy(promotionEndedAt = null).validate()
-    }
-
-    @Test
     fun `invalid capacities occupations periods and unsupported precision are rejected`() {
         listOf(
             policy.copy(capacity = 0),
@@ -49,8 +43,6 @@ class ProgramPolicyValidationTests {
             policy.copy(cancelEndedAt = start.minusSeconds(1)),
             policy.copy(promotionEndedAt = start.minusSeconds(1)),
             policy.copy(applicationStartedAt = start.plusNanos(1)),
-            policy.copy(applicationStartedAt = null),
-            policy.copy(applicationEndedAt = null),
         ).forEach { invalid ->
             val exception = assertThrows(ExpectedException::class.java) { invalid.validate() }
             assertEquals(HttpStatus.BAD_REQUEST, exception.status)
