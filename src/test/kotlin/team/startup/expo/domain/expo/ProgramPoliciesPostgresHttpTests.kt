@@ -206,6 +206,48 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `channels round trip to the internal definition and invalid splits are rejected by API and DB`() {
+        create("standard")
+        jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!.contains("channels") shouldBe
+            false
+        val teacher = """{"name":"교원","allowedOccupations":["TEACHER"],"capacity":2,"waitingCapacity":1}"""
+        val general = """{"name":"일반","allowedOccupations":["GENERAL"],"capacity":3,"waitingCapacity":0}"""
+        val channeled = { channels: String, capacity: Int ->
+            policy(capacity = capacity)
+                .replace("[\"TEACHER\"]", "[\"TEACHER\",\"GENERAL\"]")
+                .replace("\"closed\":false", "\"closed\":false,\"channels\":[$channels]")
+        }
+        request("/standard/$EXPO", "POST", body("standard", policy = channeled("$teacher,$general", 5))).statusCode() shouldBe 201
+        val internal = request("/internal/expo/$EXPO/standard-programs/2", token = "expo-test-token", role = null)
+        internal.statusCode() shouldBe 200
+        mapper
+            .readTree(internal.body())
+            .get("policy")
+            .get("channels")
+            .toString() shouldBe mapper.readTree("[$teacher,$general]").toString()
+        listOf(
+            channeled("$teacher,$general", 4),
+            channeled("$teacher,${general.replace("GENERAL", "TEACHER")}", 5),
+            channeled(teacher.replace("교원", "일반") + ",$general", 5),
+            channeled("", 5),
+        ).forEach { request("/standard/$EXPO", "POST", body("standard", policy = it)).statusCode() shouldBe 400 }
+        list("standard").size() shouldBe 2
+        val stored = jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=2", String::class.java)!!
+        listOf(
+            stored.replace("\"capacity\":3", "\"capacity\":4"),
+            stored.replace("\"waitingCapacity\":0}", "\"waitingCapacity\":1}"),
+            stored.replace("[\"GENERAL\"]", "[\"GENERAL\",\"TEACHER\"]"),
+            stored.replace("\"일반\"", "\"교원\""),
+            stored.replace(Regex("\"channels\":\\[.*]"), "\"channels\":[]"),
+        ).forEach { invalid ->
+            (invalid != stored) shouldBe true
+            assertThrows(DataIntegrityViolationException::class.java) {
+                jdbc.update("UPDATE tb_standard_program SET policy_json=? WHERE id=2", invalid)
+            }
+        }
+    }
+
+    @Test
     fun `active counts guard shrinking and history guards moving a group or deleting`() {
         create("standard")
         create("standard")
@@ -404,6 +446,51 @@ class ProgramPoliciesPostgresHttpTests {
         update(1, policy(capacity = 3)).statusCode() shouldBe 409
         request("/standard/1", "DELETE").statusCode() shouldBe 409
         request("/internal/expo/$EXPO/standard-programs/1", role = null, token = "expo-test-token").statusCode() shouldBe 409
+    }
+
+    @Test
+    fun `bulk application period applies valid programs and reports failures and skips`() {
+        create("standard")
+        val lateDeadlines =
+            policy()
+                .replace("\"2026-10-12T00:00:00Z\",\"promotionEndedAt\"", "\"2026-10-20T00:00:00Z\",\"promotionEndedAt\"")
+                .replace("\"promotionEndedAt\":\"2026-10-12T00:00:00Z\"", "\"promotionEndedAt\":\"2026-10-20T00:00:00Z\"")
+        request("/standard/$EXPO", "POST", body("standard", policy = lateDeadlines)).statusCode() shouldBe 201
+        request("/training/$EXPO", "POST", body("training", policy = null)).statusCode() shouldBe 201
+        val path = "/expo/$EXPO/programs/application-period"
+        val period = """{"applicationStartedAt":"2026-10-13T00:00:00Z","applicationEndedAt":"2026-10-14T00:00:00Z"}"""
+        request(path, "PATCH", """{"applicationStartedAt":"2026-10-13T00:00:00Z"}""").statusCode() shouldBe 400
+        request(path, "PATCH", """{"applicationStartedAt":null,"applicationEndedAt":null}""").statusCode() shouldBe 400
+        request(path, "PATCH", """{"applicationStartedAt":"2026-10-14T00:00:00Z","applicationEndedAt":"2026-10-13T00:00:00Z"}""")
+            .statusCode() shouldBe 400
+        request(path, "PATCH", period, role = null).statusCode() shouldBe 401
+        request("/expo/missing/programs/application-period", "PATCH", period).statusCode() shouldBe 404
+
+        val applied = request(path, "PATCH", period)
+        applied.statusCode() shouldBe 200
+        val results =
+            mapper.readTree(applied.body()).get("results").associate {
+                "${it.get("programType").asString()}-${it.get("id").asLong()}" to
+                    it
+            }
+        results.getValue("STANDARD-1").get("status").asString() shouldBe "FAILED"
+        results.getValue("STANDARD-1").get("reason").asString() shouldBe "프로그램 모집 정책이 올바르지 않습니다."
+        results.getValue("STANDARD-2").get("status").asString() shouldBe "UPDATED"
+        results.getValue("TRAINING-1").get("status").asString() shouldBe "SKIPPED_NO_POLICY"
+        readPolicy(1).get("applicationStartedAt").asString() shouldBe "2026-10-11T00:00:00Z"
+        readPolicy(2).get("applicationStartedAt").asString() shouldBe "2026-10-13T00:00:00Z"
+        readPolicy(2).get("applicationEndedAt").asString() shouldBe "2026-10-14T00:00:00Z"
+        list("standard")[1].get("revision").asLong() shouldBe 2L
+
+        val repeated = request(path, "PATCH", period)
+        repeated.statusCode() shouldBe 200
+        mapper
+            .readTree(repeated.body())
+            .get("results")
+            .toList()
+            .map { it.get("status").asString() } shouldBe
+            listOf("FAILED", "UNCHANGED", "SKIPPED_NO_POLICY")
+        pending() shouldBe 0L
     }
 
     @Test

@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "32"
+            .version.version shouldBe "35"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -527,6 +527,9 @@ class ExpoPersistenceTests {
                             val pending = upgrade.info().pending().size
                             upgrade.migrate().migrationsExecuted shouldBe pending
                         }
+                    val expo = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_expo WHERE id='$EXPO_ID'")
+                    expo["participant_phone_verification_required"] shouldBe false
+                    expo["participant_phone_verification_revision"] shouldBe 0L
                     upgradeJdbc
                         .queryForList(
                             "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",

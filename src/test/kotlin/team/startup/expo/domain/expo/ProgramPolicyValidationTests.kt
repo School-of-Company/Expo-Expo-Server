@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramChannelRequest
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramOccupation
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.global.exception.ExpectedException
@@ -43,6 +44,44 @@ class ProgramPolicyValidationTests {
             policy.copy(cancelEndedAt = start.minusSeconds(1)),
             policy.copy(promotionEndedAt = start.minusSeconds(1)),
             policy.copy(applicationStartedAt = start.plusNanos(1)),
+        ).forEach { invalid ->
+            val exception = assertThrows(ExpectedException::class.java) { invalid.validate() }
+            assertEquals(HttpStatus.BAD_REQUEST, exception.status)
+        }
+    }
+
+    private val general = ProgramChannelRequest("일반", setOf(ProgramOccupation.GENERAL, ProgramOccupation.PARENT), 3, 1)
+    private val teacher = ProgramChannelRequest("교원", setOf(ProgramOccupation.TEACHER), 2, 0)
+    private val channeled =
+        policy.copy(
+            allowedOccupations = setOf(ProgramOccupation.GENERAL, ProgramOccupation.PARENT, ProgramOccupation.TEACHER),
+            capacity = 5,
+            waitingCapacity = 1,
+            channels = listOf(general, teacher),
+        )
+
+    @Test
+    fun `channels whose totals and occupation union match the policy are valid`() {
+        channeled.validate()
+    }
+
+    @Test
+    fun `channels must be disjoint named and add up to the policy totals`() {
+        listOf(
+            channeled.copy(channels = emptyList()),
+            channeled.copy(channels = listOf(general, teacher.copy(name = " 일반 "))),
+            channeled.copy(channels = listOf(general, teacher.copy(name = " "))),
+            channeled.copy(channels = listOf(general, teacher.copy(name = "가".repeat(51)))),
+            channeled.copy(
+                channels = listOf(general, teacher.copy(allowedOccupations = setOf(ProgramOccupation.TEACHER, ProgramOccupation.PARENT))),
+            ),
+            channeled.copy(channels = listOf(general, teacher.copy(allowedOccupations = emptySet()))),
+            channeled.copy(channels = listOf(general, teacher.copy(capacity = 0)), capacity = 3),
+            channeled.copy(channels = listOf(general, teacher.copy(waitingCapacity = -1)), waitingCapacity = 0),
+            channeled.copy(capacity = 6),
+            channeled.copy(waitingCapacity = 2),
+            channeled.copy(allowedOccupations = channeled.allowedOccupations + ProgramOccupation.SCHOOL_STAFF),
+            channeled.copy(channels = listOf(general)),
         ).forEach { invalid ->
             val exception = assertThrows(ExpectedException::class.java) { invalid.validate() }
             assertEquals(HttpStatus.BAD_REQUEST, exception.status)
