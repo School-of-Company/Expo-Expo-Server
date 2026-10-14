@@ -3,6 +3,7 @@ package team.startup.expo.domain.expo.presentation
 import io.swagger.v3.oas.annotations.Operation
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.Valid
+import org.springdoc.core.annotations.ParameterObject
 import org.springframework.http.CacheControl
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -23,7 +24,7 @@ class InternalProgramSessionController(
     @GetMapping("/internal/expo/{expo_id}/program-sessions")
     fun getPrograms(
         @PathVariable("expo_id") expoId: String,
-        @Valid @ModelAttribute request: ProgramSessionPageRequest,
+        @ParameterObject @Valid @ModelAttribute request: ProgramSessionPageRequest,
         servletRequest: HttpServletRequest,
     ): ResponseEntity<ProgramSessionPageResponse> {
         val allowed = setOf("programType", "programId", "groupId", "page", "size", "definitionVersion")

@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "team.startup"
-version = "0.4.1"
+version = "0.4.2"
 
 java {
     toolchain {
@@ -54,6 +54,8 @@ dependencies {
     implementation("org.springframework.cloud:spring-cloud-starter-netflix-eureka-client")
     implementation("org.springframework.cloud:spring-cloud-starter-openfeign")
     implementation("tools.jackson.module:jackson-module-kotlin")
+    // swagger-core는 Jackson 2로 스키마를 만들므로 Kotlin non-null 필드를 required로 표기하려면 Jackson 2 모듈이 필요하다
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis-test")
