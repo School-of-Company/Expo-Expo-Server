@@ -206,6 +206,48 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `channels round trip to the internal definition and invalid splits are rejected by API and DB`() {
+        create("standard")
+        jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!.contains("channels") shouldBe
+            false
+        val teacher = """{"name":"교원","allowedOccupations":["TEACHER"],"capacity":2,"waitingCapacity":1}"""
+        val general = """{"name":"일반","allowedOccupations":["GENERAL"],"capacity":3,"waitingCapacity":0}"""
+        val channeled = { channels: String, capacity: Int ->
+            policy(capacity = capacity)
+                .replace("[\"TEACHER\"]", "[\"TEACHER\",\"GENERAL\"]")
+                .replace("\"closed\":false", "\"closed\":false,\"channels\":[$channels]")
+        }
+        request("/standard/$EXPO", "POST", body("standard", policy = channeled("$teacher,$general", 5))).statusCode() shouldBe 201
+        val internal = request("/internal/expo/$EXPO/standard-programs/2", token = "expo-test-token", role = null)
+        internal.statusCode() shouldBe 200
+        mapper
+            .readTree(internal.body())
+            .get("policy")
+            .get("channels")
+            .toString() shouldBe mapper.readTree("[$teacher,$general]").toString()
+        listOf(
+            channeled("$teacher,$general", 4),
+            channeled("$teacher,${general.replace("GENERAL", "TEACHER")}", 5),
+            channeled(teacher.replace("교원", "일반") + ",$general", 5),
+            channeled("", 5),
+        ).forEach { request("/standard/$EXPO", "POST", body("standard", policy = it)).statusCode() shouldBe 400 }
+        list("standard").size() shouldBe 2
+        val stored = jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=2", String::class.java)!!
+        listOf(
+            stored.replace("\"capacity\":3", "\"capacity\":4"),
+            stored.replace("\"waitingCapacity\":0}", "\"waitingCapacity\":1}"),
+            stored.replace("[\"GENERAL\"]", "[\"GENERAL\",\"TEACHER\"]"),
+            stored.replace("\"일반\"", "\"교원\""),
+            stored.replace(Regex("\"channels\":\\[.*]"), "\"channels\":[]"),
+        ).forEach { invalid ->
+            (invalid != stored) shouldBe true
+            assertThrows(DataIntegrityViolationException::class.java) {
+                jdbc.update("UPDATE tb_standard_program SET policy_json=? WHERE id=2", invalid)
+            }
+        }
+    }
+
+    @Test
     fun `active counts guard shrinking and history guards moving a group or deleting`() {
         create("standard")
         create("standard")
