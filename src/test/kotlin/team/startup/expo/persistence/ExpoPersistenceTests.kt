@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "36"
+            .version.version shouldBe "37"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(

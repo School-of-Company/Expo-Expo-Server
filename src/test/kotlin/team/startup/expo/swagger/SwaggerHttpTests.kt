@@ -234,6 +234,8 @@ class SwaggerEnabledHttpTests : SwaggerHttpSupport() {
                 "formId",
                 "allowedOccupations",
                 "capacity",
+                "preRegistrationCapacity",
+                "onsiteCapacity",
                 "waitingCapacity",
                 "applicationStartedAt",
                 "applicationEndedAt",
@@ -242,6 +244,9 @@ class SwaggerEnabledHttpTests : SwaggerHttpSupport() {
                 "closed",
             )
         required("CreateExpoRequest").containsAll(listOf("title", "startedDay", "coverImage", "x", "y")) shouldBe true
+        schemas.path("ProgramPolicyRequest").path("properties").has("channels") shouldBe false
+        property("ProgramPolicyRequest", "preRegistrationCapacity").path("minimum").asInt() shouldBe 0
+        property("ProgramPolicyRequest", "onsiteCapacity").path("minimum").asInt() shouldBe 0
 
         val startedAt = property("AddStandardProgramRequest", "startedAt")
         startedAt.has("format") shouldBe false

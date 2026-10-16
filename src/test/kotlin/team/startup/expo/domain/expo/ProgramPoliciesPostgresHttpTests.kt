@@ -74,6 +74,7 @@ class ProgramPoliciesPostgresHttpTests {
         supplierTransactions = transactions
         supplierMapper = mapper
         lostResponse = false
+        rejectChange = false
         beforeReply = null
         beforeFormReply = null
         wrongFormExpo = false
@@ -206,44 +207,87 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
-    fun `channels round trip to the internal definition and invalid splits are rejected by API and DB`() {
-        create("standard")
-        jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!.contains("channels") shouldBe
-            false
-        val teacher = """{"name":"교원","allowedOccupations":["TEACHER"],"capacity":2,"waitingCapacity":1}"""
-        val general = """{"name":"일반","allowedOccupations":["GENERAL"],"capacity":3,"waitingCapacity":0}"""
-        val channeled = { channels: String, capacity: Int ->
-            policy(capacity = capacity)
-                .replace("[\"TEACHER\"]", "[\"TEACHER\",\"GENERAL\"]")
-                .replace("\"closed\":false", "\"closed\":false,\"channels\":[$channels]")
+    fun `pre and onsite capacities round trip for standard and training through updates and internal definitions`() {
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val initial = policy(capacity = 30, pre = 20, onsite = 10, form = form)
+            request("/$type/$EXPO", "POST", body(type, policy = initial)).statusCode() shouldBe 201
+            list(type)[0].get("policy").get("preRegistrationCapacity").asInt() shouldBe 20
+            list(type)[0].get("policy").get("onsiteCapacity").asInt() shouldBe 10
+            list(type)[0].get("policy").has("channels") shouldBe false
+            val desired = policy(capacity = 30, pre = 15, onsite = 15, form = form)
+            request("/$type/1", "PATCH", body(type, policy = desired, id = 1, revision = 1)).statusCode() shouldBe 204
+            val stored = mapper.readTree(jdbc.queryForObject("SELECT policy_json FROM tb_${type}_program WHERE id=1", String::class.java)!!)
+            stored.get("capacity").asInt() shouldBe 30
+            stored.get("preRegistrationCapacity").asInt() shouldBe 15
+            stored.get("onsiteCapacity").asInt() shouldBe 15
+            list(type)[0].get("policy") shouldBe stored
+            val internal =
+                if (type == "standard") {
+                    mapper.readTree(request("/internal/expo/$EXPO/standard-programs/1", token = "expo-test-token", role = null).body())
+                } else {
+                    mapper.readTree(
+                        request(
+                            "/internal/expo/$EXPO/training-programs/batch",
+                            "POST",
+                            """{"programIds":[1]}""",
+                            token = "expo-test-token",
+                            role = null,
+                        ).body(),
+                    )[0]
+                }
+            internal.get("policy") shouldBe stored
+            val forwarded = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")[0]
+            forwarded
+                .get("previous")
+                .get("policy")
+                .get("preRegistrationCapacity")
+                .asInt() shouldBe 20
+            forwarded.get("definition").get("policy") shouldBe stored
         }
-        request("/standard/$EXPO", "POST", body("standard", policy = channeled("$teacher,$general", 5))).statusCode() shouldBe 201
-        val internal = request("/internal/expo/$EXPO/standard-programs/2", token = "expo-test-token", role = null)
-        internal.statusCode() shouldBe 200
-        mapper
-            .readTree(internal.body())
-            .get("policy")
-            .get("channels")
-            .toString() shouldBe mapper.readTree("[$teacher,$general]").toString()
-        listOf(
-            channeled("$teacher,$general", 4),
-            channeled("$teacher,${general.replace("GENERAL", "TEACHER")}", 5),
-            channeled(teacher.replace("교원", "일반") + ",$general", 5),
-            channeled("", 5),
-        ).forEach { request("/standard/$EXPO", "POST", body("standard", policy = it)).statusCode() shouldBe 400 }
-        list("standard").size() shouldBe 2
-        val stored = jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=2", String::class.java)!!
-        listOf(
-            stored.replace("\"capacity\":3", "\"capacity\":4"),
-            stored.replace("\"waitingCapacity\":0}", "\"waitingCapacity\":1}"),
-            stored.replace("[\"GENERAL\"]", "[\"GENERAL\",\"TEACHER\"]"),
-            stored.replace("\"일반\"", "\"교원\""),
-            stored.replace(Regex("\"channels\":\\[.*]"), "\"channels\":[]"),
-        ).forEach { invalid ->
-            (invalid != stored) shouldBe true
-            assertThrows(DataIntegrityViolationException::class.java) {
-                jdbc.update("UPDATE tb_standard_program SET policy_json=? WHERE id=2", invalid)
+    }
+
+    @Test
+    fun `admission capacities are required nonnegative integers with matching totals and no role quotas in API and DB`() {
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val valid = policy(capacity = 30, pre = 20, onsite = 10, form = form)
+            val invalid =
+                listOf(
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":-1"),
+                    valid.replace("\"onsiteCapacity\":10", "\"onsiteCapacity\":-1"),
+                    valid.replace("\"preRegistrationCapacity\":20,", ""),
+                    valid.replace("\"onsiteCapacity\":10,", ""),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":null"),
+                    valid.replace("\"onsiteCapacity\":10", "\"onsiteCapacity\":null"),
+                    policy(capacity = 30, pre = 0, onsite = 30, form = form)
+                        .replace("\"preRegistrationCapacity\":0", "\"preRegistrationCapacity\":null"),
+                    policy(capacity = 30, pre = 30, onsite = 0, form = form)
+                        .replace("\"onsiteCapacity\":0", "\"onsiteCapacity\":null"),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":21"),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":20.5"),
+                    valid.replace("\"onsiteCapacity\":10", "\"onsiteCapacity\":10.5"),
+                    valid.replace("\"capacity\":30", "\"capacity\":30.5"),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":\"20\""),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":2147483648"),
+                    valid.replace("\"closed\":false", "\"closed\":false,\"channels\":[]"),
+                    policy(capacity = 0, pre = 0, onsite = 0, form = form),
+                    policy(capacity = -2, pre = Int.MAX_VALUE, onsite = Int.MAX_VALUE, form = form),
+                )
+            invalid.forEach { p ->
+                request("/$type/$EXPO", "POST", body(type, policy = p)).statusCode() shouldBe 400
+                request("/$type/list/$EXPO", "POST", "[${body(type)},${body(type, policy = p)}]").statusCode() shouldBe 400
+                list(type).size() shouldBe 0
             }
+            request("/$type/$EXPO", "POST", body(type, policy = valid)).statusCode() shouldBe 201
+            val groupId = list(type)[0].get("groupId").asString()
+            invalid.forEach { p ->
+                assertThrows(DataIntegrityViolationException::class.java) {
+                    jdbc.update("UPDATE tb_${type}_program SET policy_json=? WHERE id=1", p.dropLast(1) + ",\"groupId\":\"$groupId\"}")
+                }
+            }
+            request("/$type/1", "PATCH", body(type, policy(capacity = 1, pre = 0, onsite = 1, form = form), 1, 1)).statusCode() shouldBe 204
+            list(type)[0].get("policy").get("preRegistrationCapacity").asInt() shouldBe 0
         }
     }
 
@@ -268,6 +312,34 @@ class ProgramPoliciesPostgresHttpTests {
         update(1, policy(capacity = 1, waiting = 0), revision = 2).statusCode() shouldBe 204
         update(1, policy(capacity = 4), revision = 1).statusCode() shouldBe 409
         request("/standard/1", "PATCH", body("standard", id = 1)).statusCode() shouldBe 400
+    }
+
+    @Test
+    fun `changing only the admission split still requires Application approval and preserves the definition on rejection`() {
+        listOf("standard", "training").forEach { type ->
+            create(type)
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val desired = policy(pre = 1, onsite = 1, form = form)
+            rejectChange = true
+            request("/$type/1", "PATCH", body(type, desired, 1, 1)).statusCode() shouldBe 409
+            list(type)[0].get("revision").asLong() shouldBe 1L
+            list(type)[0].get("policy").get("preRegistrationCapacity").asInt() shouldBe 2
+            list(type)[0].get("policy").get("onsiteCapacity").asInt() shouldBe 0
+            pending() shouldBe 0L
+            val forwarded = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")[0]
+            forwarded
+                .get("previous")
+                .get("policy")
+                .get("preRegistrationCapacity")
+                .asInt() shouldBe 2
+            forwarded
+                .get("definition")
+                .get("policy")
+                .get("onsiteCapacity")
+                .asInt() shouldBe 1
+            rejectChange = false
+            request("/$type/1", "PATCH", body(type, desired, 1, 1)).statusCode() shouldBe 204
+        }
     }
 
     @Test
@@ -1141,8 +1213,10 @@ class ProgramPoliciesPostgresHttpTests {
         occupation: String = "TEACHER",
         group: String? = null,
         form: String = STANDARD_FORM,
+        pre: Int = capacity,
+        onsite: Int = 0,
     ): String =
-        """{"formId":"$form","allowedOccupations":[${if (occupation.isEmpty()) "" else "\"$occupation\""}],"capacity":$capacity,"waitingCapacity":$waiting,"applicationStartedAt":"2026-10-11T00:00:00Z","applicationEndedAt":"2026-10-12T00:00:00Z","cancelEndedAt":"2026-10-12T00:00:00Z","promotionEndedAt":"2026-10-12T00:00:00Z","closed":false${group?.let {
+        """{"formId":"$form","allowedOccupations":[${if (occupation.isEmpty()) "" else "\"$occupation\""}],"capacity":$capacity,"preRegistrationCapacity":$pre,"onsiteCapacity":$onsite,"waitingCapacity":$waiting,"applicationStartedAt":"2026-10-11T00:00:00Z","applicationEndedAt":"2026-10-12T00:00:00Z","cancelEndedAt":"2026-10-12T00:00:00Z","promotionEndedAt":"2026-10-12T00:00:00Z","closed":false${group?.let {
             ",\"groupId\":\"$it\""
         } ?: ""}}"""
 
@@ -1208,6 +1282,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var lostResponse = false
 
+        @Volatile private var rejectChange = false
+
         @Volatile private var wrongFormExpo = false
 
         @Volatile private var unrestrictedForm = false
@@ -1249,7 +1325,7 @@ class ProgramPoliciesPostgresHttpTests {
                             exchange.sendResponseHeaders(if (id in listOf(STANDARD_FORM, TRAINING_FORM)) 200 else 404, bytes.size.toLong())
                             exchange.responseBody.write(bytes)
                         } else if (path.contains("/program-changes/")) {
-                            val status = prepare(path, body)
+                            val status = if (rejectChange) 409 else prepare(path, body)
                             beforeReply?.invoke()
                             exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
                         } else if (path.endsWith("/resolve")) {
