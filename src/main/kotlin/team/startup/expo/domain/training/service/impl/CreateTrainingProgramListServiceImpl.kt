@@ -44,6 +44,7 @@ class CreateTrainingProgramListServiceImpl(
                             request.endedAt.toString(),
                             request.category,
                             request.policy,
+                            place = request.place,
                         )
                     TrainingProgram(
                         title = request.title,
@@ -53,6 +54,7 @@ class CreateTrainingProgramListServiceImpl(
                         expo = expo,
                         groupId = definition.groupId,
                         policyJson = policies.json(definition.policy),
+                        place = definition.place,
                     )
                 },
             ).forEach {

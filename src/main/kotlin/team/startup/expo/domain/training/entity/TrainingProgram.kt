@@ -46,6 +46,9 @@ class TrainingProgram(
     @field:Column(name = "policy_json", columnDefinition = "TEXT")
     val policyJson: String? = null,
 
+    @field:Column(length = 255)
+    val place: String? = null,
+
     @field:Column(nullable = false)
     val revision: Long = 1,
 )
