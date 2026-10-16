@@ -41,6 +41,7 @@ class CreateTrainingProgramServiceImpl(
                 request.endedAt.toString(),
                 request.category,
                 request.policy,
+                place = request.place,
             )
         programs
             .save(
@@ -52,6 +53,7 @@ class CreateTrainingProgramServiceImpl(
                     expo = expo,
                     groupId = definition.groupId,
                     policyJson = policies.json(definition.policy),
+                    place = definition.place,
                 ),
             ).also {
                 history.record(expoId, "PROGRAM_CREATE", "TRAINING", requireNotNull(it.id), it.title, history.currentAdminId())

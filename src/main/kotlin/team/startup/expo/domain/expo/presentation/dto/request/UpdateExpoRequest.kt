@@ -61,6 +61,9 @@ data class UpdateStandardProgramRequest(
     @field:jakarta.validation.constraints.Positive
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long? = null,
+    @field:CodePointLength(max = 255)
+    @field:Schema(description = "Optional session place: omitted/null preserves on update; blank clears; max 255 code points")
+    val place: String? = null,
 )
 
 @Schema(name = "ExpoUpdateTrainingProgramRequest")
@@ -85,4 +88,7 @@ data class UpdateTrainingProgramRequest(
     @field:jakarta.validation.constraints.Positive
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long? = null,
+    @field:CodePointLength(max = 255)
+    @field:Schema(description = "Optional session place: omitted/null preserves on update; blank clears; max 255 code points")
+    val place: String? = null,
 )

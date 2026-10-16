@@ -60,6 +60,7 @@ class CreateExpoServiceImpl(
                             program.endedAt.toString(),
                             null,
                             program.policy,
+                            place = program.place,
                         )
                     StandardProgram(
                         title = program.title,
@@ -68,6 +69,7 @@ class CreateExpoServiceImpl(
                         expo = expo,
                         groupId = definition.groupId,
                         policyJson = policies.json(definition.policy),
+                        place = definition.place,
                     )
                 },
             ).forEach {
@@ -85,6 +87,7 @@ class CreateExpoServiceImpl(
                             program.endedAt.toString(),
                             program.category,
                             program.policy,
+                            place = program.place,
                         )
                     TrainingProgram(
                         title = program.title,
@@ -94,6 +97,7 @@ class CreateExpoServiceImpl(
                         expo = expo,
                         groupId = definition.groupId,
                         policyJson = policies.json(definition.policy),
+                        place = definition.place,
                     )
                 },
             ).forEach {
