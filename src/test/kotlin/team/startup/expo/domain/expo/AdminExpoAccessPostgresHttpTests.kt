@@ -256,7 +256,7 @@ class AdminExpoAccessPostgresHttpTests {
         )
         val policy =
             """
-            {"groupId":"$TRAINING_GROUP","formId":"${UUID.randomUUID()}","allowedOccupations":["TEACHER"],"capacity":10,"waitingCapacity":2,
+            {"groupId":"$TRAINING_GROUP","formId":"${UUID.randomUUID()}","allowedOccupations":["TEACHER"],"capacity":10,"preRegistrationCapacity":7,"onsiteCapacity":3,"waitingCapacity":2,
              "applicationStartedAt":"2026-10-11T00:00:00Z","applicationEndedAt":"2026-10-12T00:00:00Z",
              "cancelEndedAt":"2026-10-12T00:00:00Z","promotionEndedAt":"2026-10-12T00:00:00Z","closed":true}
             """.trimIndent()
@@ -269,6 +269,8 @@ class AdminExpoAccessPostgresHttpTests {
         val training = last.get("items")[1]
         training.get("revision").asLong() shouldBe 3L
         training.get("policy").get("capacity").asInt() shouldBe 10
+        training.get("policy").get("preRegistrationCapacity").asInt() shouldBe 7
+        training.get("policy").get("onsiteCapacity").asInt() shouldBe 3
         training.get("policy").get("waitingCapacity").asInt() shouldBe 2
         training.get("policy").get("closed").asBoolean() shouldBe true
     }
