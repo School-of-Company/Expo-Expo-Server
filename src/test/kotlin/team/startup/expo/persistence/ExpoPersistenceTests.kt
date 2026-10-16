@@ -447,8 +447,8 @@ class ExpoPersistenceTests {
     }
 
     @Test
-    fun `V23부터 V31에서 최신 버전까지 기존 데이터와 migration history를 보존한다`() {
-        listOf(23, 24, 25, 26, 27, 28, 29, 31).forEach { target ->
+    fun `V23부터 V35에서 최신 버전까지 기존 데이터와 migration history를 보존한다`() {
+        listOf(23, 24, 25, 26, 27, 28, 29, 31, 35).forEach { target ->
             DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
                 try {
                     Flyway
@@ -555,8 +555,8 @@ class ExpoPersistenceTests {
                     val standard = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_standard_program WHERE id=42")
                     val training = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_training_program WHERE id=42")
                     if (target >= 27) {
-                        standard shouldBe standardBefore
-                        training shouldBe trainingBefore
+                        standard - "place" shouldBe standardBefore
+                        training - "place" shouldBe trainingBefore
                     }
                     upgradeJdbc.queryForObject(
                         "SELECT count(*) FROM preregister_upgrade.tb_program_form_guard WHERE id=1",
@@ -570,6 +570,8 @@ class ExpoPersistenceTests {
                     training["category"] shouldBe "ESSENTIAL"
                     standard["expo_id"] shouldBe EXPO_ID
                     training["expo_id"] shouldBe EXPO_ID
+                    standard["place"] shouldBe null
+                    training["place"] shouldBe null
                     standard["revision"] shouldBe 1L
                     training["revision"] shouldBe 1L
                     standard["policy_json"] shouldBe null

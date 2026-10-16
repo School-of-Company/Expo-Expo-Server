@@ -104,6 +104,7 @@ class ApplyProgramChangeServiceImpl(
                                         expo = updatedExpo,
                                         groupId = definition.groupId,
                                         policyJson = support.json(definition.policy),
+                                        place = definition.place,
                                         revision = definition.revision,
                                     ),
                                 )
@@ -129,6 +130,7 @@ class ApplyProgramChangeServiceImpl(
                                         expo = updatedExpo,
                                         groupId = definition.groupId,
                                         policyJson = support.json(definition.policy),
+                                        place = definition.place,
                                         revision = definition.revision,
                                     ),
                                 )

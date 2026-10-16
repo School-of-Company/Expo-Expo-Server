@@ -26,6 +26,8 @@ data class StandardProgramResponse(
     val revision: Long = 1,
     @field:Schema(description = "진행 중 변경의 다음 버전", example = "2")
     val pendingRevision: Long? = null,
+    @field:Schema(description = "Session place; null means location to be announced")
+    val place: String? = null,
 )
 
 data class StandardProgramParticipantResponse(
@@ -64,4 +66,6 @@ data class StandardProgramTitleResponse(
     val revision: Long = 1,
     @field:Schema(description = "진행 중 변경의 다음 버전", example = "2")
     val pendingRevision: Long? = null,
+    @field:Schema(description = "Session place; null means location to be announced")
+    val place: String? = null,
 )

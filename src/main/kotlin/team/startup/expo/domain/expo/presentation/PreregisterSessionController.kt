@@ -121,7 +121,10 @@ class PreregisterSessionController(
         return ResponseEntity.noContent().build()
     }
 
-    @Operation(summary = "중단된 회차 변경 재시도", description = "서버에 저장된 변경을 재시도합니다. 원래 요청 본문이나 revision은 필요하지 않습니다.")
+    @Operation(
+        summary = "중단된 회차 변경 재시도",
+        description = "저장된 변경을 재시도하고 로컬 반영이 끝난 변경도 Application에서 확인합니다. 삭제 후에도 가능하며 원래 요청 본문이나 revision은 필요하지 않습니다.",
+    )
     @PostMapping("/{session_id}/changes/retry")
     @ApiResponse(responseCode = "204", description = "처리 완료 (본문 없음)")
     @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")

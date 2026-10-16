@@ -12,6 +12,7 @@ import team.startup.expo.domain.expo.repository.PreregisterSessionChangeReposito
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.DeletePreregisterSessionService
+import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
@@ -20,6 +21,7 @@ class DeletePreregisterSessionServiceImpl(
     private val sessions: PreregisterSessionRepository,
     private val pendingChanges: PreregisterSessionChangeRepository,
     private val applyChange: ApplyPreregisterSessionChangeService,
+    private val changes: PreregisterSessionChangesClient,
     private val transactions: TransactionTemplate,
     private val history: AdminChangeHistoryRepository,
 ) : DeletePreregisterSessionService {
@@ -58,7 +60,11 @@ class DeletePreregisterSessionServiceImpl(
                         adminId = history.currentAdminId(),
                     ),
                 )
-            } ?: return
-        applyChange.execute(expoId, sessionId, pending.changeId)
+            }
+        if (pending == null) {
+            changes.reconcile(expoId, sessionId)
+        } else {
+            applyChange.execute(expoId, sessionId, pending.changeId)
+        }
     }
 }

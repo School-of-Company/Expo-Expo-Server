@@ -1058,6 +1058,115 @@ class ProgramPoliciesPostgresHttpTests {
         }
     }
 
+    @Test
+    fun expoAndListWritesKeepSessionPlaces() {
+        jdbc.update(
+            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('place-image','local','place-test','/image/place-test','image/png','1',CURRENT_TIMESTAMP,'PENDING')",
+        )
+        val standard = withPlace(body("standard", policy = null), "Hall S")
+        val training = withPlace(body("training", policy = null), "Hall T")
+        val createBody =
+            expoBody(standard, training)
+                .replace("updateStandardProRequestDto", "addStandardProRequestDto")
+                .replace("updateTrainingProRequestDto", "addTrainingProRequestDto")
+        val created = request("/expo", "POST", createBody.replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/place-test\""))
+        created.statusCode() shouldBe 201
+        val expoId = mapper.readTree(created.body()).get("expoId").asString()
+        val standardId = jdbc.queryForObject("SELECT id FROM tb_standard_program WHERE expo_id=?", Long::class.java, expoId)!!
+        val trainingId = jdbc.queryForObject("SELECT id FROM tb_training_program WHERE expo_id=?", Long::class.java, expoId)!!
+        val updated =
+            expoBody(
+                withPlace(body("standard", policy = null, id = standardId, revision = 1), "New S"),
+                withPlace(body("training", policy = null, id = trainingId, revision = 1), "New T"),
+            )
+        request(
+            "/expo/$expoId",
+            "PATCH",
+            updated.replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/place-test\""),
+        ).statusCode() shouldBe
+            204
+        listOf("standard" to "New S", "training" to "New T").forEach { (type, place) ->
+            val public = request("/$type/program/$expoId", role = null)
+            public.statusCode() shouldBe 200
+            mapper.readTree(public.body())[0].get("place").asString() shouldBe place
+            request("/$type/list/$EXPO", "POST", "[${withPlace(body(type, policy = null), place)}]").statusCode() shouldBe 201
+            list(type)[0].get("place").asString() shouldBe place
+        }
+    }
+
+    private fun withPlace(
+        body: String,
+        place: String,
+    ): String = body.dropLast(1) + ",\"place\":\"$place\"}"
+
+    @Test
+    fun sessionPlacesSurviveGuardedUpdatesAndInternalReads() {
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", withPlace(body(type), "  Room A  ")).statusCode() shouldBe 201
+            val first = list(type)[0]
+            first.get("place").asString() shouldBe "Room A"
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val linked = body(type, policy(group = first.get("groupId").asString(), form = form))
+            request("/$type/$EXPO", "POST", withPlace(linked, "Room B")).statusCode() shouldBe 201
+            list(type)[1].get("place").asString() shouldBe "Room B"
+            seed(type.uppercase(), 1, confirmed = 1)
+            request("/$type/1", "PATCH", withPlace(body(type, id = 1, revision = 1), "Room C")).statusCode() shouldBe 204
+            list(type)[0].get("revision").asLong() shouldBe 2L
+            list(type)[0].get("place").asString() shouldBe "Room C"
+            val payload = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second)
+            payload
+                .get("mutations")[0]
+                .get("previous")
+                .get("place")
+                .asString() shouldBe "Room A"
+            payload
+                .get("mutations")[0]
+                .get("definition")
+                .get("place")
+                .asString() shouldBe "Room C"
+            request("/$type/1", "PATCH", withPlace(body(type, id = 1, revision = 1), "stale")).statusCode() shouldBe 409
+            request("/$type/1", "PATCH", body(type, id = 1, revision = 2)).statusCode() shouldBe 204
+            list(type)[0].get("place").asString() shouldBe "Room C"
+            val internal =
+                if (type == "standard") {
+                    request("/internal/expo/$EXPO/standard-programs/1", role = null, token = "expo-test-token")
+                } else {
+                    request(
+                        "/internal/expo/$EXPO/training-programs/batch",
+                        "POST",
+                        "{\"programIds\":[1]}",
+                        role = null,
+                        token = "expo-test-token",
+                    )
+                }
+            internal.statusCode() shouldBe 200
+            val node = mapper.readTree(internal.body())
+            (if (type == "standard") node else node[0]).get("place").asString() shouldBe "Room C"
+            request("/$type/1", "PATCH", withPlace(body(type, id = 1, revision = 2), "   ")).statusCode() shouldBe 204
+            list(type)[0].get("place").isNull shouldBe true
+            list(type)[1].get("place").asString() shouldBe "Room B"
+        }
+        val page = request("/internal/expo/$EXPO/program-sessions", role = null, token = "expo-test-token")
+        page.statusCode() shouldBe 200
+        mapper.readTree(page.body()).get("items").count { !it.get("place").isNull && it.get("place").asString() == "Room B" } shouldBe 2
+    }
+
+    @Test
+    fun optionalPlacesSupportLegacyAndValidateLength() {
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", body(type, policy = null)).statusCode() shouldBe 201
+            list(type)[0].get("place").isNull shouldBe true
+            request("/$type/$EXPO", "POST", withPlace(body(type, policy = null), " ")).statusCode() shouldBe 201
+            list(type)[1].get("place").isNull shouldBe true
+            request("/$type/$EXPO", "POST", withPlace(body(type, policy = null), "x".repeat(255))).statusCode() shouldBe 201
+            list(type)[2].get("place").asString().length shouldBe 255
+            val invalid = withPlace(body(type, policy = null), "x".repeat(256))
+            request("/$type/$EXPO", "POST", invalid).statusCode() shouldBe 400
+            request("/$type/list/$EXPO", "POST", "[$invalid]").statusCode() shouldBe 400
+            request("/$type/1", "PATCH", withPlace(body(type, policy = null, id = 1), "x".repeat(256))).statusCode() shouldBe 400
+        }
+    }
+
     private fun seed(
         type: String,
         id: Long,

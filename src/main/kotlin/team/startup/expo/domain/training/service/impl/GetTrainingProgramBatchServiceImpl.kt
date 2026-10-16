@@ -40,6 +40,7 @@ class GetTrainingProgramBatchServiceImpl(
             TrainingProgramResponse(
                 id = requireNotNull(program.id),
                 title = program.title,
+                place = program.place,
                 expoId = expoId,
                 groupId = program.groupId,
                 policy = policies.policy(program.policyJson),
