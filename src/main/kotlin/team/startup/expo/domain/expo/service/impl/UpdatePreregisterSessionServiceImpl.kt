@@ -13,6 +13,7 @@ import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
+import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.domain.expo.service.UpdatePreregisterSessionService
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
@@ -24,6 +25,7 @@ class UpdatePreregisterSessionServiceImpl(
     private val sessions: PreregisterSessionRepository,
     private val pendingChanges: PreregisterSessionChangeRepository,
     private val applyChange: ApplyPreregisterSessionChangeService,
+    private val changes: PreregisterSessionChangesClient,
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
     private val history: AdminChangeHistoryRepository,
@@ -35,6 +37,7 @@ class UpdatePreregisterSessionServiceImpl(
     ) {
         val definition = request.definition
         definition.validatePeriod()
+        var replay = false
         val pending =
             transactions.execute {
                 val expo = expos.findLockedById(expoId) ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
@@ -54,7 +57,10 @@ class UpdatePreregisterSessionServiceImpl(
                         cancelEndedAt = definition.cancelEndedAt?.truncatedTo(ChronoUnit.MICROS),
                     )
                 if (current.revision != request.revision) {
-                    if (current.revision > 1 && request.revision == current.revision - 1 && original == desired) return@execute null
+                    if (current.revision > 1 && request.revision == current.revision - 1 && original == desired) {
+                        replay = true
+                        return@execute null
+                    }
                     throw ExpectedException(HttpStatus.CONFLICT, "회차 버전이 변경됐습니다. 다시 조회해 주세요.")
                 }
                 val existing = pendingChanges.findByIdOrNull(sessionId)
@@ -78,7 +84,11 @@ class UpdatePreregisterSessionServiceImpl(
                         adminId = history.currentAdminId(),
                     ),
                 )
-            } ?: return
-        applyChange.execute(expoId, sessionId, pending.changeId)
+            }
+        if (pending != null) {
+            applyChange.execute(expoId, sessionId, pending.changeId)
+        } else if (replay) {
+            changes.reconcile(expoId, sessionId)
+        }
     }
 }

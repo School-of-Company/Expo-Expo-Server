@@ -32,6 +32,7 @@ class GetStandardProgramServiceImpl(
         return StandardProgramTitleResponse(
             id = requireNotNull(program.id),
             title = program.title,
+            place = program.place,
             startedAt = program.startedAt,
             endedAt = program.endedAt,
             expoId = expoId,

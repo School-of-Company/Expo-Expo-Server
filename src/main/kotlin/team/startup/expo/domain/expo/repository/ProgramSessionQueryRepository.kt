@@ -62,6 +62,7 @@ class ProgramSessionQueryRepository(
                     groupId = UUID.fromString(node.get("group_id").asString()),
                     policy = policy?.let { mapper.readValue(it, ProgramPolicyRequest::class.java) },
                     revision = node.get("revision").asLong(),
+                    place = node.get("place")?.takeUnless { it.isNull }?.asString(),
                 )
             },
             *parameters(expoId, request),

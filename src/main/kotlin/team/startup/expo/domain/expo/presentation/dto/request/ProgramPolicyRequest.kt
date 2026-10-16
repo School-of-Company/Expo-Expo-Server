@@ -1,15 +1,19 @@
 package team.startup.expo.domain.expo.presentation.dto.request
 
+import com.fasterxml.jackson.annotation.JsonAnySetter
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.Valid
-import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Positive
 import jakarta.validation.constraints.PositiveOrZero
-import jakarta.validation.constraints.Size
 import org.springframework.http.HttpStatus
 import team.startup.expo.global.exception.ExpectedException
+import tools.jackson.core.JsonParser
+import tools.jackson.core.JsonToken
+import tools.jackson.databind.DeserializationContext
+import tools.jackson.databind.ValueDeserializer
+import tools.jackson.databind.annotation.JsonDeserialize
 import java.time.Instant
 import java.util.UUID
 
@@ -33,8 +37,20 @@ data class ProgramPolicyRequest(
     @field:Schema(description = "신청 가능한 직종", example = "[\"TEACHER\"]")
     val allowedOccupations: Set<ProgramOccupation>,
     @field:Positive
-    @field:Schema(description = "정원", example = "30")
+    @param:JsonProperty(required = true)
+    @field:JsonDeserialize(using = ProgramCapacityDeserializer::class)
+    @field:Schema(description = "총정원. 사전 접수 정원과 현장 접수 정원의 합이며 1 이상", example = "30")
     val capacity: Int,
+    @field:PositiveOrZero
+    @param:JsonProperty(required = true)
+    @field:JsonDeserialize(using = ProgramCapacityDeserializer::class)
+    @field:Schema(description = "사전 접수 정원. 0 이상, 생략 불가", example = "20")
+    val preRegistrationCapacity: Int,
+    @field:PositiveOrZero
+    @param:JsonProperty(required = true)
+    @field:JsonDeserialize(using = ProgramCapacityDeserializer::class)
+    @field:Schema(description = "현장 접수 정원. 0 이상, 생략 불가. 현장 개방·신청 권한을 의미하지 않음", example = "10")
+    val onsiteCapacity: Int,
     @field:PositiveOrZero
     @param:JsonProperty(required = true)
     @field:Schema(description = "대기 정원", example = "5")
@@ -52,15 +68,13 @@ data class ProgramPolicyRequest(
     val closed: Boolean,
     @field:Valid
     @field:JsonInclude(JsonInclude.Include.NON_NULL)
-    @field:Schema(
-        description =
-            "신청 채널(신청 구분)별 정원. null이면 채널 없이 capacity·waitingCapacity 하나로 모집. " +
-                "있으면 채널 사이 직종이 겹치지 않아야 하고 capacity·waitingCapacity는 채널 합, allowedOccupations는 채널 직종 합집합과 같아야 함",
-    )
-    val channels: List<ProgramChannelRequest>? = null,
+    @field:Schema(description = "이 회차의 초등 1~3학년 보호자 필수 설정. null/생략은 OFF이며 같은 묶음의 다른 회차로 전파하지 않음")
+    val guardianPolicy: ProgramGuardianPolicyRequest? = null,
 ) {
     fun validate() {
-        if (capacity <= 0 || waitingCapacity < 0 || allowedOccupations.isEmpty() ||
+        if (capacity <= 0 || preRegistrationCapacity < 0 || onsiteCapacity < 0 ||
+            preRegistrationCapacity.toLong() + onsiteCapacity.toLong() != capacity.toLong() ||
+            waitingCapacity < 0 || allowedOccupations.isEmpty() ||
             !applicationStartedAt.isBefore(applicationEndedAt) ||
             cancelEndedAt.isBefore(applicationStartedAt) || promotionEndedAt.isBefore(applicationStartedAt)
         ) {
@@ -69,35 +83,24 @@ data class ProgramPolicyRequest(
         if (listOf(applicationStartedAt, applicationEndedAt, cancelEndedAt, promotionEndedAt).any { it.nano % 1000 != 0 }) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 시각은 마이크로초 정밀도까지 지원합니다.")
         }
-        channels?.let { validateChannels(it) }
+        guardianPolicy?.validate()
     }
 
-    private fun validateChannels(channels: List<ProgramChannelRequest>) {
-        val occupations = channels.flatMap { it.allowedOccupations }
-        val names = channels.map { it.name.trim() }
-        if (channels.isEmpty() || names.any { it.isEmpty() || it.length > 50 } || names.toSet().size != names.size ||
-            channels.any { it.capacity <= 0 || it.waitingCapacity < 0 || it.allowedOccupations.isEmpty() } ||
-            occupations.size != occupations.toSet().size || occupations.toSet() != allowedOccupations ||
-            channels.sumOf { it.capacity.toLong() } != capacity.toLong() ||
-            channels.sumOf { it.waitingCapacity.toLong() } != waitingCapacity.toLong()
-        ) {
-            throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 신청 채널 정책이 올바르지 않습니다.")
-        }
-    }
+    @JsonAnySetter
+    fun rejectUnknownField(
+        name: String,
+        value: Any?,
+    ): Unit = throw ExpectedException(HttpStatus.BAD_REQUEST, "지원하지 않는 프로그램 정책 필드입니다: $name")
 }
 
-data class ProgramChannelRequest(
-    @field:NotBlank
-    @field:Size(max = 50)
-    @field:Schema(description = "채널 이름. 회차 안에서 고유하며 신청 집계 키로 쓰임", example = "교원")
-    val name: String,
-    @field:Schema(description = "이 채널로 신청하는 직종. 다른 채널과 겹칠 수 없음", example = "[\"TEACHER\"]")
-    val allowedOccupations: Set<ProgramOccupation>,
-    @field:Positive
-    @field:Schema(description = "채널 정원", example = "10")
-    val capacity: Int,
-    @field:PositiveOrZero
-    @param:JsonProperty(required = true)
-    @field:Schema(description = "채널 대기 정원", example = "2")
-    val waitingCapacity: Int,
-)
+class ProgramCapacityDeserializer : ValueDeserializer<Int>() {
+    override fun deserialize(
+        parser: JsonParser,
+        context: DeserializationContext,
+    ): Int {
+        if (!parser.hasToken(JsonToken.VALUE_NUMBER_INT)) {
+            throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정원은 정수여야 합니다.")
+        }
+        return parser.intValue
+    }
+}

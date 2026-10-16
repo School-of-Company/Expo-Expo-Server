@@ -21,6 +21,37 @@ class PreregisterSessionChangesClient(
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
+    fun reconcile(
+        expoId: String,
+        sessionId: Long,
+    ) {
+        if (applicationUrl.isBlank() || internalToken.isBlank()) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "회차 변경 내부 연동이 설정되지 않았습니다.")
+        }
+        try {
+            val request =
+                HttpRequest
+                    .newBuilder(
+                        URI.create("${applicationUrl.trimEnd('/')}/internal/expos/$expoId/preregister-sessions/$sessionId/reconciliation"),
+                    ).timeout(Duration.ofSeconds(5))
+                    .header("X-Internal-Token", internalToken)
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build()
+            val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() == 409 || (response.statusCode() == 200 && response.body().trim() == "false")) {
+                throw ExpectedException(HttpStatus.CONFLICT, "회차 변경 확인이 완료되지 않았습니다. 변경 재시도를 실행해 주세요.")
+            }
+            if (response.statusCode() != 200 || response.body().trim() != "true") {
+                throw ExpectedException(HttpStatus.BAD_GATEWAY, "신청 서비스 회차 변경 확인 응답이 올바르지 않습니다.")
+            }
+        } catch (exception: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "회차 변경 확인이 중단됐습니다.")
+        } catch (exception: IOException) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "신청 서비스에 연결할 수 없습니다.")
+        }
+    }
+
     // Application must persist the admission block before acknowledging; a history lookup alone is unsafe.
     fun prepare(
         expoId: String,

@@ -1667,8 +1667,9 @@ class ExpoApiPostgresHttpTests {
             copy.get("revision").asLong() shouldBe 1L
             copy.get("policy").isNull shouldBe true
             copy.get("pendingRevision").isNull shouldBe true
+            copy.get("place").isNull shouldBe true
             UUID.fromString(copy.get("groupId").asString()).toString() shouldBe copy.get("groupId").asString()
-            listOf("expoId", "programType", "groupId", "policy", "revision", "pendingRevision").forEach { copy.remove(it) }
+            listOf("expoId", "programType", "groupId", "policy", "revision", "pendingRevision", "place").forEach { copy.remove(it) }
             if (titleOnly) listOf("startedAt", "endedAt").forEach { copy.remove(it) }
             return copy
         }

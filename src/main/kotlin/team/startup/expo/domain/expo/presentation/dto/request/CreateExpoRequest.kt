@@ -53,6 +53,9 @@ data class CreateStandardProgramRequest(
     @field:Valid
     @field:Schema(description = "프로그램 모집 정책. 수정 요청에서 null이면 기존 정책 유지")
     val policy: ProgramPolicyRequest? = null,
+    @field:CodePointLength(max = 255)
+    @field:Schema(description = "Optional session place: omitted/null preserves on update; blank clears; max 255 code points")
+    val place: String? = null,
 )
 
 data class CreateTrainingProgramRequest(
@@ -70,4 +73,7 @@ data class CreateTrainingProgramRequest(
     @field:Valid
     @field:Schema(description = "프로그램 모집 정책. 수정 요청에서 null이면 기존 정책 유지")
     val policy: ProgramPolicyRequest? = null,
+    @field:CodePointLength(max = 255)
+    @field:Schema(description = "Optional session place: omitted/null preserves on update; blank clears; max 255 code points")
+    val place: String? = null,
 )

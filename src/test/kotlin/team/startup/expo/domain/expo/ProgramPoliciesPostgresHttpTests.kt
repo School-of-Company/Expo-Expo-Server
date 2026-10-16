@@ -74,6 +74,7 @@ class ProgramPoliciesPostgresHttpTests {
         supplierTransactions = transactions
         supplierMapper = mapper
         lostResponse = false
+        rejectChange = false
         beforeReply = null
         beforeFormReply = null
         wrongFormExpo = false
@@ -82,6 +83,12 @@ class ProgramPoliciesPostgresHttpTests {
         lateFormStart = false
         malformedForm = false
         shortFormPeriod = false
+        formQuestions = "[]"
+        formVersion = 1
+        guardianSupport = true
+        guardianPrepareSupport = true
+        guardianSupportVersion = "1"
+        guardianPrepareStatus = null
         calls.clear()
         jdbc.execute("TRUNCATE tb_program_form_change")
         jdbc.execute("TRUNCATE tb_expo_image, tb_expo RESTART IDENTITY CASCADE")
@@ -97,6 +104,135 @@ class ProgramPoliciesPostgresHttpTests {
             )
         }
         jdbc.update("UPDATE tb_expo SET cover_image=''")
+    }
+
+    @Test
+    fun `guardian policy round trips for both types without changing another session in the same group`() {
+        formQuestions = guardianQuestions()
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            request("/$type/$EXPO", "POST", body(type, guardianPolicy(form = form))).statusCode() shouldBe 201
+            val first = list(type)[0]
+            val group = first.get("groupId").asString()
+            request("/$type/$EXPO", "POST", body(type, policy(form = form, group = group))).statusCode() shouldBe 201
+            first.get("policy").get("guardianPolicy").toString() shouldBe mapper.readTree(guardian()).toString()
+            list(type)[1].get("policy").has("guardianPolicy") shouldBe false
+            val path = if (type == "standard") "standard-programs/1" else "training-programs/batch"
+            val method = if (type == "standard") "GET" else "POST"
+            val definition = internal("/internal/expo/$EXPO/$path", method, if (type == "training") """{"programIds":[1]}""" else "")
+            definition.statusCode() shouldBe 200
+            val result = mapper.readTree(definition.body()).let { if (type == "training") it[0] else it }
+            result.get("policy").get("guardianPolicy").toString() shouldBe mapper.readTree(guardian()).toString()
+            internal("/internal/expo/$OTHER/$path", method, if (type == "training") """{"programIds":[1]}""" else "")
+                .statusCode() shouldBe 404
+            jdbc
+                .queryForObject("SELECT policy_json FROM tb_${type}_program WHERE id=1", String::class.java)!!
+                .contains("guardianPolicy") shouldBe true
+        }
+        val legacy = mapper.readTree(policy())
+        legacy.has("guardianPolicy") shouldBe false
+    }
+
+    @Test
+    fun `guardian references require the current version and elementary branch rather than matching titles`() {
+        formQuestions = guardianQuestions()
+        val original = formQuestions
+        listOf(
+            original.replace("\"id\":102", "\"id\":999"),
+            original.replace("\"primary\":\"초등학생\"", "\"renamed\":\"초등학생\""),
+            original.replace("\"g1\":\"1학년\"", "\"missing\":\"1학년\""),
+            original.replace("\"requiredStatus\":true", "\"requiredStatus\":false"),
+            original.replace("\"parentIndex\":0", "\"parentIndex\":1"),
+            original.replace("\"triggerValue\":\"primary\"", "\"triggerValue\":\"other\""),
+            original.replace("\"formType\":\"DROPDOWN\"", "\"formType\":\"SENTENCE\""),
+        ).forEach { invalid ->
+            formQuestions = invalid
+            request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 400
+        }
+        formQuestions = original
+        formVersion = 2
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 409
+        formVersion = 1
+        wrongFormExpo = true
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 400
+        wrongFormExpo = false
+        list("standard").size() shouldBe 0
+        formQuestions = original.replace("초등학생", "초등학교 재학생").replace("학년", "학년 선택")
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
+    }
+
+    @Test
+    fun `guardian ON and OFF changes preserve revisions and reject confirmed or waiting participants`() {
+        formQuestions = guardianQuestions()
+        create("standard")
+        seed("STANDARD", 1, waiting = 1)
+        update(1, guardianPolicy()).statusCode() shouldBe 409
+        pending() shouldBe 0L
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        jdbc.update("UPDATE test_admission SET waiting=0")
+        update(1, guardianPolicy()).statusCode() shouldBe 204
+        calls.any { it.first.endsWith("/guardian-policy") && it.second.contains("guardianPolicy") } shouldBe true
+        list("standard")[0].get("revision").asLong() shouldBe 2L
+        jdbc.update("UPDATE test_admission SET confirmed=1")
+        update(1, policy(), revision = 2).statusCode() shouldBe 409
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe true
+        jdbc.update("UPDATE test_admission SET confirmed=0")
+        update(1, policy(), revision = 1).statusCode() shouldBe 409
+        update(1, policy(), revision = 2).statusCode() shouldBe 204
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe false
+        list("standard")[0].get("revision").asLong() shouldBe 3L
+    }
+
+    @Test
+    fun `unsupported Application cannot enable a guardian policy or silently approve its removal`() {
+        formQuestions = guardianQuestions()
+        guardianSupport = false
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
+        list("standard").size() shouldBe 0
+        guardianSupport = true
+        guardianSupportVersion = "2"
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
+        list("standard").size() shouldBe 0
+        guardianSupportVersion = "1"
+        create("standard")
+        update(1, guardianPolicy()).statusCode() shouldBe 204
+        guardianPrepareStatus = 404
+        update(1, policy(), revision = 2).statusCode() shouldBe 503
+        pending() shouldBe 1L
+        guardianPrepareStatus = null
+        guardianPrepareSupport = false
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 503
+        pending() shouldBe 1L
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe true
+        guardianPrepareSupport = true
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe false
+    }
+
+    @Test
+    fun `guardian list creation is atomic when support is missing`() {
+        formQuestions = guardianQuestions()
+        guardianSupport = false
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            request("/$type/list/$EXPO", "POST", "[${body(type)},${body(type, guardianPolicy(form))}]").statusCode() shouldBe 503
+            list(type).size() shouldBe 0
+        }
+    }
+
+    @Test
+    fun `guardian form version is rechecked after approval and the pending command can retry`() {
+        formQuestions = guardianQuestions()
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
+        beforeReply = { formVersion = 2 }
+        val command = body("standard", guardianPolicy(), 1, 1).replace("\"session\"", "\"updated\"")
+        request("/standard/1", "PATCH", command).statusCode() shouldBe 409
+        pending() shouldBe 1L
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        beforeReply = null
+        formVersion = 1
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("standard")[0].get("revision").asLong() shouldBe 2L
     }
 
     @Test
@@ -206,44 +342,87 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
-    fun `channels round trip to the internal definition and invalid splits are rejected by API and DB`() {
-        create("standard")
-        jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!.contains("channels") shouldBe
-            false
-        val teacher = """{"name":"교원","allowedOccupations":["TEACHER"],"capacity":2,"waitingCapacity":1}"""
-        val general = """{"name":"일반","allowedOccupations":["GENERAL"],"capacity":3,"waitingCapacity":0}"""
-        val channeled = { channels: String, capacity: Int ->
-            policy(capacity = capacity)
-                .replace("[\"TEACHER\"]", "[\"TEACHER\",\"GENERAL\"]")
-                .replace("\"closed\":false", "\"closed\":false,\"channels\":[$channels]")
+    fun `pre and onsite capacities round trip for standard and training through updates and internal definitions`() {
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val initial = policy(capacity = 30, pre = 20, onsite = 10, form = form)
+            request("/$type/$EXPO", "POST", body(type, policy = initial)).statusCode() shouldBe 201
+            list(type)[0].get("policy").get("preRegistrationCapacity").asInt() shouldBe 20
+            list(type)[0].get("policy").get("onsiteCapacity").asInt() shouldBe 10
+            list(type)[0].get("policy").has("channels") shouldBe false
+            val desired = policy(capacity = 30, pre = 15, onsite = 15, form = form)
+            request("/$type/1", "PATCH", body(type, policy = desired, id = 1, revision = 1)).statusCode() shouldBe 204
+            val stored = mapper.readTree(jdbc.queryForObject("SELECT policy_json FROM tb_${type}_program WHERE id=1", String::class.java)!!)
+            stored.get("capacity").asInt() shouldBe 30
+            stored.get("preRegistrationCapacity").asInt() shouldBe 15
+            stored.get("onsiteCapacity").asInt() shouldBe 15
+            list(type)[0].get("policy") shouldBe stored
+            val internal =
+                if (type == "standard") {
+                    mapper.readTree(request("/internal/expo/$EXPO/standard-programs/1", token = "expo-test-token", role = null).body())
+                } else {
+                    mapper.readTree(
+                        request(
+                            "/internal/expo/$EXPO/training-programs/batch",
+                            "POST",
+                            """{"programIds":[1]}""",
+                            token = "expo-test-token",
+                            role = null,
+                        ).body(),
+                    )[0]
+                }
+            internal.get("policy") shouldBe stored
+            val forwarded = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")[0]
+            forwarded
+                .get("previous")
+                .get("policy")
+                .get("preRegistrationCapacity")
+                .asInt() shouldBe 20
+            forwarded.get("definition").get("policy") shouldBe stored
         }
-        request("/standard/$EXPO", "POST", body("standard", policy = channeled("$teacher,$general", 5))).statusCode() shouldBe 201
-        val internal = request("/internal/expo/$EXPO/standard-programs/2", token = "expo-test-token", role = null)
-        internal.statusCode() shouldBe 200
-        mapper
-            .readTree(internal.body())
-            .get("policy")
-            .get("channels")
-            .toString() shouldBe mapper.readTree("[$teacher,$general]").toString()
-        listOf(
-            channeled("$teacher,$general", 4),
-            channeled("$teacher,${general.replace("GENERAL", "TEACHER")}", 5),
-            channeled(teacher.replace("교원", "일반") + ",$general", 5),
-            channeled("", 5),
-        ).forEach { request("/standard/$EXPO", "POST", body("standard", policy = it)).statusCode() shouldBe 400 }
-        list("standard").size() shouldBe 2
-        val stored = jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=2", String::class.java)!!
-        listOf(
-            stored.replace("\"capacity\":3", "\"capacity\":4"),
-            stored.replace("\"waitingCapacity\":0}", "\"waitingCapacity\":1}"),
-            stored.replace("[\"GENERAL\"]", "[\"GENERAL\",\"TEACHER\"]"),
-            stored.replace("\"일반\"", "\"교원\""),
-            stored.replace(Regex("\"channels\":\\[.*]"), "\"channels\":[]"),
-        ).forEach { invalid ->
-            (invalid != stored) shouldBe true
-            assertThrows(DataIntegrityViolationException::class.java) {
-                jdbc.update("UPDATE tb_standard_program SET policy_json=? WHERE id=2", invalid)
+    }
+
+    @Test
+    fun `admission capacities are required nonnegative integers with matching totals and no role quotas in API and DB`() {
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val valid = policy(capacity = 30, pre = 20, onsite = 10, form = form)
+            val invalid =
+                listOf(
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":-1"),
+                    valid.replace("\"onsiteCapacity\":10", "\"onsiteCapacity\":-1"),
+                    valid.replace("\"preRegistrationCapacity\":20,", ""),
+                    valid.replace("\"onsiteCapacity\":10,", ""),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":null"),
+                    valid.replace("\"onsiteCapacity\":10", "\"onsiteCapacity\":null"),
+                    policy(capacity = 30, pre = 0, onsite = 30, form = form)
+                        .replace("\"preRegistrationCapacity\":0", "\"preRegistrationCapacity\":null"),
+                    policy(capacity = 30, pre = 30, onsite = 0, form = form)
+                        .replace("\"onsiteCapacity\":0", "\"onsiteCapacity\":null"),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":21"),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":20.5"),
+                    valid.replace("\"onsiteCapacity\":10", "\"onsiteCapacity\":10.5"),
+                    valid.replace("\"capacity\":30", "\"capacity\":30.5"),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":\"20\""),
+                    valid.replace("\"preRegistrationCapacity\":20", "\"preRegistrationCapacity\":2147483648"),
+                    valid.replace("\"closed\":false", "\"closed\":false,\"channels\":[]"),
+                    policy(capacity = 0, pre = 0, onsite = 0, form = form),
+                    policy(capacity = -2, pre = Int.MAX_VALUE, onsite = Int.MAX_VALUE, form = form),
+                )
+            invalid.forEach { p ->
+                request("/$type/$EXPO", "POST", body(type, policy = p)).statusCode() shouldBe 400
+                request("/$type/list/$EXPO", "POST", "[${body(type)},${body(type, policy = p)}]").statusCode() shouldBe 400
+                list(type).size() shouldBe 0
             }
+            request("/$type/$EXPO", "POST", body(type, policy = valid)).statusCode() shouldBe 201
+            val groupId = list(type)[0].get("groupId").asString()
+            invalid.forEach { p ->
+                assertThrows(DataIntegrityViolationException::class.java) {
+                    jdbc.update("UPDATE tb_${type}_program SET policy_json=? WHERE id=1", p.dropLast(1) + ",\"groupId\":\"$groupId\"}")
+                }
+            }
+            request("/$type/1", "PATCH", body(type, policy(capacity = 1, pre = 0, onsite = 1, form = form), 1, 1)).statusCode() shouldBe 204
+            list(type)[0].get("policy").get("preRegistrationCapacity").asInt() shouldBe 0
         }
     }
 
@@ -268,6 +447,34 @@ class ProgramPoliciesPostgresHttpTests {
         update(1, policy(capacity = 1, waiting = 0), revision = 2).statusCode() shouldBe 204
         update(1, policy(capacity = 4), revision = 1).statusCode() shouldBe 409
         request("/standard/1", "PATCH", body("standard", id = 1)).statusCode() shouldBe 400
+    }
+
+    @Test
+    fun `changing only the admission split still requires Application approval and preserves the definition on rejection`() {
+        listOf("standard", "training").forEach { type ->
+            create(type)
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val desired = policy(pre = 1, onsite = 1, form = form)
+            rejectChange = true
+            request("/$type/1", "PATCH", body(type, desired, 1, 1)).statusCode() shouldBe 409
+            list(type)[0].get("revision").asLong() shouldBe 1L
+            list(type)[0].get("policy").get("preRegistrationCapacity").asInt() shouldBe 2
+            list(type)[0].get("policy").get("onsiteCapacity").asInt() shouldBe 0
+            pending() shouldBe 0L
+            val forwarded = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")[0]
+            forwarded
+                .get("previous")
+                .get("policy")
+                .get("preRegistrationCapacity")
+                .asInt() shouldBe 2
+            forwarded
+                .get("definition")
+                .get("policy")
+                .get("onsiteCapacity")
+                .asInt() shouldBe 1
+            rejectChange = false
+            request("/$type/1", "PATCH", body(type, desired, 1, 1)).statusCode() shouldBe 204
+        }
     }
 
     @Test
@@ -986,6 +1193,115 @@ class ProgramPoliciesPostgresHttpTests {
         }
     }
 
+    @Test
+    fun expoAndListWritesKeepSessionPlaces() {
+        jdbc.update(
+            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('place-image','local','place-test','/image/place-test','image/png','1',CURRENT_TIMESTAMP,'PENDING')",
+        )
+        val standard = withPlace(body("standard", policy = null), "Hall S")
+        val training = withPlace(body("training", policy = null), "Hall T")
+        val createBody =
+            expoBody(standard, training)
+                .replace("updateStandardProRequestDto", "addStandardProRequestDto")
+                .replace("updateTrainingProRequestDto", "addTrainingProRequestDto")
+        val created = request("/expo", "POST", createBody.replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/place-test\""))
+        created.statusCode() shouldBe 201
+        val expoId = mapper.readTree(created.body()).get("expoId").asString()
+        val standardId = jdbc.queryForObject("SELECT id FROM tb_standard_program WHERE expo_id=?", Long::class.java, expoId)!!
+        val trainingId = jdbc.queryForObject("SELECT id FROM tb_training_program WHERE expo_id=?", Long::class.java, expoId)!!
+        val updated =
+            expoBody(
+                withPlace(body("standard", policy = null, id = standardId, revision = 1), "New S"),
+                withPlace(body("training", policy = null, id = trainingId, revision = 1), "New T"),
+            )
+        request(
+            "/expo/$expoId",
+            "PATCH",
+            updated.replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/place-test\""),
+        ).statusCode() shouldBe
+            204
+        listOf("standard" to "New S", "training" to "New T").forEach { (type, place) ->
+            val public = request("/$type/program/$expoId", role = null)
+            public.statusCode() shouldBe 200
+            mapper.readTree(public.body())[0].get("place").asString() shouldBe place
+            request("/$type/list/$EXPO", "POST", "[${withPlace(body(type, policy = null), place)}]").statusCode() shouldBe 201
+            list(type)[0].get("place").asString() shouldBe place
+        }
+    }
+
+    private fun withPlace(
+        body: String,
+        place: String,
+    ): String = body.dropLast(1) + ",\"place\":\"$place\"}"
+
+    @Test
+    fun sessionPlacesSurviveGuardedUpdatesAndInternalReads() {
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", withPlace(body(type), "  Room A  ")).statusCode() shouldBe 201
+            val first = list(type)[0]
+            first.get("place").asString() shouldBe "Room A"
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            val linked = body(type, policy(group = first.get("groupId").asString(), form = form))
+            request("/$type/$EXPO", "POST", withPlace(linked, "Room B")).statusCode() shouldBe 201
+            list(type)[1].get("place").asString() shouldBe "Room B"
+            seed(type.uppercase(), 1, confirmed = 1)
+            request("/$type/1", "PATCH", withPlace(body(type, id = 1, revision = 1), "Room C")).statusCode() shouldBe 204
+            list(type)[0].get("revision").asLong() shouldBe 2L
+            list(type)[0].get("place").asString() shouldBe "Room C"
+            val payload = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second)
+            payload
+                .get("mutations")[0]
+                .get("previous")
+                .get("place")
+                .asString() shouldBe "Room A"
+            payload
+                .get("mutations")[0]
+                .get("definition")
+                .get("place")
+                .asString() shouldBe "Room C"
+            request("/$type/1", "PATCH", withPlace(body(type, id = 1, revision = 1), "stale")).statusCode() shouldBe 409
+            request("/$type/1", "PATCH", body(type, id = 1, revision = 2)).statusCode() shouldBe 204
+            list(type)[0].get("place").asString() shouldBe "Room C"
+            val internal =
+                if (type == "standard") {
+                    request("/internal/expo/$EXPO/standard-programs/1", role = null, token = "expo-test-token")
+                } else {
+                    request(
+                        "/internal/expo/$EXPO/training-programs/batch",
+                        "POST",
+                        "{\"programIds\":[1]}",
+                        role = null,
+                        token = "expo-test-token",
+                    )
+                }
+            internal.statusCode() shouldBe 200
+            val node = mapper.readTree(internal.body())
+            (if (type == "standard") node else node[0]).get("place").asString() shouldBe "Room C"
+            request("/$type/1", "PATCH", withPlace(body(type, id = 1, revision = 2), "   ")).statusCode() shouldBe 204
+            list(type)[0].get("place").isNull shouldBe true
+            list(type)[1].get("place").asString() shouldBe "Room B"
+        }
+        val page = request("/internal/expo/$EXPO/program-sessions", role = null, token = "expo-test-token")
+        page.statusCode() shouldBe 200
+        mapper.readTree(page.body()).get("items").count { !it.get("place").isNull && it.get("place").asString() == "Room B" } shouldBe 2
+    }
+
+    @Test
+    fun optionalPlacesSupportLegacyAndValidateLength() {
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", body(type, policy = null)).statusCode() shouldBe 201
+            list(type)[0].get("place").isNull shouldBe true
+            request("/$type/$EXPO", "POST", withPlace(body(type, policy = null), " ")).statusCode() shouldBe 201
+            list(type)[1].get("place").isNull shouldBe true
+            request("/$type/$EXPO", "POST", withPlace(body(type, policy = null), "x".repeat(255))).statusCode() shouldBe 201
+            list(type)[2].get("place").asString().length shouldBe 255
+            val invalid = withPlace(body(type, policy = null), "x".repeat(256))
+            request("/$type/$EXPO", "POST", invalid).statusCode() shouldBe 400
+            request("/$type/list/$EXPO", "POST", "[$invalid]").statusCode() shouldBe 400
+            request("/$type/1", "PATCH", withPlace(body(type, policy = null, id = 1), "x".repeat(256))).statusCode() shouldBe 400
+        }
+    }
+
     private fun seed(
         type: String,
         id: Long,
@@ -1032,10 +1348,27 @@ class ProgramPoliciesPostgresHttpTests {
         occupation: String = "TEACHER",
         group: String? = null,
         form: String = STANDARD_FORM,
+        pre: Int = capacity,
+        onsite: Int = 0,
     ): String =
-        """{"formId":"$form","allowedOccupations":[${if (occupation.isEmpty()) "" else "\"$occupation\""}],"capacity":$capacity,"waitingCapacity":$waiting,"applicationStartedAt":"2026-10-11T00:00:00Z","applicationEndedAt":"2026-10-12T00:00:00Z","cancelEndedAt":"2026-10-12T00:00:00Z","promotionEndedAt":"2026-10-12T00:00:00Z","closed":false${group?.let {
+        """{"formId":"$form","allowedOccupations":[${if (occupation.isEmpty()) "" else "\"$occupation\""}],"capacity":$capacity,"preRegistrationCapacity":$pre,"onsiteCapacity":$onsite,"waitingCapacity":$waiting,"applicationStartedAt":"2026-10-11T00:00:00Z","applicationEndedAt":"2026-10-12T00:00:00Z","cancelEndedAt":"2026-10-12T00:00:00Z","promotionEndedAt":"2026-10-12T00:00:00Z","closed":false${group?.let {
             ",\"groupId\":\"$it\""
         } ?: ""}}"""
+
+    private fun guardianPolicy(form: String = STANDARD_FORM): String =
+        policy(form = form, occupation = "ELEMENTARY_STUDENT")
+            .replace("[\"ELEMENTARY_STUDENT\"]", "[\"ELEMENTARY_STUDENT\",\"PARENT\"]")
+            .replace("\"closed\":false", "\"closed\":false,\"guardianPolicy\":${guardian()}")
+
+    private fun guardian(): String =
+        """{"formVersion":1,"schoolTypeQuestionId":101,"elementarySchoolValue":"primary","gradeQuestionId":102,"gradeValues":{${(1..6).joinToString {
+            "\"g$it\":$it"
+        }}}}"""
+
+    private fun guardianQuestions(): String =
+        """[{"id":101,"title":"학교급","formType":"DROPDOWN","requiredStatus":true,"jsonData":{"primary":"초등학생","other":"그 외"},"otherJson":null},{"id":102,"title":"학년","formType":"DROPDOWN","requiredStatus":true,"jsonData":{${(1..6).joinToString {
+            "\"g$it\":\"${it}학년\""
+        }}},"otherJson":{"conditional":{"parentIndex":0,"triggerValue":"primary"}}}]"""
 
     private fun body(
         type: String,
@@ -1099,6 +1432,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var lostResponse = false
 
+        @Volatile private var rejectChange = false
+
         @Volatile private var wrongFormExpo = false
 
         @Volatile private var unrestrictedForm = false
@@ -1110,6 +1445,18 @@ class ProgramPoliciesPostgresHttpTests {
         @Volatile private var malformedForm = false
 
         @Volatile private var shortFormPeriod = false
+
+        @Volatile private var formQuestions = "[]"
+
+        @Volatile private var formVersion = 1
+
+        @Volatile private var guardianSupport = true
+
+        @Volatile private var guardianPrepareSupport = true
+
+        @Volatile private var guardianSupportVersion = "1"
+
+        @Volatile private var guardianPrepareStatus: Int? = null
 
         @Volatile private var beforeReply: (() -> Unit)? = null
 
@@ -1133,15 +1480,20 @@ class ProgramPoliciesPostgresHttpTests {
                                 if (malformedForm) {
                                     "{}"
                                 } else {
-                                    """{"id":"$id","expoId":"$expo","purpose":"$purpose","version":1,"title":"form","informationText":"","dynamicForm":[],"participantType":$participantType,"startDate":"$startDate","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
+                                    """{"id":"$id","expoId":"$expo","purpose":"$purpose","version":$formVersion,"title":"form","informationText":"","dynamicForm":$formQuestions,"participantType":$participantType,"startDate":"$startDate","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
                                 }
                             val bytes = response.toByteArray()
                             beforeFormReply?.invoke()
                             exchange.sendResponseHeaders(if (id in listOf(STANDARD_FORM, TRAINING_FORM)) 200 else 404, bytes.size.toLong())
                             exchange.responseBody.write(bytes)
+                        } else if (path.endsWith("/program-policy-capabilities")) {
+                            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "application-token"
+                            if (guardianSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", guardianSupportVersion)
+                            exchange.sendResponseHeaders(if (guardianSupport) 204 else 404, -1)
                         } else if (path.contains("/program-changes/")) {
-                            val status = prepare(path, body)
+                            val status = guardianPrepareStatus ?: if (rejectChange) 409 else prepare(path, body)
                             beforeReply?.invoke()
+                            if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
                         } else if (path.endsWith("/resolve")) {
                             val bytes = """{"participantId":42}""".toByteArray()
@@ -1195,6 +1547,12 @@ class ProgramPoliciesPostgresHttpTests {
                         if (row["history"] == true) return@execute 409
                     } else {
                         val policy = definition.get("policy")
+                        val previousGuardian = previous.path("policy").path("guardianPolicy")
+                        if (previousGuardian != policy.path("guardianPolicy") &&
+                            ((row["confirmed"] as Int) > 0 || (row["waiting"] as Int) > 0)
+                        ) {
+                            return@execute 409
+                        }
                         if (row["history"] == true && previous.get("groupId") != definition.get("groupId")) return@execute 409
                         if ((row["confirmed"] as Int) > policy.get("capacity").asInt() ||
                             (row["waiting"] as Int) > policy.get("waitingCapacity").asInt()

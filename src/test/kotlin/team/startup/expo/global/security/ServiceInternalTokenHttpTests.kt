@@ -251,6 +251,8 @@ class ServiceInternalTokenHttpTests {
                     formId = FORM_ID,
                     allowedOccupations = setOf(ProgramOccupation.TEACHER),
                     capacity = 1,
+                    preRegistrationCapacity = 1,
+                    onsiteCapacity = 0,
                     waitingCapacity = 0,
                     applicationStartedAt = START,
                     applicationEndedAt = END,

@@ -43,6 +43,7 @@ class CreateStandardProgramServiceImpl(
                 request.endedAt.toString(),
                 null,
                 request.policy,
+                place = request.place,
             )
         programs
             .save(
@@ -53,6 +54,7 @@ class CreateStandardProgramServiceImpl(
                     expo = expo,
                     groupId = definition.groupId,
                     policyJson = policies.json(definition.policy),
+                    place = definition.place,
                 ),
             ).also {
                 history.record(expoId, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())

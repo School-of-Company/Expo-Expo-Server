@@ -55,6 +55,7 @@ class UpdateExpoServiceImpl(
                                     p.endedAt.toString(),
                                     null,
                                     p.policy,
+                                    place = p.place,
                                 ),
                             )
                     } else {
@@ -67,6 +68,7 @@ class UpdateExpoServiceImpl(
                                 null,
                                 p.policy,
                                 p.revision,
+                                place = p.place,
                             )?.let(mutations::add)
                     }
                 }
@@ -83,6 +85,7 @@ class UpdateExpoServiceImpl(
                                     p.endedAt.toString(),
                                     p.category,
                                     p.policy,
+                                    place = p.place,
                                 ),
                             )
                     } else {
@@ -95,6 +98,7 @@ class UpdateExpoServiceImpl(
                                 p.category,
                                 p.policy,
                                 p.revision,
+                                place = p.place,
                             )?.let(mutations::add)
                     }
                 }

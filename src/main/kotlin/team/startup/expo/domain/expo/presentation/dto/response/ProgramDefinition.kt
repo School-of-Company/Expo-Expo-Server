@@ -29,6 +29,8 @@ data class ProgramDefinition(
     val policy: ProgramPolicyRequest?,
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long,
+    @field:Schema(description = "Session place; null means location to be announced")
+    val place: String? = null,
 )
 
 data class ProgramMutation(

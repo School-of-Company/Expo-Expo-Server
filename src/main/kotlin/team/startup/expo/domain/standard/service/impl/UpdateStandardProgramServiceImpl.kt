@@ -34,6 +34,7 @@ class UpdateStandardProgramServiceImpl(
                         null,
                         request.policy,
                         request.revision,
+                        place = request.place,
                     )
                 ProgramChangePayload(listOfNotNull(mutation))
             } ?: return
