@@ -248,6 +248,50 @@ class PreregisterSessionPostgresHttpTests {
     }
 
     @Test
+    fun `참가자용 회차 목록은 비로그인으로 정렬된 공개 필드만 반환하고 없거나 삭제 중인 박람회는 404다`() {
+        val public = path() + "/public"
+        request(path(OTHER_EXPO_ID) + "/public", role = null).let {
+            it.statusCode() shouldBe 200
+            it.body() shouldBe "[]"
+        }
+        val later = create(withDeadline("2026-10-30T15:00:00Z").replace("09:30", "14:30").replace("12:30", "17:30"))
+        val first = create()
+        request(path(first), "PATCH", updateBody()).statusCode() shouldBe 204
+        forcedStatus = 503
+        request(path(later) + "?revision=1", "DELETE").statusCode() shouldBe 502
+        forcedStatus = null
+
+        val response = request(public, role = null)
+        response.statusCode() shouldBe 200
+        val body = mapper.readTree(response.body()).toList()
+        body.map { it.get("id").asLong() } shouldBe listOf(first, later)
+        body.forEach {
+            it.propertyNames().toSet() shouldBe
+                setOf(
+                    "id",
+                    "title",
+                    "startedAt",
+                    "endedAt",
+                    "place",
+                    "closed",
+                    "cancelEndedAt",
+                )
+        }
+        body[0].get("closed").asBoolean() shouldBe true
+        body[0].get("cancelEndedAt").isNull shouldBe true
+        body[1].get("title").asString() shouldBe "오전 회차"
+        body[1].get("startedAt").asString() shouldBe "2026-10-31T05:30:00Z"
+        body[1].get("cancelEndedAt").asString() shouldBe "2026-10-30T15:00:00Z"
+        request(public, role = "ROLE_USER").statusCode() shouldBe 200
+        request(path(), role = null).statusCode() shouldBe 401
+        request(path(first), role = null).statusCode() shouldBe 401
+
+        request(path("01900000-0000-7000-8000-000000000099") + "/public", role = null).statusCode() shouldBe 404
+        jdbc.update("UPDATE tb_expo SET deleting_at=now() WHERE id=?", EXPO_ID)
+        request(public, role = null).statusCode() shouldBe 404
+    }
+
+    @Test
     fun `관리자 CRUD는 JWT 권한을 검사하고 내부 조회는 토큰만으로 보호한다`() {
         val id = create()
         listOf("GET" to "", "POST" to DEFINITION, "PATCH" to updateBody(), "DELETE" to "").forEach { (method, body) ->
