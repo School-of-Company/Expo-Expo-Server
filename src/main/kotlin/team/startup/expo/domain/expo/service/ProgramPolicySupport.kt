@@ -58,6 +58,7 @@ class ProgramPolicySupport(
             groupId = program.groupId,
             policy = policy(program.policyJson),
             revision = program.revision,
+            place = program.place,
         )
 
     fun definition(program: TrainingProgram): ProgramDefinition =
@@ -72,6 +73,7 @@ class ProgramPolicySupport(
             program.groupId,
             policy(program.policyJson),
             program.revision,
+            place = program.place,
         )
 
     fun ensureAvailable(expoId: String) {
@@ -109,10 +111,28 @@ class ProgramPolicySupport(
         endedAt: String,
         category: Category?,
         policy: ProgramPolicyRequest?,
+        place: String? = null,
     ): ProgramDefinition {
         ensureAvailable(expoId)
         val group = policy?.groupId ?: UUID.randomUUID()
-        val result = ProgramDefinition(expoId, type, null, title, startedAt, endedAt, category, group, policy?.copy(groupId = group), 1)
+        val result =
+            ProgramDefinition(
+                expoId,
+                type,
+                null,
+                title,
+                startedAt,
+                endedAt,
+                category,
+                group,
+                policy?.copy(
+                    groupId = group,
+                ),
+                1,
+                place?.trim()?.takeIf {
+                    it.isNotEmpty()
+                },
+            )
         validate(result, policy?.groupId)
         return result
     }
@@ -125,6 +145,7 @@ class ProgramPolicySupport(
         category: Category?,
         policy: ProgramPolicyRequest?,
         revision: Long?,
+        place: String? = null,
     ): ProgramMutation? {
         if ((current.policy != null || policy != null) && revision == null) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 변경에는 revision이 필요합니다.")
@@ -133,6 +154,7 @@ class ProgramPolicySupport(
         val desired =
             current.copy(
                 title = title,
+                place = if (place == null) current.place else place.trim().takeIf { it.isNotEmpty() },
                 startedAt = startedAt,
                 endedAt = endedAt,
                 category = category,

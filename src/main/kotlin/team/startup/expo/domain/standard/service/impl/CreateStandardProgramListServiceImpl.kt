@@ -46,6 +46,7 @@ class CreateStandardProgramListServiceImpl(
                             request.endedAt.toString(),
                             null,
                             request.policy,
+                            place = request.place,
                         )
                     StandardProgram(
                         title = request.title,
@@ -54,6 +55,7 @@ class CreateStandardProgramListServiceImpl(
                         expo = expo,
                         groupId = definition.groupId,
                         policyJson = policies.json(definition.policy),
+                        place = definition.place,
                     )
                 },
             ).forEach {
