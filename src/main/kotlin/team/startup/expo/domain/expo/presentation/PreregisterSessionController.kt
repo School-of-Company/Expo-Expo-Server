@@ -19,11 +19,13 @@ import team.startup.expo.domain.expo.presentation.dto.request.AdoptPreregisterWa
 import team.startup.expo.domain.expo.presentation.dto.request.PreregisterSessionRequest
 import team.startup.expo.domain.expo.presentation.dto.request.UpdatePreregisterSessionRequest
 import team.startup.expo.domain.expo.presentation.dto.response.PreregisterSessionResponse
+import team.startup.expo.domain.expo.presentation.dto.response.PublicPreregisterSessionResponse
 import team.startup.expo.domain.expo.service.AdoptPreregisterWaitingCapacityService
 import team.startup.expo.domain.expo.service.CreatePreregisterSessionService
 import team.startup.expo.domain.expo.service.DeletePreregisterSessionService
 import team.startup.expo.domain.expo.service.GetPreregisterSessionListService
 import team.startup.expo.domain.expo.service.GetPreregisterSessionService
+import team.startup.expo.domain.expo.service.GetPublicPreregisterSessionListService
 import team.startup.expo.domain.expo.service.RetryPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.UpdatePreregisterSessionService
 import team.startup.expo.global.swagger.ApiError
@@ -34,6 +36,7 @@ class PreregisterSessionController(
     private val create: CreatePreregisterSessionService,
     private val list: GetPreregisterSessionListService,
     private val get: GetPreregisterSessionService,
+    private val publicList: GetPublicPreregisterSessionListService,
     private val update: UpdatePreregisterSessionService,
     private val delete: DeletePreregisterSessionService,
     private val retry: RetryPreregisterSessionChangeService,
@@ -57,6 +60,19 @@ class PreregisterSessionController(
     fun list(
         @PathVariable("expo_id") expoId: String,
     ): ResponseEntity<List<PreregisterSessionResponse>> = ResponseEntity.ok(list.execute(expoId))
+
+    @Operation(
+        summary = "참가자용 사전등록 회차 목록 조회",
+        description =
+            "로그인 없이 호출합니다. 시작 일시, ID 순으로 끝나거나 마감된 회차까지 모두 반환하며 정원 운영값은 포함하지 않습니다. " +
+                "변경·삭제 대기 중인 회차도 확정된 현재 정의를 반환하고, 정원과 접수 가능 여부의 최종 판정은 신청 서비스가 합니다.",
+    )
+    @GetMapping("/public")
+    @ApiResponse(responseCode = "200", description = "처리 성공 (회차가 없으면 빈 배열)")
+    @ApiError(status = 404, description = "박람회가 없거나 삭제 중입니다.")
+    fun publicList(
+        @PathVariable("expo_id") expoId: String,
+    ): ResponseEntity<List<PublicPreregisterSessionResponse>> = ResponseEntity.ok(publicList.execute(expoId))
 
     @Operation(summary = "사전등록 회차 단건 조회")
     @GetMapping("/{session_id}")
