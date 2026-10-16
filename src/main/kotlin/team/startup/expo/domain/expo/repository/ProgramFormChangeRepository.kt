@@ -45,6 +45,26 @@ class ProgramFormChangeRepository(
             formId.toString(),
         )
 
+    fun guardianReferenced(formId: UUID): Boolean =
+        jdbc.queryForObject(
+            """
+            WITH policies AS (
+                SELECT policy_json::jsonb AS policy FROM tb_standard_program WHERE policy_json IS NOT NULL
+                UNION ALL
+                SELECT policy_json::jsonb FROM tb_training_program WHERE policy_json IS NOT NULL
+                UNION ALL
+                SELECT mutation->'definition'->'policy'
+                FROM tb_program_change, jsonb_array_elements(payload_json::jsonb->'mutations') mutation
+            )
+            SELECT EXISTS(
+                SELECT 1 FROM policies
+                WHERE policy->>'formId' = ? AND policy->>'guardianPolicy' IS NOT NULL
+            )
+            """.trimIndent(),
+            Boolean::class.java,
+            formId.toString(),
+        )!!
+
     fun find(
         formId: UUID,
         changeId: UUID,
