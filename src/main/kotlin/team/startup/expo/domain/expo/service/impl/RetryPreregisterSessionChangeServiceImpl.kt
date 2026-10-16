@@ -8,6 +8,7 @@ import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
+import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.domain.expo.service.RetryPreregisterSessionChangeService
 import team.startup.expo.global.exception.ExpectedException
 
@@ -17,6 +18,7 @@ class RetryPreregisterSessionChangeServiceImpl(
     private val sessions: PreregisterSessionRepository,
     private val pendingChanges: PreregisterSessionChangeRepository,
     private val applyChange: ApplyPreregisterSessionChangeService,
+    private val changes: PreregisterSessionChangesClient,
     private val transactions: TransactionTemplate,
 ) : RetryPreregisterSessionChangeService {
     override fun execute(
@@ -31,7 +33,11 @@ class RetryPreregisterSessionChangeServiceImpl(
                     throw ExpectedException(HttpStatus.NOT_FOUND, "회차를 찾지 못 했습니다.")
                 }
                 pendingChanges.findByIdOrNull(sessionId)?.changeId
-            } ?: return
-        applyChange.execute(expoId, sessionId, changeId)
+            }
+        if (changeId == null) {
+            changes.reconcile(expoId, sessionId)
+        } else {
+            applyChange.execute(expoId, sessionId, changeId)
+        }
     }
 }
