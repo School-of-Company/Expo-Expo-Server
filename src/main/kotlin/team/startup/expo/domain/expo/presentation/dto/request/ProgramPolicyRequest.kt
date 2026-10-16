@@ -1,8 +1,10 @@
 package team.startup.expo.domain.expo.presentation.dto.request
 
 import com.fasterxml.jackson.annotation.JsonAnySetter
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.swagger.v3.oas.annotations.media.Schema
+import jakarta.validation.Valid
 import jakarta.validation.constraints.Positive
 import jakarta.validation.constraints.PositiveOrZero
 import org.springframework.http.HttpStatus
@@ -64,6 +66,10 @@ data class ProgramPolicyRequest(
     @param:JsonProperty(required = true)
     @field:Schema(description = "모집 마감 여부", example = "false")
     val closed: Boolean,
+    @field:Valid
+    @field:JsonInclude(JsonInclude.Include.NON_NULL)
+    @field:Schema(description = "이 회차의 초등 1~3학년 보호자 필수 설정. null/생략은 OFF이며 같은 묶음의 다른 회차로 전파하지 않음")
+    val guardianPolicy: ProgramGuardianPolicyRequest? = null,
 ) {
     fun validate() {
         if (capacity <= 0 || preRegistrationCapacity < 0 || onsiteCapacity < 0 ||
@@ -77,6 +83,7 @@ data class ProgramPolicyRequest(
         if (listOf(applicationStartedAt, applicationEndedAt, cancelEndedAt, promotionEndedAt).any { it.nano % 1000 != 0 }) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 시각은 마이크로초 정밀도까지 지원합니다.")
         }
+        guardianPolicy?.validate()
     }
 
     @JsonAnySetter
