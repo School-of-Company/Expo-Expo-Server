@@ -58,6 +58,10 @@ data class ProgramPolicyRequest(
                 "있으면 채널 사이 직종이 겹치지 않아야 하고 capacity·waitingCapacity는 채널 합, allowedOccupations는 채널 직종 합집합과 같아야 함",
     )
     val channels: List<ProgramChannelRequest>? = null,
+    @field:Valid
+    @field:JsonInclude(JsonInclude.Include.NON_NULL)
+    @field:Schema(description = "이 회차의 초등 1~3학년 보호자 필수 설정. null/생략은 OFF이며 같은 묶음의 다른 회차로 전파하지 않음")
+    val guardianPolicy: ProgramGuardianPolicyRequest? = null,
 ) {
     fun validate() {
         if (capacity <= 0 || waitingCapacity < 0 || allowedOccupations.isEmpty() ||
@@ -70,6 +74,7 @@ data class ProgramPolicyRequest(
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 시각은 마이크로초 정밀도까지 지원합니다.")
         }
         channels?.let { validateChannels(it) }
+        guardianPolicy?.validate()
     }
 
     private fun validateChannels(channels: List<ProgramChannelRequest>) {

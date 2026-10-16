@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramChannelRequest
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramGuardianPolicyRequest
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramOccupation
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.global.exception.ExpectedException
@@ -12,6 +13,7 @@ import java.time.Instant
 import java.util.UUID
 
 class ProgramPolicyValidationTests {
+    private val guardian = ProgramGuardianPolicyRequest(1, 101, "primary", 102, (1..6).associate { "g$it" to it })
     private val start = Instant.parse("2026-10-11T00:00:00Z")
     private val end = Instant.parse("2026-10-12T00:00:00Z")
     private val policy =
@@ -26,6 +28,25 @@ class ProgramPolicyValidationTests {
             promotionEndedAt = end,
             closed = false,
         )
+
+    @Test
+    fun `guardian grade mapping covers exactly six grades without inferring labels`() {
+        policy.copy(guardianPolicy = guardian).validate()
+        listOf(
+            guardian.copy(formVersion = 0),
+            guardian.copy(schoolTypeQuestionId = 0),
+            guardian.copy(gradeQuestionId = -1),
+            guardian.copy(gradeQuestionId = guardian.schoolTypeQuestionId),
+            guardian.copy(elementarySchoolValue = " "),
+            guardian.copy(gradeValues = guardian.gradeValues - "g6"),
+            guardian.copy(gradeValues = guardian.gradeValues + ("g6" to 3)),
+            guardian.copy(gradeValues = guardian.gradeValues + ("g6" to 7)),
+            guardian.copy(gradeValues = guardian.gradeValues - "g1" + (" " to 1)),
+        ).forEach { invalid ->
+            val exception = assertThrows(ExpectedException::class.java) { policy.copy(guardianPolicy = invalid).validate() }
+            assertEquals(HttpStatus.BAD_REQUEST, exception.status)
+        }
+    }
 
     @Test
     fun `zero waiting capacity is valid and offset timestamps identify the same instant`() {

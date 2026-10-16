@@ -82,6 +82,12 @@ class ProgramPoliciesPostgresHttpTests {
         lateFormStart = false
         malformedForm = false
         shortFormPeriod = false
+        formQuestions = "[]"
+        formVersion = 1
+        guardianSupport = true
+        guardianPrepareSupport = true
+        guardianSupportVersion = "1"
+        guardianPrepareStatus = null
         calls.clear()
         jdbc.execute("TRUNCATE tb_program_form_change")
         jdbc.execute("TRUNCATE tb_expo_image, tb_expo RESTART IDENTITY CASCADE")
@@ -97,6 +103,135 @@ class ProgramPoliciesPostgresHttpTests {
             )
         }
         jdbc.update("UPDATE tb_expo SET cover_image=''")
+    }
+
+    @Test
+    fun `guardian policy round trips for both types without changing another session in the same group`() {
+        formQuestions = guardianQuestions()
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            request("/$type/$EXPO", "POST", body(type, guardianPolicy(form = form))).statusCode() shouldBe 201
+            val first = list(type)[0]
+            val group = first.get("groupId").asString()
+            request("/$type/$EXPO", "POST", body(type, policy(form = form, group = group))).statusCode() shouldBe 201
+            first.get("policy").get("guardianPolicy").toString() shouldBe mapper.readTree(guardian()).toString()
+            list(type)[1].get("policy").has("guardianPolicy") shouldBe false
+            val path = if (type == "standard") "standard-programs/1" else "training-programs/batch"
+            val method = if (type == "standard") "GET" else "POST"
+            val definition = internal("/internal/expo/$EXPO/$path", method, if (type == "training") """{"programIds":[1]}""" else "")
+            definition.statusCode() shouldBe 200
+            val result = mapper.readTree(definition.body()).let { if (type == "training") it[0] else it }
+            result.get("policy").get("guardianPolicy").toString() shouldBe mapper.readTree(guardian()).toString()
+            internal("/internal/expo/$OTHER/$path", method, if (type == "training") """{"programIds":[1]}""" else "")
+                .statusCode() shouldBe 404
+            jdbc
+                .queryForObject("SELECT policy_json FROM tb_${type}_program WHERE id=1", String::class.java)!!
+                .contains("guardianPolicy") shouldBe true
+        }
+        val legacy = mapper.readTree(policy())
+        legacy.has("guardianPolicy") shouldBe false
+    }
+
+    @Test
+    fun `guardian references require the current version and elementary branch rather than matching titles`() {
+        formQuestions = guardianQuestions()
+        val original = formQuestions
+        listOf(
+            original.replace("\"id\":102", "\"id\":999"),
+            original.replace("\"primary\":\"초등학생\"", "\"renamed\":\"초등학생\""),
+            original.replace("\"g1\":\"1학년\"", "\"missing\":\"1학년\""),
+            original.replace("\"requiredStatus\":true", "\"requiredStatus\":false"),
+            original.replace("\"parentIndex\":0", "\"parentIndex\":1"),
+            original.replace("\"triggerValue\":\"primary\"", "\"triggerValue\":\"other\""),
+            original.replace("\"formType\":\"DROPDOWN\"", "\"formType\":\"SENTENCE\""),
+        ).forEach { invalid ->
+            formQuestions = invalid
+            request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 400
+        }
+        formQuestions = original
+        formVersion = 2
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 409
+        formVersion = 1
+        wrongFormExpo = true
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 400
+        wrongFormExpo = false
+        list("standard").size() shouldBe 0
+        formQuestions = original.replace("초등학생", "초등학교 재학생").replace("학년", "학년 선택")
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
+    }
+
+    @Test
+    fun `guardian ON and OFF changes preserve revisions and reject confirmed or waiting participants`() {
+        formQuestions = guardianQuestions()
+        create("standard")
+        seed("STANDARD", 1, waiting = 1)
+        update(1, guardianPolicy()).statusCode() shouldBe 409
+        pending() shouldBe 0L
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        jdbc.update("UPDATE test_admission SET waiting=0")
+        update(1, guardianPolicy()).statusCode() shouldBe 204
+        calls.any { it.first.endsWith("/guardian-policy") && it.second.contains("guardianPolicy") } shouldBe true
+        list("standard")[0].get("revision").asLong() shouldBe 2L
+        jdbc.update("UPDATE test_admission SET confirmed=1")
+        update(1, policy(), revision = 2).statusCode() shouldBe 409
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe true
+        jdbc.update("UPDATE test_admission SET confirmed=0")
+        update(1, policy(), revision = 1).statusCode() shouldBe 409
+        update(1, policy(), revision = 2).statusCode() shouldBe 204
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe false
+        list("standard")[0].get("revision").asLong() shouldBe 3L
+    }
+
+    @Test
+    fun `unsupported Application cannot enable a guardian policy or silently approve its removal`() {
+        formQuestions = guardianQuestions()
+        guardianSupport = false
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
+        list("standard").size() shouldBe 0
+        guardianSupport = true
+        guardianSupportVersion = "2"
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
+        list("standard").size() shouldBe 0
+        guardianSupportVersion = "1"
+        create("standard")
+        update(1, guardianPolicy()).statusCode() shouldBe 204
+        guardianPrepareStatus = 404
+        update(1, policy(), revision = 2).statusCode() shouldBe 503
+        pending() shouldBe 1L
+        guardianPrepareStatus = null
+        guardianPrepareSupport = false
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 503
+        pending() shouldBe 1L
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe true
+        guardianPrepareSupport = true
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe false
+    }
+
+    @Test
+    fun `guardian list creation is atomic when support is missing`() {
+        formQuestions = guardianQuestions()
+        guardianSupport = false
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            request("/$type/list/$EXPO", "POST", "[${body(type)},${body(type, guardianPolicy(form))}]").statusCode() shouldBe 503
+            list(type).size() shouldBe 0
+        }
+    }
+
+    @Test
+    fun `guardian form version is rechecked after approval and the pending command can retry`() {
+        formQuestions = guardianQuestions()
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
+        beforeReply = { formVersion = 2 }
+        val command = body("standard", guardianPolicy(), 1, 1).replace("\"session\"", "\"updated\"")
+        request("/standard/1", "PATCH", command).statusCode() shouldBe 409
+        pending() shouldBe 1L
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        beforeReply = null
+        formVersion = 1
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("standard")[0].get("revision").asLong() shouldBe 2L
     }
 
     @Test
@@ -1037,6 +1172,21 @@ class ProgramPoliciesPostgresHttpTests {
             ",\"groupId\":\"$it\""
         } ?: ""}}"""
 
+    private fun guardianPolicy(form: String = STANDARD_FORM): String =
+        policy(form = form, occupation = "ELEMENTARY_STUDENT")
+            .replace("[\"ELEMENTARY_STUDENT\"]", "[\"ELEMENTARY_STUDENT\",\"PARENT\"]")
+            .replace("\"closed\":false", "\"closed\":false,\"guardianPolicy\":${guardian()}")
+
+    private fun guardian(): String =
+        """{"formVersion":1,"schoolTypeQuestionId":101,"elementarySchoolValue":"primary","gradeQuestionId":102,"gradeValues":{${(1..6).joinToString {
+            "\"g$it\":$it"
+        }}}}"""
+
+    private fun guardianQuestions(): String =
+        """[{"id":101,"title":"학교급","formType":"DROPDOWN","requiredStatus":true,"jsonData":{"primary":"초등학생","other":"그 외"},"otherJson":null},{"id":102,"title":"학년","formType":"DROPDOWN","requiredStatus":true,"jsonData":{${(1..6).joinToString {
+            "\"g$it\":\"${it}학년\""
+        }}},"otherJson":{"conditional":{"parentIndex":0,"triggerValue":"primary"}}}]"""
+
     private fun body(
         type: String,
         policy: String? =
@@ -1111,6 +1261,18 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var shortFormPeriod = false
 
+        @Volatile private var formQuestions = "[]"
+
+        @Volatile private var formVersion = 1
+
+        @Volatile private var guardianSupport = true
+
+        @Volatile private var guardianPrepareSupport = true
+
+        @Volatile private var guardianSupportVersion = "1"
+
+        @Volatile private var guardianPrepareStatus: Int? = null
+
         @Volatile private var beforeReply: (() -> Unit)? = null
 
         @Volatile private var beforeFormReply: (() -> Unit)? = null
@@ -1133,15 +1295,20 @@ class ProgramPoliciesPostgresHttpTests {
                                 if (malformedForm) {
                                     "{}"
                                 } else {
-                                    """{"id":"$id","expoId":"$expo","purpose":"$purpose","version":1,"title":"form","informationText":"","dynamicForm":[],"participantType":$participantType,"startDate":"$startDate","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
+                                    """{"id":"$id","expoId":"$expo","purpose":"$purpose","version":$formVersion,"title":"form","informationText":"","dynamicForm":$formQuestions,"participantType":$participantType,"startDate":"$startDate","endDate":"${if (shortFormPeriod) "2026-10-11T00:00:00Z" else "2026-11-01T00:00:00Z"}"}"""
                                 }
                             val bytes = response.toByteArray()
                             beforeFormReply?.invoke()
                             exchange.sendResponseHeaders(if (id in listOf(STANDARD_FORM, TRAINING_FORM)) 200 else 404, bytes.size.toLong())
                             exchange.responseBody.write(bytes)
+                        } else if (path.endsWith("/program-policy-capabilities")) {
+                            exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "application-token"
+                            if (guardianSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", guardianSupportVersion)
+                            exchange.sendResponseHeaders(if (guardianSupport) 204 else 404, -1)
                         } else if (path.contains("/program-changes/")) {
-                            val status = prepare(path, body)
+                            val status = guardianPrepareStatus ?: prepare(path, body)
                             beforeReply?.invoke()
+                            if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
                         } else if (path.endsWith("/resolve")) {
                             val bytes = """{"participantId":42}""".toByteArray()
@@ -1195,6 +1362,12 @@ class ProgramPoliciesPostgresHttpTests {
                         if (row["history"] == true) return@execute 409
                     } else {
                         val policy = definition.get("policy")
+                        val previousGuardian = previous.path("policy").path("guardianPolicy")
+                        if (previousGuardian != policy.path("guardianPolicy") &&
+                            ((row["confirmed"] as Int) > 0 || (row["waiting"] as Int) > 0)
+                        ) {
+                            return@execute 409
+                        }
                         if (row["history"] == true && previous.get("groupId") != definition.get("groupId")) return@execute 409
                         if ((row["confirmed"] as Int) > policy.get("capacity").asInt() ||
                             (row["waiting"] as Int) > policy.get("waitingCapacity").asInt()
