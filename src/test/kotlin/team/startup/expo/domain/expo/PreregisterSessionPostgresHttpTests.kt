@@ -24,7 +24,9 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
+import team.startup.expo.global.exception.ExpectedException
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
@@ -35,6 +37,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.sql.DriverManager
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -63,6 +66,9 @@ class PreregisterSessionPostgresHttpTests {
     private lateinit var changes: PreregisterSessionChangesClient
 
     @Autowired
+    private lateinit var applyChange: ApplyPreregisterSessionChangeService
+
+    @Autowired
     private lateinit var transactions: TransactionTemplate
 
     @Autowired
@@ -77,6 +83,8 @@ class PreregisterSessionPostgresHttpTests {
         histories.clear()
         forcedStatus = null
         responseHook = null
+        reconciliationHook = { true }
+        loseReconciliationResponse = false
         ReflectionTestUtils.setField(changes, "applicationUrl", applicationUrl)
         ReflectionTestUtils.setField(changes, "internalToken", "test-application-token")
         jdbc.execute("TRUNCATE TABLE tb_expo RESTART IDENTITY CASCADE")
@@ -665,6 +673,69 @@ class PreregisterSessionPostgresHttpTests {
         }
     }
 
+    @Test
+    fun `an apply replay after another request committed still confirms completion`() {
+        val id = create()
+        request(path(id), "PATCH", updateBody()).statusCode() shouldBe 204
+        reconciliationHook = { false }
+        assertThrows(ExpectedException::class.java) {
+            applyChange.execute(EXPO_ID, id, UUID.randomUUID())
+        }.status shouldBe org.springframework.http.HttpStatus.CONFLICT
+        calls.size shouldBe 1
+    }
+
+    @Test
+    fun `lost completion response is recovered without applying a change twice`() {
+        val id = create()
+        loseReconciliationResponse = true
+        request(path(id), "PATCH", updateBody()).statusCode() shouldBe 503
+        read(id).get("revision").asLong() shouldBe 2L
+        pending.size shouldBe 0
+        loseReconciliationResponse = false
+        request(path(id), "PATCH", updateBody()).statusCode() shouldBe 204
+        request(path(id) + "/changes/retry", "POST").statusCode() shouldBe 204
+        calls.size shouldBe 1
+        read(id).get("revision").asLong() shouldBe 2L
+    }
+
+    @Test
+    fun `empty session update completes before the next delete`() {
+        val closed = DEFINITION.replace("false", "true")
+        val id = create(closed)
+        request(path(id), "PATCH", updateBody(definition = closed.replace("오전 회차", "변경 회차"))).statusCode() shouldBe 204
+        read(id).get("title").asString() shouldBe "변경 회차"
+        read(id).get("revision").asLong() shouldBe 2L
+        pending.size shouldBe 0
+        request(path(id) + "?revision=2", "DELETE").statusCode() shouldBe 204
+        pending.size shouldBe 0
+        request(path(id)).statusCode() shouldBe 404
+    }
+
+    @Test
+    fun `committed changes require remote completion and can recover after acknowledgement failure`() {
+        val id = create()
+        reconciliationHook = {
+            read(id).get("revision").asLong() shouldBe 2L
+            false
+        }
+        request(path(id), "PATCH", updateBody()).statusCode() shouldBe 409
+        pending.size shouldBe 1
+        reconciliationHook = { true }
+        request(path(id), "PATCH", updateBody()).statusCode() shouldBe 204
+        pending.size shouldBe 0
+        calls.size shouldBe 1
+        reconciliationHook = {
+            request(internalPath(id), role = null, token = "test-expo-token").statusCode() shouldBe 404
+            false
+        }
+        request(path(id) + "?revision=2", "DELETE").statusCode() shouldBe 409
+        reconciliationHook = { true }
+        request(path(id) + "/changes/retry", "POST").statusCode() shouldBe 204
+        request(path(id) + "?revision=2", "DELETE").statusCode() shouldBe 204
+        pending.size shouldBe 0
+        calls.size shouldBe 2
+    }
+
     private fun path(expoId: String = EXPO_ID): String = "/expo/$expoId/preregister-sessions"
 
     @Test
@@ -805,11 +876,35 @@ class PreregisterSessionPostgresHttpTests {
         @Volatile
         private var responseHook: ((ChangeCall, Int) -> Unit)? = null
 
+        @Volatile
+        private var reconciliationHook: () -> Boolean = { true }
+
+        @Volatile
+        private var loseReconciliationResponse = false
+
         private val serverExecutor = Executors.newFixedThreadPool(4)
 
         private val server =
             HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
                 createContext("/internal/") { exchange ->
+                    if (exchange.requestURI.path.endsWith("/reconciliation")) {
+                        exchange.requestMethod shouldBe "POST"
+                        exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "test-application-token"
+                        val reconciled = reconciliationHook()
+                        if (reconciled) {
+                            val prefix = exchange.requestURI.path.removeSuffix("reconciliation")
+                            pending.keys.removeIf { it.startsWith(prefix) }
+                        }
+                        if (loseReconciliationResponse) {
+                            exchange.close()
+                            return@createContext
+                        }
+                        val response = reconciled.toString().toByteArray()
+                        exchange.sendResponseHeaders(200, response.size.toLong())
+                        exchange.responseBody.use { it.write(response) }
+                        exchange.close()
+                        return@createContext
+                    }
                     val body = exchange.requestBody.readAllBytes().toString(Charsets.UTF_8)
                     val tree = ObjectMapper().readTree(body)
                     val path = exchange.requestURI.path
@@ -827,6 +922,13 @@ class PreregisterSessionPostgresHttpTests {
                         forcedStatus ?: if (call.operation == "ADOPT") {
                             204
                         } else if (id in histories && tree.get("definitionChanged").asBoolean()) {
+                            409
+                        } else if (pending.keys.any {
+                                it != path && it.substringBefore(
+                                    "/changes/",
+                                ) == path.substringBefore("/changes/")
+                            }
+                        ) {
                             409
                         } else {
                             val previous = pending.putIfAbsent(path, body)

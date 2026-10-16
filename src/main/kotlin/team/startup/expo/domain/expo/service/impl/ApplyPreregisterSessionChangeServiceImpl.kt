@@ -38,7 +38,10 @@ class ApplyPreregisterSessionChangeServiceImpl(
                 if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
                 if (sessions.findByIdAndExpoId(sessionId, expoId) == null) return@execute null
                 pendingChanges.findByIdOrNull(sessionId)?.takeIf { it.changeId == changeId }
-            } ?: return
+            } ?: run {
+                changes.reconcile(expoId, sessionId)
+                return
+            }
         val definition = pending.definitionJson?.let { mapper.readValue(it, PreregisterSessionResponse::class.java) }
         try {
             changes.prepare(expoId, sessionId, pending.nextRevision, pending.operation.name, pending.definitionChanged, definition)
@@ -93,5 +96,6 @@ class ApplyPreregisterSessionChangeServiceImpl(
                 }
             }
         }
+        changes.reconcile(expoId, sessionId)
     }
 }
