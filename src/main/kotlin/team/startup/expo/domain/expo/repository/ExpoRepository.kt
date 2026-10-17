@@ -1,6 +1,8 @@
 package team.startup.expo.domain.expo.repository
 
 import jakarta.persistence.LockModeType
+import org.springframework.data.domain.Pageable
+import org.springframework.data.domain.Slice
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
@@ -10,6 +12,11 @@ import team.startup.expo.domain.expo.entity.Expo
 
 interface ExpoRepository : JpaRepository<Expo, String> {
     fun existsByIdAndDeletingAtIsNotNull(id: String): Boolean
+
+    fun findAllByDeletingAtIsNullAndFinishedDayGreaterThanEqual(
+        finishedDay: String,
+        pageable: Pageable,
+    ): Slice<Expo>
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select expo from Expo expo where expo.id = :id")

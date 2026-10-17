@@ -48,6 +48,8 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
@@ -971,6 +973,49 @@ class ExpoApiPostgresHttpTests {
             } finally {
                 connection.rollback()
             }
+        }
+    }
+
+    @Test
+    fun `내부 박람회 목록은 삭제 중이거나 끝난 박람회를 빼고 시작일순으로 페이지를 넘긴다`() {
+        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+
+        fun expo(
+            started: LocalDate,
+            finished: LocalDate,
+        ) = createExpo().also {
+            jdbcTemplate.update("UPDATE tb_expo SET started_day=?, finished_day=? WHERE id=?", "$started", "$finished", it)
+        }
+        val endsToday = expo(today.minusDays(2), today)
+        val upcoming = expo(today.plusDays(3), today.plusDays(4))
+        expo(today.minusDays(3), today.minusDays(1))
+        val deleting = expo(today, today.plusDays(1))
+        jdbcTemplate.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", deleting)
+
+        fun page(query: String) =
+            request("/internal/expo$query", "GET", authority = null, internalToken = "test-internal-token").let {
+                it.statusCode() shouldBe 200
+                objectMapper.readTree(it.body())
+            }
+        val first = page("?size=1")
+        val second = page("?page=1&size=1")
+
+        first.get("content").toList().map { it.get("expoId").asString() } shouldBe listOf(endsToday)
+        first.get("hasNext").asBoolean() shouldBe true
+        second.get("content").toList().map { it.get("expoId").asString() } shouldBe listOf(upcoming)
+        second.get("hasNext").asBoolean() shouldBe false
+        page("").get("content").toList().map { it.get("expoId").asString() } shouldBe listOf(endsToday, upcoming)
+        first.get("content")[0].propertyNames().toList() shouldBe listOf("expoId", "title", "startedDay", "finishedDay")
+        first.get("content")[0].get("finishedDay").asString() shouldBe "$today"
+    }
+
+    @Test
+    fun `내부 박람회 목록은 토큰과 페이지 크기를 검증한다`() {
+        assertError(request("/internal/expo", "GET", authority = null), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo", "GET", authority = null, internalToken = "wrong-token"), 401, "인증이 필요합니다.")
+        assertError(request("/internal/expo", "GET", authority = "ROLE_ADMIN"), 401, "인증이 필요합니다.")
+        listOf("size=0", "size=101", "page=-1").forEach { query ->
+            request("/internal/expo?$query", "GET", authority = null, internalToken = "test-internal-token").statusCode() shouldBe 400
         }
     }
 

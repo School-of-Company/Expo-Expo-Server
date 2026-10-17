@@ -114,6 +114,8 @@ class SecurityConfig {
                     ).authenticated()
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/program-sessions")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(HttpMethod.GET, "/internal/expo")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}", "/internal/expo/{expo_id}/standard-programs/{program_id}")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
                     .requestMatchers(HttpMethod.POST, "/internal/expo/{expo_id}/training-programs/batch")
