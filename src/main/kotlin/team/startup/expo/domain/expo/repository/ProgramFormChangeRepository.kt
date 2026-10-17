@@ -30,8 +30,10 @@ class ProgramFormChangeRepository(
                 FROM tb_program_change, jsonb_array_elements(payload_json::jsonb->'mutations') mutation
             )
             SELECT count(*) > 0 AS referenced,
-                   min((policy->>'applicationStartedAt')::timestamptz) AS started,
-                   max((policy->>'applicationEndedAt')::timestamptz) AS ended
+                   min(LEAST((policy->>'applicationStartedAt')::timestamptz,
+                             (policy->>'onsiteStartedAt')::timestamptz)) AS started,
+                   max(GREATEST((policy->>'applicationEndedAt')::timestamptz,
+                                (policy->>'onsiteEndedAt')::timestamptz)) AS ended
             FROM policies WHERE policy->>'formId' = ?
             """.trimIndent(),
             { row, _ ->

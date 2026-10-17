@@ -49,6 +49,12 @@ class ProgramPolicyClient(
         if (form.startDate.isAfter(policy.applicationStartedAt) || form.endDate.isBefore(policy.applicationEndedAt)) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "폼 기간이 프로그램 모집 기간을 포함해야 합니다.")
         }
+        // 현장 접수도 같은 프로그램 폼으로 받으므로 폼 기간이 현장 접수 기간을 포함해야 한다.
+        if (policy.onsiteStartedAt != null &&
+            (form.startDate.isAfter(policy.onsiteStartedAt) || form.endDate.isBefore(policy.onsiteEndedAt))
+        ) {
+            throw ExpectedException(HttpStatus.BAD_REQUEST, "폼 기간이 현장 접수 기간을 포함해야 합니다.")
+        }
         policy.guardianPolicy?.let { guardian ->
             guardian.validate()
             if (form.version != guardian.formVersion) {

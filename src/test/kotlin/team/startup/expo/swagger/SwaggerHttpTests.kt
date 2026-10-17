@@ -247,6 +247,8 @@ class SwaggerEnabledHttpTests : SwaggerHttpSupport() {
         schemas.path("ProgramPolicyRequest").path("properties").has("channels") shouldBe false
         property("ProgramPolicyRequest", "preRegistrationCapacity").path("minimum").asInt() shouldBe 0
         property("ProgramPolicyRequest", "onsiteCapacity").path("minimum").asInt() shouldBe 0
+        property("ProgramPolicyRequest", "onsiteStartedAt").path("format").asString() shouldBe "date-time"
+        property("ProgramPolicyRequest", "onsiteEndedAt").path("format").asString() shouldBe "date-time"
 
         val startedAt = property("AddStandardProgramRequest", "startedAt")
         startedAt.has("format") shouldBe false

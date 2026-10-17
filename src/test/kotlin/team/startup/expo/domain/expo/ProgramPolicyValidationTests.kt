@@ -80,6 +80,29 @@ class ProgramPolicyValidationTests {
     }
 
     @Test
+    fun `onsite window is optional but must be a complete ordered pair independent of the pre period`() {
+        policy.validate()
+        val onsiteStart = end.plusSeconds(86_400)
+        policy
+            .copy(
+                capacity = 2,
+                onsiteCapacity = 1,
+                onsiteStartedAt = onsiteStart,
+                onsiteEndedAt = onsiteStart.plusSeconds(3600),
+            ).validate()
+        listOf(
+            policy.copy(onsiteStartedAt = onsiteStart),
+            policy.copy(onsiteEndedAt = onsiteStart),
+            policy.copy(onsiteStartedAt = onsiteStart, onsiteEndedAt = onsiteStart),
+            policy.copy(onsiteStartedAt = onsiteStart, onsiteEndedAt = onsiteStart.minusSeconds(1)),
+            policy.copy(onsiteStartedAt = onsiteStart.plusNanos(1), onsiteEndedAt = onsiteStart.plusSeconds(1)),
+        ).forEach { invalid ->
+            val exception = assertThrows(ExpectedException::class.java) { invalid.validate() }
+            assertEquals(HttpStatus.BAD_REQUEST, exception.status)
+        }
+    }
+
+    @Test
     fun `negative missing totals mismatches and integer overflow cannot define admission capacities`() {
         listOf(
             policy.copy(preRegistrationCapacity = -1, onsiteCapacity = 2),
