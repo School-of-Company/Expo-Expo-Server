@@ -111,6 +111,7 @@ class SecurityConfig {
                         HttpMethod.GET,
                         "/internal/expo/{expo_id}/admin-access",
                         "/internal/expo/{expo_id}/admin-application-cancel-access",
+                        "/internal/expo/{expo_id}/admin-application-promote-access",
                     ).authenticated()
                     .requestMatchers(HttpMethod.GET, "/internal/expo/{expo_id}/program-sessions")
                     .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)

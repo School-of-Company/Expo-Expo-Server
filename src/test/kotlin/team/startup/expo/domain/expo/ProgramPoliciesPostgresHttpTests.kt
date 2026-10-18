@@ -1,6 +1,7 @@
 package team.startup.expo.domain.expo
 
 import com.sun.net.httpserver.HttpServer
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -22,9 +23,12 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.standard.entity.StandardProgram
+import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
+import tools.jackson.databind.node.ObjectNode
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
@@ -64,6 +68,9 @@ class ProgramPoliciesPostgresHttpTests {
     private lateinit var transactions: TransactionTemplate
 
     @Autowired
+    private lateinit var standards: StandardProgramRepository
+
+    @Autowired
     private lateinit var imageRepository: team.startup.expo.domain.image.repository.ExpoImageRepository
 
     private val http = HttpClient.newHttpClient()
@@ -89,6 +96,7 @@ class ProgramPoliciesPostgresHttpTests {
         guardianPrepareSupport = true
         guardianSupportVersion = "1"
         guardianPrepareStatus = null
+        promotionSupport = true
         calls.clear()
         jdbc.execute("TRUNCATE tb_program_form_change")
         jdbc.execute("TRUNCATE tb_expo_image, tb_expo RESTART IDENTITY CASCADE")
@@ -131,6 +139,73 @@ class ProgramPoliciesPostgresHttpTests {
         }
         val legacy = mapper.readTree(policy())
         legacy.has("guardianPolicy") shouldBe false
+    }
+
+    @Test
+    fun `auto promotion settings round trip only when customized and require Application support`() {
+        val autoEnd = policy().replace("\"closed\":false", "\"closed\":false,\"autoPromotionEndedAt\":\"2026-10-11T12:00:00Z\"")
+        val manualOnly = policy().replace("\"closed\":false", "\"closed\":false,\"autoPromotionEnabled\":false")
+        create("standard")
+        standards
+            .findById(1)
+            .orElseThrow()
+            .policyJson!!
+            .contains("autoPromotion") shouldBe false
+        internal("/internal/expo/$EXPO/standard-programs/1", "GET", "").body().contains("autoPromotion") shouldBe false
+        request(
+            "/standard/$EXPO",
+            "POST",
+            body("standard", policy(waiting = 0).replace("\"closed\":false", "\"closed\":false,\"autoPromotionEnabled\":false")),
+        ).statusCode() shouldBe 400
+        request(
+            "/standard/$EXPO",
+            "POST",
+            body("standard", autoEnd.replace("2026-10-11T12:00:00Z", "2026-10-12T00:00:01Z")),
+        ).statusCode() shouldBe
+            400
+
+        promotionSupport = false
+        request("/standard/$EXPO", "POST", body("standard", manualOnly)).statusCode() shouldBe 503
+        update(1, autoEnd).statusCode() shouldBe 503
+        pending() shouldBe 0L
+        list("standard").size() shouldBe 1
+
+        promotionSupport = true
+        update(1, autoEnd).statusCode() shouldBe 204
+        readPolicy(1).get("autoPromotionEndedAt").asString() shouldBe "2026-10-11T12:00:00Z"
+        readPolicy(1).has("autoPromotionEnabled") shouldBe false
+        val definition = mapper.readTree(internal("/internal/expo/$EXPO/standard-programs/1", "GET", "").body())
+        definition.get("policy").get("autoPromotionEndedAt").asString() shouldBe "2026-10-11T12:00:00Z"
+        request("/standard/$EXPO", "POST", body("standard", manualOnly)).statusCode() shouldBe 201
+        readPolicy(2).get("autoPromotionEnabled").asBoolean() shouldBe false
+
+        promotionSupport = false
+        update(1, policy(), revision = 2).statusCode() shouldBe 503
+        pending() shouldBe 1L
+        promotionSupport = true
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        readPolicy(1).has("autoPromotionEndedAt") shouldBe false
+
+        // API 검증을 우회해 저장해도 V39 CHECK가 막는다.
+        listOf("autoPromotionEndedAt" to "2026-10-13T00:00:00Z", "waitingCapacity" to 0).forEach { (field, value) ->
+            val current = standards.findById(2).orElseThrow()
+            val invalid = (mapper.readTree(current.policyJson) as ObjectNode).set(field, mapper.valueToTree(value))
+            shouldThrow<DataIntegrityViolationException> {
+                standards.saveAndFlush(
+                    StandardProgram(
+                        current.id,
+                        current.title,
+                        current.startedAt,
+                        current.endedAt,
+                        current.expo,
+                        current.groupId,
+                        mapper.writeValueAsString(invalid),
+                        current.place,
+                        current.revision,
+                    ),
+                )
+            }
+        }
     }
 
     @Test
@@ -1549,6 +1624,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var guardianPrepareStatus: Int? = null
 
+        @Volatile private var promotionSupport = true
+
         @Volatile private var beforeReply: (() -> Unit)? = null
 
         @Volatile private var beforeFormReply: (() -> Unit)? = null
@@ -1580,11 +1657,13 @@ class ProgramPoliciesPostgresHttpTests {
                         } else if (path.endsWith("/program-policy-capabilities")) {
                             exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "application-token"
                             if (guardianSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", guardianSupportVersion)
+                            if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (guardianSupport) 204 else 404, -1)
                         } else if (path.contains("/program-changes/")) {
                             val status = guardianPrepareStatus ?: if (rejectChange) 409 else prepare(path, body)
                             beforeReply?.invoke()
                             if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
+                            if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
                         } else if (path.endsWith("/resolve")) {
                             val bytes = """{"participantId":42}""".toByteArray()

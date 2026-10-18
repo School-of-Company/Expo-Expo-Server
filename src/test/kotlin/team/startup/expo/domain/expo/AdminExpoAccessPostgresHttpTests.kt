@@ -21,7 +21,12 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.AdminApplicationCancelAccess
+import team.startup.expo.domain.expo.entity.AdminApplicationPromoteAccess
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramSessionPageRequest
+import team.startup.expo.domain.expo.repository.AdminApplicationCancelAccessRepository
+import team.startup.expo.domain.expo.repository.AdminApplicationPromoteAccessRepository
+import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramSessionQueryRepository
 import team.startup.expo.domain.expo.service.AdminAuthorityClient
 import team.startup.expo.domain.expo.service.GetProgramSessionPageService
@@ -54,6 +59,12 @@ class AdminExpoAccessPostgresHttpTests {
     @Autowired private lateinit var programs: ProgramSessionQueryRepository
 
     @Autowired private lateinit var pages: GetProgramSessionPageService
+
+    @Autowired private lateinit var expos: ExpoRepository
+
+    @Autowired private lateinit var cancelGrants: AdminApplicationCancelAccessRepository
+
+    @Autowired private lateinit var promoteGrants: AdminApplicationPromoteAccessRepository
     private val http = HttpClient.newHttpClient()
 
     @BeforeEach
@@ -123,6 +134,39 @@ class AdminExpoAccessPostgresHttpTests {
         access(jwt = jwt).statusCode() shouldBe 200
         jdbc.update("INSERT INTO tb_admin_application_cancel_access(expo_id,admin_id) VALUES (?,1)", EXPO)
         jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        request(path, jwt).statusCode() shouldBe 503
+    }
+
+    @Test
+    fun `manual promotion requires its own event grant rather than cancel or read access`() {
+        val jwt = TestJwt.token("ROLE_ADMIN")
+        val path = "/internal/expo/$EXPO/admin-application-promote-access"
+        request(path, jwt, token = null).statusCode() shouldBe 401
+        request(path).statusCode() shouldBe 401
+        request(path, TestJwt.token("ROLE_STANDARD")).statusCode() shouldBe 403
+        cancelGrants.save(AdminApplicationCancelAccess(EXPO, 1))
+        access(jwt = jwt).statusCode() shouldBe 200
+        request(path, jwt).statusCode() shouldBe 403
+        promoteGrants.save(AdminApplicationPromoteAccess(EXPO, 1))
+        val response = request(path, jwt)
+        response.statusCode() shouldBe 200
+        val body = mapper.readTree(response.body())
+        body.get("expoId").asString() shouldBe EXPO
+        body.get("adminId").asLong() shouldBe 1L
+        body.get("permission").asString() shouldBe "APPLICATION_PROMOTE"
+        body.get("policyVersion").asString() shouldBe "EXPO_ADMIN_APPLICATION_PROMOTE_V1"
+        body.get("scope").asString() shouldBe "EXPO_ADMIN"
+        response.headers().firstValue("Cache-Control").orElse("") shouldBe "no-store"
+        request(path, TestJwt.token("ROLE_ADMIN", subject = "2")).statusCode() shouldBe 403
+        request("/internal/expo/$OTHER/admin-application-promote-access", jwt).statusCode() shouldBe 403
+        request("/internal/expo/missing/admin-application-promote-access", jwt).statusCode() shouldBe 404
+        userStatus = 403
+        request(path, jwt).statusCode() shouldBe 403
+        userStatus = 200
+        promoteGrants.deleteAll()
+        request(path, jwt).statusCode() shouldBe 403
+        promoteGrants.save(AdminApplicationPromoteAccess(EXPO, 1))
+        expos.save(expos.findById(EXPO).orElseThrow().apply { markDeleting() })
         request(path, jwt).statusCode() shouldBe 503
     }
 
