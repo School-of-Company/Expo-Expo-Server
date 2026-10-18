@@ -32,6 +32,7 @@ class CreateExpoServiceImpl(
 ) : CreateExpoService {
     @Transactional
     override fun execute(request: CreateExpoRequest): CreateExpoResponse {
+        request.validatePreregisterCapacities()
         val expo =
             Expo(
                 id = expoIdGenerator.generate(),
@@ -45,6 +46,8 @@ class CreateExpoServiceImpl(
                 y = request.y,
                 applicationPerson = 0L,
                 yesterdayApplicationPerson = 0L,
+                preregisterTeacherCapacity = request.preregisterTeacherCapacity,
+                preregisterNonTeacherCapacity = request.preregisterNonTeacherCapacity,
             )
         expoRepository.saveAndFlush(expo)
 

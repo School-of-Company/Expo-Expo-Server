@@ -97,9 +97,12 @@ class ProgramPolicyClient(
             ) {
                 throw ExpectedException(HttpStatus.BAD_REQUEST, "보호자 정책은 초등학생 선택 시 표시되는 필수 학년 선택 문항을 참조해야 합니다.")
             }
+        }
+        if (policy.guardianPolicy != null || policy.customizesPromotion()) {
             val support =
                 send(applicationUrl, applicationToken, "/internal/expos/${definition.expoId}/program-policy-capabilities", "GET", "")
-            requireGuardianSupport(support)
+            if (policy.guardianPolicy != null) requireGuardianSupport(support)
+            if (policy.customizesPromotion()) requirePromotionSupport(support)
         }
     }
 
@@ -111,6 +114,8 @@ class ProgramPolicyClient(
         val guarded = payload.mutations.filter { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }
         if (guarded.isEmpty()) return
         val guardianChange = guarded.any { it.previous?.policy?.guardianPolicy != null || it.definition?.policy?.guardianPolicy != null }
+        val promotionChange =
+            guarded.any { it.previous?.policy?.customizesPromotion() == true || it.definition?.policy?.customizesPromotion() == true }
         val response =
             send(
                 applicationUrl,
@@ -122,6 +127,7 @@ class ProgramPolicyClient(
         when (response.statusCode()) {
             204 -> {
                 if (guardianChange) requireGuardianSupport(response)
+                if (promotionChange) requirePromotionSupport(response)
             }
 
             409 -> {
@@ -141,6 +147,15 @@ class ProgramPolicyClient(
             response.headers().firstValue("X-Program-Guardian-Policy-Version").orElse("") != "1"
         ) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Application의 보호자 동반 정책 지원 확인이 필요합니다.")
+        }
+    }
+
+    // 구버전 Application은 자동 승급 설정을 무시하고 promotionEndedAt까지 자동 승급하므로 지원 확인 전에는 저장하지 않는다.
+    private fun requirePromotionSupport(response: HttpResponse<String>) {
+        if (response.statusCode() !in listOf(200, 204) ||
+            response.headers().firstValue("X-Program-Promotion-Policy-Version").orElse("") != "1"
+        ) {
+            throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Application의 자동 승급 정책 지원 확인이 필요합니다.")
         }
     }
 

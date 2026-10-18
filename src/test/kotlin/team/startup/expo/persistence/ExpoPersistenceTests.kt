@@ -143,10 +143,7 @@ class ExpoPersistenceTests {
             "INSERT INTO tb_expo VALUES (?, 't', 'd', '2026-09-22', '2026-09-23', 'l', NULL, 'x', 'y', 1, 1)",
             "x".repeat(37),
         )
-        jdbcTemplate.update(
-            "INSERT INTO tb_expo VALUES (?, 't', 'd', '2026-09-22', '2026-09-23', 'l', NULL, 'x', 'y', 1, 1)",
-            EXPO_ID,
-        )
+        expoRepository.saveAndFlush(expo())
         assertRejected(
             "INSERT INTO tb_expo VALUES (?, 't', 'd', '2026-09-22', '2026-09-23', 'l', NULL, 'x', 'y', 1, 1)",
             EXPO_ID,
@@ -342,12 +339,12 @@ class ExpoPersistenceTests {
         jdbcTemplate.update("DELETE FROM tb_expo WHERE id = ?", EXPO_ID) shouldBe 1
         entityManager.clear()
 
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_training_program", Long::class.java) shouldBe 1L
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_standard_program", Long::class.java) shouldBe 1L
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_expo", Long::class.java) shouldBe 1L
+        trainingProgramRepository.count() shouldBe 1L
+        standardProgramRepository.count() shouldBe 1L
+        expoRepository.count() shouldBe 1L
 
         jdbcTemplate.update("DELETE FROM tb_standard_program WHERE expo_id = ?", EXPO_B_ID) shouldBe 1
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_expo", Long::class.java) shouldBe 1L
+        expoRepository.count() shouldBe 1L
     }
 
     @Test
@@ -365,7 +362,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "38"
+            .version.version shouldBe "40"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -537,8 +534,12 @@ class ExpoPersistenceTests {
                         ).take(historyBefore.size) shouldBe
                         historyBefore
                     val upgradedSessions = upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session")
-                    upgradedSessions.forEach { it["cancel_ended_at"] shouldBe null }
-                    upgradedSessions.map { it - "cancel_ended_at" } shouldBe sessionsBefore.map { it - "cancel_ended_at" }
+                    // V40은 기존 회차·박람회의 구분 정원을 채우거나 나누지 않는다.
+                    val added = listOf("cancel_ended_at", "teacher_capacity", "non_teacher_capacity")
+                    upgradedSessions.forEach { session -> added.forEach { session[it] shouldBe null } }
+                    upgradedSessions.map { it - added } shouldBe sessionsBefore.map { it - added }
+                    expo["preregister_teacher_capacity"] shouldBe null
+                    expo["preregister_non_teacher_capacity"] shouldBe null
                     val upgradedChanges = upgradeJdbc.queryForList("SELECT * FROM preregister_upgrade.tb_preregister_session_change")
                     upgradedChanges.forEach { it["admin_id"] shouldBe null }
                     upgradedChanges.map { it - "admin_id" } shouldBe changesBefore

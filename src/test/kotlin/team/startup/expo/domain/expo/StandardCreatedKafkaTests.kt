@@ -37,7 +37,9 @@ import org.springframework.transaction.CannotCreateTransactionException
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.messaging.StandardCreatedConsumer
+import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.RecordStandardRegistrationService
 import team.startup.expo.support.TestJwt
 import java.net.URI
@@ -77,6 +79,9 @@ class StandardCreatedKafkaTests {
     private lateinit var jdbc: JdbcTemplate
 
     @Autowired
+    private lateinit var expos: ExpoRepository
+
+    @Autowired
     private lateinit var kafka: KafkaTemplate<String, String>
 
     @Autowired
@@ -100,11 +105,7 @@ class StandardCreatedKafkaTests {
     @BeforeEach
     fun setUp() {
         jdbc.execute("TRUNCATE TABLE tb_expo RESTART IDENTITY CASCADE")
-        jdbc.update(
-            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,'expo','description','2026-09-24','2026-09-25','location','127','37',5,3)""",
-            EXPO_ID,
-        )
+        expos.save(Expo(EXPO_ID, "expo", "description", "2026-09-24", "2026-09-25", "location", null, "127", "37", 5, 3))
     }
 
     @Test
@@ -150,13 +151,13 @@ class StandardCreatedKafkaTests {
     @Test
     fun `missing deleted and deleting expos skip without retry or ledger writes`() {
         dltConsumer().use { dlt ->
-            jdbc.update("DELETE FROM tb_expo WHERE id = ?", EXPO_ID)
+            expos.deleteById(EXPO_ID)
             awaitCommitted(send(42, payload(42)))
             serviceAttempts(42) shouldBe 1
             ledger() shouldBe 0L
 
             setUp()
-            jdbc.update("UPDATE tb_expo SET deleting_at = now() WHERE id = ?", EXPO_ID)
+            expos.save(expos.findById(EXPO_ID).orElseThrow().apply { markDeleting() })
             awaitCommitted(send(43, payload(43)))
             serviceAttempts(43) shouldBe 1
             count() shouldBe 5L
@@ -346,7 +347,7 @@ class StandardCreatedKafkaTests {
     private fun payload(participantId: Long): String =
         """{"eventId":"${UUID.randomUUID()}","expoId":"$EXPO_ID","participantId":$participantId}"""
 
-    private fun count(): Long? = jdbc.queryForObject("SELECT application_person FROM tb_expo WHERE id = ?", Long::class.java, EXPO_ID)
+    private fun count(): Long? = expos.findById(EXPO_ID).orElseThrow().applicationPerson
 
     private fun ledger(): Long? = jdbc.queryForObject("SELECT COUNT(*) FROM tb_standard_registration", Long::class.java)
 

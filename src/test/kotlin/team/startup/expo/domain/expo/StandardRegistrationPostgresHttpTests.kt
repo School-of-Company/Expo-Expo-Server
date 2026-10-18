@@ -15,6 +15,8 @@ import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import java.net.URI
@@ -44,6 +46,9 @@ class StandardRegistrationPostgresHttpTests {
     private lateinit var jdbc: JdbcTemplate
 
     @Autowired
+    private lateinit var expos: ExpoRepository
+
+    @Autowired
     private lateinit var mapper: ObjectMapper
 
     private val http = HttpClient.newHttpClient()
@@ -52,11 +57,7 @@ class StandardRegistrationPostgresHttpTests {
     fun setUp() {
         jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
         listOf(EXPO_ID, OTHER_EXPO_ID).forEach { id ->
-            jdbc.update(
-                """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-                   VALUES (?,'박람회','설명','2026-09-24','2026-09-25','서울','127','37',5,3)""",
-                id,
-            )
+            expos.save(Expo(id, "박람회", "설명", "2026-09-24", "2026-09-25", "서울", null, "127", "37", 5, 3))
         }
     }
 
@@ -74,7 +75,7 @@ class StandardRegistrationPostgresHttpTests {
         put(OTHER_EXPO_ID, "42").statusCode() shouldBe 204
         count(OTHER_EXPO_ID) shouldBe 6L
         ledger(EXPO_ID) shouldBe listOf(42L, 43L)
-        jdbc.queryForObject("SELECT yesterday_application_person FROM tb_expo WHERE id = ?", Long::class.java, EXPO_ID) shouldBe 3L
+        expos.findById(EXPO_ID).orElseThrow().yesterdayApplicationPerson shouldBe 3L
     }
 
     @Test
@@ -123,7 +124,7 @@ class StandardRegistrationPostgresHttpTests {
         assertError(put("not-a-uuid", "42"), 400, "잘못된 요청입니다.")
         assertError(put(EXPO_ID.uppercase(), "42"), 400, "잘못된 요청입니다.")
 
-        jdbc.update("UPDATE tb_expo SET deleting_at = now() WHERE id = ?", OTHER_EXPO_ID)
+        expos.save(expos.findById(OTHER_EXPO_ID).orElseThrow().apply { markDeleting() })
         assertError(put(OTHER_EXPO_ID, "42"), 409, "삭제 중인 박람회입니다.")
 
         count(EXPO_ID) shouldBe 5L
@@ -145,7 +146,7 @@ class StandardRegistrationPostgresHttpTests {
     fun `박람회 행이 삭제되면 원장도 함께 정리된다`() {
         put(EXPO_ID, "42").statusCode() shouldBe 204
 
-        jdbc.update("DELETE FROM tb_expo WHERE id = ?", EXPO_ID)
+        expos.deleteById(EXPO_ID)
 
         jdbc.queryForObject("SELECT COUNT(*) FROM tb_standard_registration", Long::class.java) shouldBe 0L
     }
@@ -185,8 +186,7 @@ class StandardRegistrationPostgresHttpTests {
         return http.send(request, HttpResponse.BodyHandlers.ofString())
     }
 
-    private fun count(expoId: String): Long? =
-        jdbc.queryForObject("SELECT application_person FROM tb_expo WHERE id = ?", Long::class.java, expoId)
+    private fun count(expoId: String): Long? = expos.findById(expoId).orElseThrow().applicationPerson
 
     private fun ledger(expoId: String): List<Long?> =
         jdbc.queryForList(

@@ -87,6 +87,8 @@ class ApplyPreregisterSessionChangeServiceImpl(
                             closed = updated.closed,
                             revision = updated.revision,
                             cancelEndedAt = updated.cancelEndedAt,
+                            teacherCapacity = updated.teacherCapacity,
+                            nonTeacherCapacity = updated.nonTeacherCapacity,
                         ),
                     )
                 }

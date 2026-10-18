@@ -17,6 +17,13 @@ import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.standard.entity.StandardProgram
+import team.startup.expo.domain.standard.repository.StandardProgramRepository
+import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.domain.training.entity.TrainingProgram
+import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
@@ -38,6 +45,15 @@ class ProgramAttendanceHttpContractTests {
 
     @Autowired
     private lateinit var jdbc: JdbcTemplate
+
+    @Autowired
+    private lateinit var expos: ExpoRepository
+
+    @Autowired
+    private lateinit var standardPrograms: StandardProgramRepository
+
+    @Autowired
+    private lateinit var trainingPrograms: TrainingProgramRepository
 
     @Autowired
     private lateinit var mapper: ObjectMapper
@@ -67,49 +83,32 @@ class ProgramAttendanceHttpContractTests {
         remoteAttendances.clear()
         remoteAttendances.addAll(listOf("standard/1", "training/1", "standard/2"))
         jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
-        jdbc.update(
-            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            expoId,
-            "박람회",
-            "설명",
-            "2026-09-24",
-            "2026-09-25",
-            "서울",
-            "127",
-            "37",
-            0,
-            0,
+        val expo = expos.save(Expo(expoId, "박람회", "설명", "2026-09-24", "2026-09-25", "서울", null, "127", "37", 0, 0))
+        standardPrograms.save(
+            StandardProgram(title = "일반", startedAt = "2026-09-24T09:00", endedAt = "2026-09-24T10:00", expo = expo),
         )
-        jdbc.update(
-            "INSERT INTO tb_standard_program (title,started_at,ended_at,expo_id) VALUES (?,?,?,?)",
-            "일반",
-            "2026-09-24T09:00",
-            "2026-09-24T10:00",
-            expoId,
-        )
-        jdbc.update(
-            "INSERT INTO tb_training_program (title,started_at,ended_at,category,expo_id) VALUES (?,?,?,?,?)",
-            "연수",
-            "2026-09-24T09:00",
-            "2026-09-24T10:00",
-            "CHOICE",
-            expoId,
+        trainingPrograms.save(
+            TrainingProgram(
+                title = "연수",
+                startedAt = "2026-09-24T09:00",
+                endedAt = "2026-09-24T10:00",
+                category = Category.CHOICE,
+                expo = expo,
+            ),
         )
     }
 
     @Test
     fun `삭제는 종류별 ID 영역과 토큰을 보존하고 장애 후 재시도한다`() {
         Kind.entries.forEach { kind ->
-            val table = "tb_${kind.path}_program"
             listOf(200, 401, 403, 404, 500).forEach { status ->
                 attentionStatus = status
                 request("DELETE", "/${kind.path}/1").statusCode() shouldBe 502
-                jdbc.queryForObject("SELECT count(*) FROM $table WHERE id=1", Long::class.java) shouldBe 1L
+                programExists(kind, 1) shouldBe true
             }
             attentionDrop = true
             request("DELETE", "/${kind.path}/1").statusCode() shouldBe 503
-            jdbc.queryForObject("SELECT count(*) FROM $table WHERE id=1", Long::class.java) shouldBe 1L
+            programExists(kind, 1) shouldBe true
             attentionDrop = false
             attentionStatus = 204
             request("DELETE", "/${kind.path}/1").statusCode() shouldBe 204
@@ -131,7 +130,7 @@ class ProgramAttendanceHttpContractTests {
         try {
             Kind.entries.forEach { kind ->
                 request("DELETE", "/${kind.path}/1").statusCode() shouldBe 503
-                jdbc.queryForObject("SELECT count(*) FROM tb_${kind.path}_program", Long::class.java) shouldBe 1L
+                programCount(kind) shouldBe 1L
             }
             calls.isEmpty() shouldBe true
         } finally {
@@ -233,6 +232,13 @@ class ProgramAttendanceHttpContractTests {
             }
         }
     }
+
+    private fun programExists(
+        kind: Kind,
+        id: Long,
+    ): Boolean = if (kind == Kind.STANDARD) standardPrograms.existsById(id) else trainingPrograms.existsById(id)
+
+    private fun programCount(kind: Kind): Long = if (kind == Kind.STANDARD) standardPrograms.count() else trainingPrograms.count()
 
     private fun request(
         method: String,

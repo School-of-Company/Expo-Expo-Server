@@ -23,7 +23,10 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
+import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.global.exception.ExpectedException
@@ -74,6 +77,12 @@ class PreregisterSessionPostgresHttpTests {
     @Autowired
     private lateinit var expos: ExpoRepository
 
+    @Autowired
+    private lateinit var sessions: PreregisterSessionRepository
+
+    @Autowired
+    private lateinit var sessionChanges: PreregisterSessionChangeRepository
+
     private val http = HttpClient.newHttpClient()
 
     @BeforeEach
@@ -88,13 +97,11 @@ class PreregisterSessionPostgresHttpTests {
         ReflectionTestUtils.setField(changes, "applicationUrl", applicationUrl)
         ReflectionTestUtils.setField(changes, "internalToken", "test-application-token")
         jdbc.execute("TRUNCATE TABLE tb_expo RESTART IDENTITY CASCADE")
-        listOf(EXPO_ID, OTHER_EXPO_ID).forEach { id ->
-            jdbc.update(
-                """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-                   VALUES (?,'박람회','설명','2026-10-31','2026-11-01','광주','127','37',5,3)""",
-                id,
-            )
-        }
+        expos.saveAllAndFlush(
+            listOf(EXPO_ID, OTHER_EXPO_ID).map { id ->
+                Expo(id, "박람회", "설명", "2026-10-31", "2026-11-01", "광주", null, "127", "37", 5, 3)
+            },
+        )
     }
 
     @Test
@@ -238,8 +245,10 @@ class PreregisterSessionPostgresHttpTests {
         mapper.readTree(internal.body()) shouldBe body
         mapper.readTree(request(path(id)).body()) shouldBe body
         mapper.readTree(request(internalPath(), token = "test-expo-token", role = null).body()).size() shouldBe 1
-        jdbc.queryForObject("SELECT application_person FROM tb_expo WHERE id = ?", Long::class.java, EXPO_ID) shouldBe 5L
-        jdbc.queryForObject("SELECT yesterday_application_person FROM tb_expo WHERE id = ?", Long::class.java, EXPO_ID) shouldBe 3L
+        expos.findById(EXPO_ID).orElseThrow().let {
+            it.applicationPerson shouldBe 5L
+            it.yesterdayApplicationPerson shouldBe 3L
+        }
         calls.size shouldBe 0
     }
 
@@ -295,7 +304,7 @@ class PreregisterSessionPostgresHttpTests {
         request(path(first), role = null).statusCode() shouldBe 401
 
         request(path("01900000-0000-7000-8000-000000000099") + "/public", role = null).statusCode() shouldBe 404
-        jdbc.update("UPDATE tb_expo SET deleting_at=now() WHERE id=?", EXPO_ID)
+        markExpoDeleting()
         request(public, role = null).statusCode() shouldBe 404
     }
 
@@ -339,6 +348,77 @@ class PreregisterSessionPostgresHttpTests {
         request(path(id), "DELETE").statusCode() shouldBe 400
         request(path(id) + "?revision=0", "DELETE").statusCode() shouldBe 400
         calls.size shouldBe 0
+    }
+
+    @Test
+    fun `구분 정원은 박람회 기본값으로 초기화하고 박람회별로 격리하며 기존 회차를 보존한다`() {
+        val legacy = create()
+        setDefaults(EXPO_ID, 300, 1000)
+        setDefaults(OTHER_EXPO_ID, 5, 0)
+        val withoutCapacity = DEFINITION.replace("\"capacity\":100,", "")
+        val defaulted = create(withoutCapacity)
+        read(defaulted).let {
+            it.get("capacity").asInt() shouldBe 1300
+            it.get("teacherCapacity").asInt() shouldBe 300
+            it.get("nonTeacherCapacity").asInt() shouldBe 1000
+        }
+        val other = mapper.readTree(request(path(OTHER_EXPO_ID), "POST", withoutCapacity).body())
+        other.get("capacity").asInt() shouldBe 5
+        other.get("teacherCapacity").asInt() shouldBe 5
+        other.get("nonTeacherCapacity").asInt() shouldBe 0
+        val explicit = create(DEFINITION.dropLast(1) + ",\"teacherCapacity\":40,\"nonTeacherCapacity\":60}")
+        read(explicit).get("teacherCapacity").asInt() shouldBe 40
+        read(legacy).let {
+            it.get("capacity").asInt() shouldBe 100
+            it.get("teacherCapacity").isNull shouldBe true
+            it.get("nonTeacherCapacity").isNull shouldBe true
+        }
+        listOf(
+            DEFINITION,
+            DEFINITION.dropLast(1) + ",\"teacherCapacity\":40}",
+            DEFINITION.dropLast(1) + ",\"teacherCapacity\":40,\"nonTeacherCapacity\":61}",
+            DEFINITION.dropLast(1) + ",\"teacherCapacity\":-1,\"nonTeacherCapacity\":101}",
+            withoutCapacity.dropLast(1) + ",\"teacherCapacity\":0,\"nonTeacherCapacity\":0}",
+            withoutCapacity.dropLast(1) + ",\"teacherCapacity\":2147483647,\"nonTeacherCapacity\":1}",
+        ).forEach { invalid -> request(path(), "POST", invalid).statusCode() shouldBe 400 }
+        setDefaults(EXPO_ID, null, null)
+        request(path(), "POST", withoutCapacity).statusCode() shouldBe 400
+        read(defaulted).get("teacherCapacity").asInt() shouldBe 300
+
+        val revised = withoutCapacity.dropLast(1) + ",\"teacherCapacity\":350,\"nonTeacherCapacity\":1000}"
+        request(path(defaulted), "PATCH", updateBody(definition = revised)).statusCode() shouldBe 204
+        read(defaulted).let {
+            it.get("capacity").asInt() shouldBe 1350
+            it.get("teacherCapacity").asInt() shouldBe 350
+            it.get("revision").asLong() shouldBe 2L
+        }
+        val command = mapper.readTree(calls.last().body)
+        command.get("definitionChanged").asBoolean() shouldBe true
+        command.get("definition").get("teacherCapacity").asInt() shouldBe 350
+        command.get("definition").get("nonTeacherCapacity").asInt() shouldBe 1000
+        request(path(defaulted), "PATCH", updateBody(revision = 2, definition = withoutCapacity.replace("false", "true")))
+            .statusCode() shouldBe 204
+        read(defaulted).get("teacherCapacity").asInt() shouldBe 350
+        request(path(defaulted), "PATCH", updateBody(revision = 3, definition = DEFINITION)).statusCode() shouldBe 400
+        request(
+            path(legacy),
+            "PATCH",
+            updateBody(definition = DEFINITION.dropLast(1) + ",\"teacherCapacity\":30,\"nonTeacherCapacity\":70}"),
+        ).statusCode() shouldBe 204
+        read(legacy).get("teacherCapacity").asInt() shouldBe 30
+        mapper.readTree(request(path() + "/public", role = null).body()).forEach {
+            it.has("teacherCapacity") shouldBe false
+            it.has("nonTeacherCapacity") shouldBe false
+        }
+        assertThrows(DataIntegrityViolationException::class.java) {
+            jdbc.update("UPDATE tb_preregister_session SET capacity=capacity+1 WHERE id=?", explicit)
+        }
+        assertThrows(DataIntegrityViolationException::class.java) {
+            jdbc.update("UPDATE tb_preregister_session SET non_teacher_capacity=NULL WHERE id=?", explicit)
+        }
+        assertThrows(DataIntegrityViolationException::class.java) {
+            jdbc.update("UPDATE tb_expo SET preregister_teacher_capacity=1 WHERE id=?", EXPO_ID)
+        }
     }
 
     @Test
@@ -656,8 +736,8 @@ class PreregisterSessionPostgresHttpTests {
         request(path(id)).statusCode() shouldBe 404
         request(path(keep, OTHER_EXPO_ID)).statusCode() shouldBe 200
         create()
-        jdbc.update("DELETE FROM tb_expo WHERE id = ?", EXPO_ID)
-        jdbc.queryForObject("SELECT COUNT(*) FROM tb_preregister_session", Long::class.java) shouldBe 1L
+        expos.deleteById(EXPO_ID)
+        sessions.count() shouldBe 1L
     }
 
     @Test
@@ -766,7 +846,7 @@ class PreregisterSessionPostgresHttpTests {
         read(id).get("revision").asLong() shouldBe 1L
         journalCount(id) shouldBe 0L
 
-        jdbc.update("UPDATE tb_expo SET deleting_at=now() WHERE id=?", EXPO_ID)
+        markExpoDeleting()
         calls.clear()
         request(target, "PUT", """{"expected":10}""").statusCode() shouldBe 409
         calls.size shouldBe 0
@@ -820,12 +900,40 @@ class PreregisterSessionPostgresHttpTests {
         return mapper.readTree(response.body()).get("id").asLong()
     }
 
+    private fun setDefaults(
+        expoId: String,
+        teacher: Int?,
+        nonTeacher: Int?,
+    ) {
+        val expo = expos.findById(expoId).orElseThrow()
+        expos.saveAndFlush(
+            Expo(
+                expo.id,
+                expo.title,
+                expo.description,
+                expo.startedDay,
+                expo.finishedDay,
+                expo.location,
+                expo.coverImage,
+                expo.x,
+                expo.y,
+                expo.applicationPerson,
+                expo.yesterdayApplicationPerson,
+                teacher,
+                nonTeacher,
+            ),
+        )
+    }
+
     private fun read(id: Long): JsonNode = mapper.readTree(request(path(id)).body())
 
     private fun withDeadline(deadline: String): String = DEFINITION.dropLast(1) + ",\"cancelEndedAt\":\"$deadline\"}"
 
-    private fun journalCount(id: Long): Long =
-        jdbc.queryForObject("SELECT COUNT(*) FROM tb_preregister_session_change WHERE session_id=?", Long::class.java, id)!!
+    private fun journalCount(id: Long): Long = if (sessionChanges.existsById(id)) 1L else 0L
+
+    private fun markExpoDeleting() {
+        expos.saveAndFlush(expos.findById(EXPO_ID).orElseThrow().apply { markDeleting() })
+    }
 
     private fun updateBody(
         revision: Long = 1,

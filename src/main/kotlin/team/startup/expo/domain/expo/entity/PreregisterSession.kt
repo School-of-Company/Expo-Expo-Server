@@ -51,4 +51,10 @@ class PreregisterSession(
 
     @field:Column(name = "cancel_ended_at")
     val cancelEndedAt: Instant? = null,
+
+    @field:Column(name = "teacher_capacity")
+    val teacherCapacity: Int? = null,
+
+    @field:Column(name = "non_teacher_capacity")
+    val nonTeacherCapacity: Int? = null,
 )

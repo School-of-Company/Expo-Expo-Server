@@ -23,7 +23,14 @@ import org.springframework.test.util.ReflectionTestUtils
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.PreregisterSession
+import team.startup.expo.domain.expo.entity.PreregisterSessionChange
+import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
+import team.startup.expo.domain.expo.entity.ProgramChange
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
+import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
+import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.service.ExpoDeletionClient
 import team.startup.expo.domain.expo.service.impl.GetExpoValidationServiceImpl
 import team.startup.expo.domain.image.entity.ExpoImage
@@ -105,6 +112,15 @@ class ExpoApiPostgresHttpTests {
 
     @Autowired
     private lateinit var trainingProgramRepository: TrainingProgramRepository
+
+    @Autowired
+    private lateinit var preregisterSessionRepository: PreregisterSessionRepository
+
+    @Autowired
+    private lateinit var preregisterSessionChangeRepository: PreregisterSessionChangeRepository
+
+    @Autowired
+    private lateinit var programChangeRepository: ProgramChangeRepository
 
     @Autowired
     private lateinit var jdbcTemplate: JdbcTemplate
@@ -532,16 +548,29 @@ class ExpoApiPostgresHttpTests {
     @Test
     fun `소유 서비스 실패는 삭제를 중단하고 재시도 시 같은 프로그램 ID로 이어간다`() {
         val expoId = createExpo()
-        jdbcTemplate.update(
-            """INSERT INTO tb_preregister_session (expo_id,title,started_at,ended_at,place,capacity,waiting_capacity,closed)
-               VALUES (?,'회차','2026-09-24T00:00:00Z','2026-09-24T01:00:00Z','광주',100,10,false)""",
-            expoId,
-        )
+        val session =
+            preregisterSessionRepository.saveAndFlush(
+                PreregisterSession(
+                    expo = expoRepository.findById(expoId).orElseThrow(),
+                    title = "회차",
+                    startedAt = Instant.parse("2026-09-24T00:00:00Z"),
+                    endedAt = Instant.parse("2026-09-24T01:00:00Z"),
+                    place = "광주",
+                    capacity = 100,
+                    waitingCapacity = 10,
+                    closed = false,
+                ),
+            )
         val formAttempts = AtomicInteger()
-        jdbcTemplate.update(
-            """INSERT INTO tb_preregister_session_change (session_id,change_id,next_revision,operation,definition_changed)
-               SELECT id,'0190abcd-0000-7000-8000-000000000003',2,'DELETE',true FROM tb_preregister_session WHERE expo_id=?""",
-            expoId,
+        preregisterSessionChangeRepository.saveAndFlush(
+            PreregisterSessionChange(
+                sessionId = session.id!!,
+                nextRevision = 2,
+                operation = PreregisterSessionChangeOperation.DELETE,
+                definitionChanged = true,
+                definitionJson = null,
+                changeId = UUID.fromString("0190abcd-0000-7000-8000-000000000003"),
+            ),
         )
         val applicationBodies = mutableListOf<String>()
         withDeletionServer { exchange ->
@@ -569,17 +598,15 @@ class ExpoApiPostgresHttpTests {
             standardProgramRepository.count() shouldBe 1L
             trainingProgramRepository.count() shouldBe 1L
             assertError(request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON), 409, "삭제 중인 박람회입니다.")
-            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session WHERE expo_id = ?", Long::class.java, expoId) shouldBe
-                1L
-            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session_change", Long::class.java) shouldBe 1L
+            preregisterSessionRepository.findAllByExpoIdOrderByStartedAtAscIdAsc(expoId).size shouldBe 1
+            preregisterSessionChangeRepository.count() shouldBe 1L
 
             request("/expo/$expoId", "DELETE").statusCode() shouldBe 204
             applicationBodies.size shouldBe 2
             applicationBodies[0] shouldBe applicationBodies[1]
             expoRepository.existsById(expoId) shouldBe false
-            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session WHERE expo_id = ?", Long::class.java, expoId) shouldBe
-                0L
-            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_preregister_session_change", Long::class.java) shouldBe 0L
+            preregisterSessionRepository.findAllByExpoIdOrderByStartedAtAscIdAsc(expoId).size shouldBe 0
+            preregisterSessionChangeRepository.count() shouldBe 0L
         }
     }
 
@@ -738,6 +765,48 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `사전등록 회차 정원 기본값은 박람회 생성 수정 상세에서 쌍으로 저장하고 생략하면 미설정이다`() {
+        val defaults = """"preregisterTeacherCapacity":300,"preregisterNonTeacherCapacity":1000,"""
+        val createBody =
+            (objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode)
+                .apply {
+                    putArray("addStandardProRequestDto")
+                    putArray("addTrainingProRequestDto")
+                }.toString()
+        listOf(
+            createBody.replaceFirst("{", """{"preregisterTeacherCapacity":300,"""),
+            createBody.replaceFirst("{", """{"preregisterTeacherCapacity":-1,"preregisterNonTeacherCapacity":1,"""),
+            createBody.replaceFirst("{", """{"preregisterTeacherCapacity":0,"preregisterNonTeacherCapacity":0,"""),
+        ).forEach { invalid -> postExpo(invalid, authority = "ROLE_ADMIN").statusCode() shouldBe 400 }
+        val created = postExpo(createBody.replaceFirst("{", "{$defaults"), authority = "ROLE_ADMIN")
+        created.statusCode() shouldBe 201
+        val expoId = objectMapper.readTree(created.body()).get("expoId").asString()
+        val legacyId = createExpo()
+
+        fun detail(id: String) = objectMapper.readTree(request("/expo/$id", "GET").body())
+        detail(expoId).let {
+            it.get("preregisterTeacherCapacity").asInt() shouldBe 300
+            it.get("preregisterNonTeacherCapacity").asInt() shouldBe 1000
+        }
+        detail(legacyId).get("preregisterTeacherCapacity").isNull shouldBe true
+
+        val update = EMPTY_UPDATE_REQUEST_JSON.replace("거부될 수정", "2026 박람회")
+        request("/expo/$expoId", "PATCH", update.replaceFirst("{", """{"preregisterNonTeacherCapacity":5,""")).statusCode() shouldBe 400
+        request(
+            "/expo/$expoId",
+            "PATCH",
+            update.replaceFirst("{", """{"preregisterTeacherCapacity":5,"preregisterNonTeacherCapacity":0,"""),
+        ).statusCode() shouldBe 204
+        detail(expoId).let {
+            it.get("preregisterTeacherCapacity").asInt() shouldBe 5
+            it.get("preregisterNonTeacherCapacity").asInt() shouldBe 0
+        }
+        detail(legacyId).get("preregisterTeacherCapacity").isNull shouldBe true
+        request("/expo/$expoId", "PATCH", update).statusCode() shouldBe 204
+        detail(expoId).get("preregisterTeacherCapacity").isNull shouldBe true
+    }
+
+    @Test
     fun `실제 HTTP 목록과 상세 조회는 계약 필드만 반환한다`() {
         val expoId = createExpo()
 
@@ -841,11 +910,7 @@ class ExpoApiPostgresHttpTests {
     fun `전화번호 인증 설정은 진행 중인 행사 변경을 거부하고 내부 조회는 200을 유지하며 다른 행사는 허용한다`() {
         val expoId = createExpo()
         val otherExpoId = createExpo()
-        jdbcTemplate.update(
-            "INSERT INTO tb_program_change (expo_id, change_id, command_json, payload_json) VALUES (?, ?, '{}', '{}')",
-            expoId,
-            java.util.UUID.randomUUID(),
-        )
+        programChangeRepository.saveAndFlush(ProgramChange(expoId = expoId, commandJson = "{}", payloadJson = "{}"))
         val disabled = """{"participantPhoneVerificationRequired":false}"""
         assertError(
             request("/expo/$expoId/participant-phone-verification", "PATCH", disabled),
@@ -897,7 +962,7 @@ class ExpoApiPostgresHttpTests {
         val disabled = """{"participantPhoneVerificationRequired":false}"""
         assertError(request("/expo/not-found/participant-phone-verification", "PATCH", disabled), 404, "박람회를 찾을 수 없습니다.")
         val expoId = createExpo()
-        jdbcTemplate.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", expoId)
+        markExpoDeleting(expoId)
         assertError(request("/expo/$expoId/participant-phone-verification", "PATCH", disabled), 409, "삭제 중인 박람회입니다.")
         request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token").let { response ->
             response.statusCode() shouldBe 200
@@ -990,7 +1055,7 @@ class ExpoApiPostgresHttpTests {
         val upcoming = expo(today.plusDays(3), today.plusDays(4))
         expo(today.minusDays(3), today.minusDays(1))
         val deleting = expo(today, today.plusDays(1))
-        jdbcTemplate.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", deleting)
+        markExpoDeleting(deleting)
 
         fun page(query: String) =
             request("/internal/expo$query", "GET", authority = null, internalToken = "test-internal-token").let {
@@ -1560,7 +1625,9 @@ class ExpoApiPostgresHttpTests {
                     connection.createStatement().use { it.executeUpdate("DELETE FROM tb_${kind}_program WHERE id=1") shouldBe 1 }
                     connection.commit()
                     update.get(10, TimeUnit.SECONDS).statusCode() shouldBe 404
-                    jdbcTemplate.queryForObject("SELECT count(*) FROM tb_${kind}_program WHERE id=1", Long::class.java) shouldBe 0L
+                    val exists =
+                        if (kind == "standard") standardProgramRepository.existsById(1L) else trainingProgramRepository.existsById(1L)
+                    exists shouldBe false
                 } finally {
                     connection.rollback()
                 }
@@ -1719,6 +1786,10 @@ class ExpoApiPostgresHttpTests {
             return copy
         }
         return if (tree.isArray) objectMapper.createArrayNode().also { array -> tree.forEach { array.add(project(it)) } } else project(tree)
+    }
+
+    private fun markExpoDeleting(expoId: String) {
+        expoRepository.saveAndFlush(expoRepository.findById(expoId).orElseThrow().apply { markDeleting() })
     }
 
     private fun databaseSnapshot(expoId: String): Map<String, List<Map<String, Any?>>> =

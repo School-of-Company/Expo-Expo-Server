@@ -39,6 +39,12 @@ class Expo(
 
     applicationPerson: Long,
     yesterdayApplicationPerson: Long,
+
+    @field:Column(name = "preregister_teacher_capacity")
+    val preregisterTeacherCapacity: Int? = null,
+
+    @field:Column(name = "preregister_non_teacher_capacity")
+    val preregisterNonTeacherCapacity: Int? = null,
 ) {
     @field:Column(name = "participant_phone_verification_required", nullable = false)
     var participantPhoneVerificationRequired: Boolean = true

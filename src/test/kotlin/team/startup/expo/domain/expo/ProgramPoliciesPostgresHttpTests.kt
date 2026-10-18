@@ -1,6 +1,7 @@
 package team.startup.expo.domain.expo
 
 import com.sun.net.httpserver.HttpServer
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -22,15 +23,24 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.repository.ProgramChangeRepository
+import team.startup.expo.domain.image.entity.ExpoImage
+import team.startup.expo.domain.standard.entity.StandardProgram
+import team.startup.expo.domain.standard.repository.StandardProgramRepository
+import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
+import tools.jackson.databind.node.ObjectNode
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
@@ -64,7 +74,19 @@ class ProgramPoliciesPostgresHttpTests {
     private lateinit var transactions: TransactionTemplate
 
     @Autowired
+    private lateinit var standards: StandardProgramRepository
+
+    @Autowired
     private lateinit var imageRepository: team.startup.expo.domain.image.repository.ExpoImageRepository
+
+    @Autowired
+    private lateinit var expos: ExpoRepository
+
+    @Autowired
+    private lateinit var trainings: TrainingProgramRepository
+
+    @Autowired
+    private lateinit var programChanges: ProgramChangeRepository
 
     private val http = HttpClient.newHttpClient()
 
@@ -89,6 +111,7 @@ class ProgramPoliciesPostgresHttpTests {
         guardianPrepareSupport = true
         guardianSupportVersion = "1"
         guardianPrepareStatus = null
+        promotionSupport = true
         calls.clear()
         jdbc.execute("TRUNCATE tb_program_form_change")
         jdbc.execute("TRUNCATE tb_expo_image, tb_expo RESTART IDENTITY CASCADE")
@@ -97,13 +120,11 @@ class ProgramPoliciesPostgresHttpTests {
         )
         jdbc.execute("CREATE TABLE IF NOT EXISTS test_change_receipt (id TEXT PRIMARY KEY, body TEXT NOT NULL)")
         jdbc.execute("TRUNCATE test_admission, test_change_receipt")
-        listOf(EXPO, OTHER).forEach { id ->
-            jdbc.update(
-                "INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person) VALUES (?,'expo','description','2026-10-11','2026-10-12','place','127','37',0,0)",
-                id,
-            )
-        }
-        jdbc.update("UPDATE tb_expo SET cover_image=''")
+        expos.saveAll(
+            listOf(EXPO, OTHER).map { id ->
+                Expo(id, "expo", "description", "2026-10-11", "2026-10-12", "place", "", "127", "37", 0, 0)
+            },
+        )
     }
 
     @Test
@@ -125,12 +146,77 @@ class ProgramPoliciesPostgresHttpTests {
             result.get("policy").get("guardianPolicy").toString() shouldBe mapper.readTree(guardian()).toString()
             internal("/internal/expo/$OTHER/$path", method, if (type == "training") """{"programIds":[1]}""" else "")
                 .statusCode() shouldBe 404
-            jdbc
-                .queryForObject("SELECT policy_json FROM tb_${type}_program WHERE id=1", String::class.java)!!
-                .contains("guardianPolicy") shouldBe true
+            storedPolicyJson(type).contains("guardianPolicy") shouldBe true
         }
         val legacy = mapper.readTree(policy())
         legacy.has("guardianPolicy") shouldBe false
+    }
+
+    @Test
+    fun `auto promotion settings round trip only when customized and require Application support`() {
+        val autoEnd = policy().replace("\"closed\":false", "\"closed\":false,\"autoPromotionEndedAt\":\"2026-10-11T12:00:00Z\"")
+        val manualOnly = policy().replace("\"closed\":false", "\"closed\":false,\"autoPromotionEnabled\":false")
+        create("standard")
+        standards
+            .findById(1)
+            .orElseThrow()
+            .policyJson!!
+            .contains("autoPromotion") shouldBe false
+        internal("/internal/expo/$EXPO/standard-programs/1", "GET", "").body().contains("autoPromotion") shouldBe false
+        request(
+            "/standard/$EXPO",
+            "POST",
+            body("standard", policy(waiting = 0).replace("\"closed\":false", "\"closed\":false,\"autoPromotionEnabled\":false")),
+        ).statusCode() shouldBe 400
+        request(
+            "/standard/$EXPO",
+            "POST",
+            body("standard", autoEnd.replace("2026-10-11T12:00:00Z", "2026-10-12T00:00:01Z")),
+        ).statusCode() shouldBe
+            400
+
+        promotionSupport = false
+        request("/standard/$EXPO", "POST", body("standard", manualOnly)).statusCode() shouldBe 503
+        update(1, autoEnd).statusCode() shouldBe 503
+        pending() shouldBe 0L
+        list("standard").size() shouldBe 1
+
+        promotionSupport = true
+        update(1, autoEnd).statusCode() shouldBe 204
+        readPolicy(1).get("autoPromotionEndedAt").asString() shouldBe "2026-10-11T12:00:00Z"
+        readPolicy(1).has("autoPromotionEnabled") shouldBe false
+        val definition = mapper.readTree(internal("/internal/expo/$EXPO/standard-programs/1", "GET", "").body())
+        definition.get("policy").get("autoPromotionEndedAt").asString() shouldBe "2026-10-11T12:00:00Z"
+        request("/standard/$EXPO", "POST", body("standard", manualOnly)).statusCode() shouldBe 201
+        readPolicy(2).get("autoPromotionEnabled").asBoolean() shouldBe false
+
+        promotionSupport = false
+        update(1, policy(), revision = 2).statusCode() shouldBe 503
+        pending() shouldBe 1L
+        promotionSupport = true
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        readPolicy(1).has("autoPromotionEndedAt") shouldBe false
+
+        // API 검증을 우회해 저장해도 V39 CHECK가 막는다.
+        listOf("autoPromotionEndedAt" to "2026-10-13T00:00:00Z", "waitingCapacity" to 0).forEach { (field, value) ->
+            val current = standards.findById(2).orElseThrow()
+            val invalid = (mapper.readTree(current.policyJson) as ObjectNode).set(field, mapper.valueToTree(value))
+            shouldThrow<DataIntegrityViolationException> {
+                standards.saveAndFlush(
+                    StandardProgram(
+                        current.id,
+                        current.title,
+                        current.startedAt,
+                        current.endedAt,
+                        current.expo,
+                        current.groupId,
+                        mapper.writeValueAsString(invalid),
+                        current.place,
+                        current.revision,
+                    ),
+                )
+            }
+        }
     }
 
     @Test
@@ -336,7 +422,7 @@ class ProgramPoliciesPostgresHttpTests {
         request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 400
         shortFormPeriod = false
         request("/standard/$EXPO", "POST", body("standard").replace("2026-10-13 10:00", "2026-10-13 08:00")).statusCode() shouldBe 400
-        jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        markDeleting(EXPO)
         request("/training/$EXPO", "POST", body("training")).statusCode() shouldBe 409
         request("/standard/list/$EXPO", "POST", "[${body("standard")}]").statusCode() shouldBe 409
     }
@@ -352,7 +438,7 @@ class ProgramPoliciesPostgresHttpTests {
             list(type)[0].get("policy").has("channels") shouldBe false
             val desired = policy(capacity = 30, pre = 15, onsite = 15, form = form)
             request("/$type/1", "PATCH", body(type, policy = desired, id = 1, revision = 1)).statusCode() shouldBe 204
-            val stored = mapper.readTree(jdbc.queryForObject("SELECT policy_json FROM tb_${type}_program WHERE id=1", String::class.java)!!)
+            val stored = mapper.readTree(storedPolicyJson(type))
             stored.get("capacity").asInt() shouldBe 30
             stored.get("preRegistrationCapacity").asInt() shouldBe 15
             stored.get("onsiteCapacity").asInt() shouldBe 15
@@ -387,7 +473,7 @@ class ProgramPoliciesPostgresHttpTests {
         val onsite = ",\"onsiteStartedAt\":\"2026-10-20T00:00:00Z\",\"onsiteEndedAt\":\"2026-10-21T00:00:00Z\""
         val withWindow = policy(capacity = 3, pre = 2, onsite = 1).replace("\"closed\":false", "\"closed\":false$onsite")
         request("/standard/$EXPO", "POST", body("standard", policy = withWindow)).statusCode() shouldBe 201
-        val stored = mapper.readTree(jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!)
+        val stored = mapper.readTree(storedPolicyJson("standard"))
         stored.get("onsiteStartedAt").asString() shouldBe "2026-10-20T00:00:00Z"
         stored.get("onsiteEndedAt").asString() shouldBe "2026-10-21T00:00:00Z"
         stored.get("applicationEndedAt").asString() shouldBe "2026-10-12T00:00:00Z"
@@ -410,7 +496,7 @@ class ProgramPoliciesPostgresHttpTests {
         list("standard").size() shouldBe 1
         val withoutWindow = policy(capacity = 3, pre = 2, onsite = 1)
         request("/standard/1", "PATCH", body("standard", policy = withoutWindow, id = 1, revision = 1)).statusCode() shouldBe 204
-        val cleared = mapper.readTree(jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!)
+        val cleared = mapper.readTree(storedPolicyJson("standard"))
         cleared.has("onsiteStartedAt") shouldBe false
         cleared.has("onsiteEndedAt") shouldBe false
         val forwarded = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")[0]
@@ -685,7 +771,7 @@ class ProgramPoliciesPostgresHttpTests {
                 jdbc.update("UPDATE tb_standard_program SET policy_json=? WHERE id=1", invalid)
             }
         }
-        jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        markDeleting(EXPO)
         update(1, policy(capacity = 3)).statusCode() shouldBe 409
         request("/standard/1", "DELETE").statusCode() shouldBe 409
         request("/internal/expo/$EXPO/standard-programs/1", role = null, token = "expo-test-token").statusCode() shouldBe 409
@@ -773,17 +859,15 @@ class ProgramPoliciesPostgresHttpTests {
 
     @Test
     fun `nested Expo create rejects foreign forms and legacy create retains the nested API`() {
-        jdbc.update(
-            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('image','local','test','/image/test','image/png','1',CURRENT_TIMESTAMP,'PENDING')",
-        )
+        imageRepository.save(ExpoImage("image", "local", "test", "/image/test", "image/png", "1"))
         val createBody =
             expoBody(body("standard"), null)
                 .replace("updateStandardProRequestDto", "addStandardProRequestDto")
                 .replace("updateTrainingProRequestDto", "addTrainingProRequestDto")
                 .replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/test\"")
         request("/expo", "POST", createBody).statusCode() shouldBe 400
-        jdbc.queryForObject("SELECT count(*) FROM tb_expo", Long::class.java) shouldBe 2L
-        jdbc.queryForObject("SELECT status FROM tb_expo_image WHERE id='image'", String::class.java) shouldBe "PENDING"
+        expos.count() shouldBe 2L
+        imageRepository.findById("image").orElseThrow().status shouldBe "PENDING"
         val legacy =
             createBody.replace(
                 "\"addStandardProRequestDto\":[${body("standard")}]",
@@ -874,15 +958,15 @@ class ProgramPoliciesPostgresHttpTests {
     fun `pending Expo change reserves its cover image through cleanup and competing attachments`() {
         create("standard")
         seed("STANDARD", 1)
-        jdbc.update(
-            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('reserved','local','reserved','/image/reserved','image/png','1',CURRENT_TIMESTAMP - INTERVAL '2 days','PENDING')",
+        imageRepository.save(
+            ExpoImage("reserved", "local", "reserved", "/image/reserved", "image/png", "1", Instant.now().minus(Duration.ofDays(2))),
         )
         val patch =
             expoBody(body("standard", policy(capacity = 3), id = 1, revision = 1), null)
                 .replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/reserved\"")
         lostResponse = true
         request("/expo/$EXPO", "PATCH", patch).statusCode() shouldBe 502
-        jdbc.queryForObject("SELECT reserved_expo_id FROM tb_expo_image WHERE id='reserved'", String::class.java) shouldBe EXPO
+        imageRepository.findById("reserved").orElseThrow().reservedExpoId shouldBe EXPO
         val repository = imageRepository
         repository.markDeleting("reserved", java.time.Instant.now()) shouldBe 0
         request(
@@ -894,8 +978,8 @@ class ProgramPoliciesPostgresHttpTests {
         pending() shouldBe 1L
         lostResponse = false
         request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
-        jdbc.queryForObject("SELECT status FROM tb_expo_image WHERE id='reserved'", String::class.java) shouldBe "ATTACHED"
-        jdbc.queryForObject("SELECT reserved_expo_id FROM tb_expo_image WHERE id='reserved'", String::class.java) shouldBe null
+        imageRepository.findById("reserved").orElseThrow().status shouldBe "ATTACHED"
+        imageRepository.findById("reserved").orElseThrow().reservedExpoId shouldBe null
         pending() shouldBe 0L
     }
 
@@ -903,15 +987,13 @@ class ProgramPoliciesPostgresHttpTests {
     fun `definite rejection releases image reservation and permits another Expo to attach it`() {
         create("standard")
         seed("STANDARD", 1, confirmed = 2)
-        jdbc.update(
-            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('rejected','local','rejected','/image/rejected','image/png','1',CURRENT_TIMESTAMP,'PENDING')",
-        )
+        imageRepository.save(ExpoImage("rejected", "local", "rejected", "/image/rejected", "image/png", "1"))
         val patch =
             expoBody(body("standard", policy(capacity = 1), id = 1, revision = 1), null)
                 .replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/rejected\"")
         request("/expo/$EXPO", "PATCH", patch).statusCode() shouldBe 409
         pending() shouldBe 0L
-        jdbc.queryForObject("SELECT reserved_expo_id FROM tb_expo_image WHERE id='rejected'", String::class.java) shouldBe null
+        imageRepository.findById("rejected").orElseThrow().reservedExpoId shouldBe null
         request(
             "/expo/$OTHER",
             "PATCH",
@@ -944,7 +1026,18 @@ class ProgramPoliciesPostgresHttpTests {
         calls.isEmpty() shouldBe true
     }
 
-    private fun pending(): Long = jdbc.queryForObject("SELECT count(*) FROM tb_program_change", Long::class.java)!!
+    private fun pending(): Long = programChanges.count()
+
+    private fun storedPolicyJson(type: String): String =
+        if (type == "standard") {
+            standards.findById(1).orElseThrow().policyJson!!
+        } else {
+            trainings.findById(1).orElseThrow().policyJson!!
+        }
+
+    private fun markDeleting(expoId: String) {
+        expos.save(expos.findById(expoId).orElseThrow().also { it.markDeleting() })
+    }
 
     @Test
     fun `program policy history shares the commit and no-op retries add no records`() {
@@ -1152,16 +1245,14 @@ class ProgramPoliciesPostgresHttpTests {
             list(type).size() shouldBe 0
         }
         request("/expo/$EXPO", "PATCH", expoBody(body("standard"), body("training"))).statusCode() shouldBe 409
-        jdbc.update(
-            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('form-image','local','test','/image/form-test','image/png','1',CURRENT_TIMESTAMP,'PENDING')",
-        )
+        imageRepository.save(ExpoImage("form-image", "local", "test", "/image/form-test", "image/png", "1"))
         val nested =
             expoBody(body("standard"), body("training"))
                 .replace("updateStandardProRequestDto", "addStandardProRequestDto")
                 .replace("updateTrainingProRequestDto", "addTrainingProRequestDto")
                 .replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/form-test\"")
         request("/expo", "POST", nested).statusCode() shouldBe 409
-        jdbc.queryForObject("SELECT count(*) FROM tb_expo", Long::class.java) shouldBe 2L
+        expos.count() shouldBe 2L
         internal(standard, "DELETE").statusCode() shouldBe 204
         internal(training, "DELETE").statusCode() shouldBe 204
         create("standard")
@@ -1277,7 +1368,7 @@ class ProgramPoliciesPostgresHttpTests {
                 val created = create.get(15, TimeUnit.SECONDS)
                 val reserved = reserve.get(15, TimeUnit.SECONDS)
                 ((created == 201 && reserved == 409) || (created == 409 && reserved == 200)) shouldBe true
-                jdbc.queryForObject("SELECT count(*) FROM tb_standard_program", Long::class.java) shouldBe if (created == 201) 1L else 0L
+                standards.count() shouldBe if (created == 201) 1L else 0L
             }
         } finally {
             executor.shutdownNow()
@@ -1286,9 +1377,7 @@ class ProgramPoliciesPostgresHttpTests {
 
     @Test
     fun expoAndListWritesKeepSessionPlaces() {
-        jdbc.update(
-            "INSERT INTO tb_expo_image(id,storage_provider,object_key,public_url,content_type,uploaded_by,created_at,status) VALUES ('place-image','local','place-test','/image/place-test','image/png','1',CURRENT_TIMESTAMP,'PENDING')",
-        )
+        imageRepository.save(ExpoImage("place-image", "local", "place-test", "/image/place-test", "image/png", "1"))
         val standard = withPlace(body("standard", policy = null), "Hall S")
         val training = withPlace(body("training", policy = null), "Hall T")
         val createBody =
@@ -1298,8 +1387,8 @@ class ProgramPoliciesPostgresHttpTests {
         val created = request("/expo", "POST", createBody.replace("\"coverImage\":\"\"", "\"coverImage\":\"/image/place-test\""))
         created.statusCode() shouldBe 201
         val expoId = mapper.readTree(created.body()).get("expoId").asString()
-        val standardId = jdbc.queryForObject("SELECT id FROM tb_standard_program WHERE expo_id=?", Long::class.java, expoId)!!
-        val trainingId = jdbc.queryForObject("SELECT id FROM tb_training_program WHERE expo_id=?", Long::class.java, expoId)!!
+        val standardId = standards.findByExpoIdOrderByIdAsc(expoId).single().id!!
+        val trainingId = trainings.findByExpoIdOrderByIdAsc(expoId).single().id!!
         val updated =
             expoBody(
                 withPlace(body("standard", policy = null, id = standardId, revision = 1), "New S"),
@@ -1549,6 +1638,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var guardianPrepareStatus: Int? = null
 
+        @Volatile private var promotionSupport = true
+
         @Volatile private var beforeReply: (() -> Unit)? = null
 
         @Volatile private var beforeFormReply: (() -> Unit)? = null
@@ -1580,11 +1671,13 @@ class ProgramPoliciesPostgresHttpTests {
                         } else if (path.endsWith("/program-policy-capabilities")) {
                             exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "application-token"
                             if (guardianSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", guardianSupportVersion)
+                            if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (guardianSupport) 204 else 404, -1)
                         } else if (path.contains("/program-changes/")) {
                             val status = guardianPrepareStatus ?: if (rejectChange) 409 else prepare(path, body)
                             beforeReply?.invoke()
                             if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
+                            if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
                         } else if (path.endsWith("/resolve")) {
                             val bytes = """{"participantId":42}""".toByteArray()

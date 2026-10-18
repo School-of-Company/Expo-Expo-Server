@@ -35,7 +35,9 @@ interface ExpoRepository : JpaRepository<Expo, String> {
                expo.location = :location,
                expo.coverImage = :coverImage,
                expo.x = :x,
-               expo.y = :y
+               expo.y = :y,
+               expo.preregisterTeacherCapacity = :preregisterTeacherCapacity,
+               expo.preregisterNonTeacherCapacity = :preregisterNonTeacherCapacity
          where expo.id = :id
         """,
     )
@@ -49,5 +51,7 @@ interface ExpoRepository : JpaRepository<Expo, String> {
         @Param("coverImage") coverImage: String?,
         @Param("x") x: String,
         @Param("y") y: String,
+        @Param("preregisterTeacherCapacity") preregisterTeacherCapacity: Int?,
+        @Param("preregisterNonTeacherCapacity") preregisterNonTeacherCapacity: Int?,
     ): Int
 }
