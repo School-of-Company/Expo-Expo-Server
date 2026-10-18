@@ -3,6 +3,7 @@ package team.startup.expo.domain.expo.presentation.dto.request
 import com.fasterxml.jackson.annotation.JsonFormat
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.Valid
+import jakarta.validation.constraints.PositiveOrZero
 import jakarta.validation.constraints.Size
 import org.hibernate.validator.constraints.CodePointLength
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
@@ -38,7 +39,18 @@ data class CreateExpoRequest(
     @field:Valid
     @field:Schema(description = "생성할 프로그램 목록", example = "[]")
     val addTrainingProRequestDto: List<CreateTrainingProgramRequest>,
-)
+    @field:PositiveOrZero
+    @field:Schema(
+        description = "새 사전등록 회차의 교사·예비교사 정원 기본값. 그 외 대상 기본값과 함께 보내거나 함께 생략(null=미설정)합니다. 바꿔도 기존 회차 정원은 그대로입니다.",
+        example = "300",
+    )
+    val preregisterTeacherCapacity: Int? = null,
+    @field:PositiveOrZero
+    @field:Schema(description = "새 사전등록 회차의 교사·예비교사 외 대상 정원 기본값", example = "1000")
+    val preregisterNonTeacherCapacity: Int? = null,
+) {
+    fun validatePreregisterCapacities() = validateTargetCapacities(preregisterTeacherCapacity, preregisterNonTeacherCapacity)
+}
 
 data class CreateStandardProgramRequest(
     @field:CodePointLength(max = 50)

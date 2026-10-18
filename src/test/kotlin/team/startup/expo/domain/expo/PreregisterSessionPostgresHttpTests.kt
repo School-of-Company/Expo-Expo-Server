@@ -23,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
@@ -339,6 +340,77 @@ class PreregisterSessionPostgresHttpTests {
         request(path(id), "DELETE").statusCode() shouldBe 400
         request(path(id) + "?revision=0", "DELETE").statusCode() shouldBe 400
         calls.size shouldBe 0
+    }
+
+    @Test
+    fun `구분 정원은 박람회 기본값으로 초기화하고 박람회별로 격리하며 기존 회차를 보존한다`() {
+        val legacy = create()
+        setDefaults(EXPO_ID, 300, 1000)
+        setDefaults(OTHER_EXPO_ID, 5, 0)
+        val withoutCapacity = DEFINITION.replace("\"capacity\":100,", "")
+        val defaulted = create(withoutCapacity)
+        read(defaulted).let {
+            it.get("capacity").asInt() shouldBe 1300
+            it.get("teacherCapacity").asInt() shouldBe 300
+            it.get("nonTeacherCapacity").asInt() shouldBe 1000
+        }
+        val other = mapper.readTree(request(path(OTHER_EXPO_ID), "POST", withoutCapacity).body())
+        other.get("capacity").asInt() shouldBe 5
+        other.get("teacherCapacity").asInt() shouldBe 5
+        other.get("nonTeacherCapacity").asInt() shouldBe 0
+        val explicit = create(DEFINITION.dropLast(1) + ",\"teacherCapacity\":40,\"nonTeacherCapacity\":60}")
+        read(explicit).get("teacherCapacity").asInt() shouldBe 40
+        read(legacy).let {
+            it.get("capacity").asInt() shouldBe 100
+            it.get("teacherCapacity").isNull shouldBe true
+            it.get("nonTeacherCapacity").isNull shouldBe true
+        }
+        listOf(
+            DEFINITION,
+            DEFINITION.dropLast(1) + ",\"teacherCapacity\":40}",
+            DEFINITION.dropLast(1) + ",\"teacherCapacity\":40,\"nonTeacherCapacity\":61}",
+            DEFINITION.dropLast(1) + ",\"teacherCapacity\":-1,\"nonTeacherCapacity\":101}",
+            withoutCapacity.dropLast(1) + ",\"teacherCapacity\":0,\"nonTeacherCapacity\":0}",
+            withoutCapacity.dropLast(1) + ",\"teacherCapacity\":2147483647,\"nonTeacherCapacity\":1}",
+        ).forEach { invalid -> request(path(), "POST", invalid).statusCode() shouldBe 400 }
+        setDefaults(EXPO_ID, null, null)
+        request(path(), "POST", withoutCapacity).statusCode() shouldBe 400
+        read(defaulted).get("teacherCapacity").asInt() shouldBe 300
+
+        val revised = withoutCapacity.dropLast(1) + ",\"teacherCapacity\":350,\"nonTeacherCapacity\":1000}"
+        request(path(defaulted), "PATCH", updateBody(definition = revised)).statusCode() shouldBe 204
+        read(defaulted).let {
+            it.get("capacity").asInt() shouldBe 1350
+            it.get("teacherCapacity").asInt() shouldBe 350
+            it.get("revision").asLong() shouldBe 2L
+        }
+        val command = mapper.readTree(calls.last().body)
+        command.get("definitionChanged").asBoolean() shouldBe true
+        command.get("definition").get("teacherCapacity").asInt() shouldBe 350
+        command.get("definition").get("nonTeacherCapacity").asInt() shouldBe 1000
+        request(path(defaulted), "PATCH", updateBody(revision = 2, definition = withoutCapacity.replace("false", "true")))
+            .statusCode() shouldBe 204
+        read(defaulted).get("teacherCapacity").asInt() shouldBe 350
+        request(path(defaulted), "PATCH", updateBody(revision = 3, definition = DEFINITION)).statusCode() shouldBe 400
+        request(
+            path(legacy),
+            "PATCH",
+            updateBody(definition = DEFINITION.dropLast(1) + ",\"teacherCapacity\":30,\"nonTeacherCapacity\":70}"),
+        ).statusCode() shouldBe 204
+        read(legacy).get("teacherCapacity").asInt() shouldBe 30
+        mapper.readTree(request(path() + "/public", role = null).body()).forEach {
+            it.has("teacherCapacity") shouldBe false
+            it.has("nonTeacherCapacity") shouldBe false
+        }
+        assertThrows(DataIntegrityViolationException::class.java) {
+            jdbc.update("UPDATE tb_preregister_session SET capacity=capacity+1 WHERE id=?", explicit)
+        }
+        assertThrows(DataIntegrityViolationException::class.java) {
+            jdbc.update("UPDATE tb_preregister_session SET non_teacher_capacity=NULL WHERE id=?", explicit)
+        }
+        assertThrows(DataIntegrityViolationException::class.java) {
+            jdbc.update("UPDATE tb_expo SET preregister_teacher_capacity=1 WHERE id=?", EXPO_ID)
+        }
     }
 
     @Test
@@ -818,6 +890,31 @@ class PreregisterSessionPostgresHttpTests {
         val response = request(path(expoId), "POST", definition)
         response.statusCode() shouldBe 201
         return mapper.readTree(response.body()).get("id").asLong()
+    }
+
+    private fun setDefaults(
+        expoId: String,
+        teacher: Int?,
+        nonTeacher: Int?,
+    ) {
+        val expo = expos.findById(expoId).orElseThrow()
+        expos.saveAndFlush(
+            Expo(
+                expo.id,
+                expo.title,
+                expo.description,
+                expo.startedDay,
+                expo.finishedDay,
+                expo.location,
+                expo.coverImage,
+                expo.x,
+                expo.y,
+                expo.applicationPerson,
+                expo.yesterdayApplicationPerson,
+                teacher,
+                nonTeacher,
+            ),
+        )
     }
 
     private fun read(id: Long): JsonNode = mapper.readTree(request(path(id)).body())

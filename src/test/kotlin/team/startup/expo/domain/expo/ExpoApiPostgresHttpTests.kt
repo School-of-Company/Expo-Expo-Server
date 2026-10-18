@@ -738,6 +738,48 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `사전등록 회차 정원 기본값은 박람회 생성 수정 상세에서 쌍으로 저장하고 생략하면 미설정이다`() {
+        val defaults = """"preregisterTeacherCapacity":300,"preregisterNonTeacherCapacity":1000,"""
+        val createBody =
+            (objectMapper.readTree(VALID_REQUEST_JSON) as ObjectNode)
+                .apply {
+                    putArray("addStandardProRequestDto")
+                    putArray("addTrainingProRequestDto")
+                }.toString()
+        listOf(
+            createBody.replaceFirst("{", """{"preregisterTeacherCapacity":300,"""),
+            createBody.replaceFirst("{", """{"preregisterTeacherCapacity":-1,"preregisterNonTeacherCapacity":1,"""),
+            createBody.replaceFirst("{", """{"preregisterTeacherCapacity":0,"preregisterNonTeacherCapacity":0,"""),
+        ).forEach { invalid -> postExpo(invalid, authority = "ROLE_ADMIN").statusCode() shouldBe 400 }
+        val created = postExpo(createBody.replaceFirst("{", "{$defaults"), authority = "ROLE_ADMIN")
+        created.statusCode() shouldBe 201
+        val expoId = objectMapper.readTree(created.body()).get("expoId").asString()
+        val legacyId = createExpo()
+
+        fun detail(id: String) = objectMapper.readTree(request("/expo/$id", "GET").body())
+        detail(expoId).let {
+            it.get("preregisterTeacherCapacity").asInt() shouldBe 300
+            it.get("preregisterNonTeacherCapacity").asInt() shouldBe 1000
+        }
+        detail(legacyId).get("preregisterTeacherCapacity").isNull shouldBe true
+
+        val update = EMPTY_UPDATE_REQUEST_JSON.replace("거부될 수정", "2026 박람회")
+        request("/expo/$expoId", "PATCH", update.replaceFirst("{", """{"preregisterNonTeacherCapacity":5,""")).statusCode() shouldBe 400
+        request(
+            "/expo/$expoId",
+            "PATCH",
+            update.replaceFirst("{", """{"preregisterTeacherCapacity":5,"preregisterNonTeacherCapacity":0,"""),
+        ).statusCode() shouldBe 204
+        detail(expoId).let {
+            it.get("preregisterTeacherCapacity").asInt() shouldBe 5
+            it.get("preregisterNonTeacherCapacity").asInt() shouldBe 0
+        }
+        detail(legacyId).get("preregisterTeacherCapacity").isNull shouldBe true
+        request("/expo/$expoId", "PATCH", update).statusCode() shouldBe 204
+        detail(expoId).get("preregisterTeacherCapacity").isNull shouldBe true
+    }
+
+    @Test
     fun `실제 HTTP 목록과 상세 조회는 계약 필드만 반환한다`() {
         val expoId = createExpo()
 

@@ -27,6 +27,10 @@ data class PreregisterSessionResponse(
     val revision: Long,
     @field:Schema(description = "취소 마감 일시 (UTC 오프셋 ISO 8601)", example = "2030-01-01T11:00:00Z")
     val cancelEndedAt: Instant? = null,
+    @field:Schema(description = "교사·예비교사 정원. null이면 구분 없이 capacity 하나로 운영하는 기존 회차", example = "10")
+    val teacherCapacity: Int? = null,
+    @field:Schema(description = "교사·예비교사 외 대상 정원. teacherCapacity와 함께 null이거나 함께 있으며 합은 capacity", example = "20")
+    val nonTeacherCapacity: Int? = null,
 )
 
 fun PreregisterSession.toResponse(): PreregisterSessionResponse =
@@ -42,4 +46,6 @@ fun PreregisterSession.toResponse(): PreregisterSessionResponse =
         closed,
         revision,
         cancelEndedAt,
+        teacherCapacity,
+        nonTeacherCapacity,
     )

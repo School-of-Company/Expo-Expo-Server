@@ -88,6 +88,8 @@ class ApplyProgramChangeServiceImpl(
                         request.coverImage,
                         request.x,
                         request.y,
+                        request.preregisterTeacherCapacity,
+                        request.preregisterNonTeacherCapacity,
                     )
                 }
                 val updatedExpo = expos.getReferenceById(expoId)

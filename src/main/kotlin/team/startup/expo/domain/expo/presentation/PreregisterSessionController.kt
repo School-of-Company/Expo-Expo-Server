@@ -42,7 +42,12 @@ class PreregisterSessionController(
     private val retry: RetryPreregisterSessionChangeService,
     private val adoptWaitingCapacity: AdoptPreregisterWaitingCapacityService,
 ) {
-    @Operation(summary = "사전등록 회차 생성", description = "일시는 UTC 오프셋이 있는 ISO 8601 형식입니다. 인원 집계는 신청 서비스가 담당합니다.")
+    @Operation(
+        summary = "사전등록 회차 생성",
+        description =
+            "일시는 UTC 오프셋이 있는 ISO 8601 형식입니다. 인원 집계는 신청 서비스가 담당합니다. " +
+                "구분 정원을 생략하면 박람회의 사전등록 회차 정원 기본값으로 초기화합니다.",
+    )
     @PostMapping
     @ApiResponse(responseCode = "201", description = "처리 성공")
     @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")

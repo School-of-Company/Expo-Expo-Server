@@ -27,6 +27,7 @@ class UpdateExpoServiceImpl(
         expoId: String,
         request: UpdateExpoRequest,
     ) {
+        request.validatePreregisterCapacities()
         val uploadedBy =
             SecurityContextHolder.getContext().authentication?.name
                 ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
