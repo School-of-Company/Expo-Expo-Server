@@ -17,6 +17,9 @@ import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
@@ -45,6 +48,12 @@ class StandardApiPostgresHttpTests {
     @Autowired
     private lateinit var mapper: ObjectMapper
 
+    @Autowired
+    private lateinit var expos: ExpoRepository
+
+    @Autowired
+    private lateinit var standards: StandardProgramRepository
+
     private val http = HttpClient.newHttpClient()
     private val expoId = "standard-contract-expo"
     private val program = """{"title":"일반","startedAt":"2026-09-24 09:00","endedAt":"2026-09-24 10:00"}"""
@@ -61,20 +70,7 @@ class StandardApiPostgresHttpTests {
         userNamesBody = """[{"participantId":42,"name":"홍길동"}]"""
         applicationListBody = "[]"
         jdbc.execute("TRUNCATE TABLE tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE")
-        jdbc.update(
-            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            expoId,
-            "박람회",
-            "설명",
-            "2026-09-24",
-            "2026-09-25",
-            "서울",
-            "127",
-            "37",
-            0,
-            0,
-        )
+        expos.save(Expo(expoId, "박람회", "설명", "2026-09-24", "2026-09-25", "서울", null, "127", "37", 0, 0))
     }
 
     @Test
@@ -103,7 +99,7 @@ class StandardApiPostgresHttpTests {
             it.get("title").asString() shouldBe title
         }
         request("POST", "/standard/$expoId", program.replace("일반", "😀".repeat(51))).statusCode() shouldBe 400
-        jdbc.queryForObject("SELECT count(*) FROM tb_standard_program", Long::class.java) shouldBe 2L
+        standards.count() shouldBe 2L
     }
 
     @Test
@@ -156,7 +152,7 @@ class StandardApiPostgresHttpTests {
             """{"id":1,"title":"${"가".repeat(51)}","startedAt":"2026-09-24 11:00","endedAt":"2026-09-24 12:00"}"""
         request("PATCH", "/standard/1", invalidUpdate).statusCode() shouldBe 400
         mapper.readTree(request("GET", "/standard/program/$expoId").body())[0].get("title").asString() shouldBe "일반"
-        jdbc.queryForObject("SELECT count(*) FROM tb_standard_program", Long::class.java) shouldBe 1L
+        standards.count() shouldBe 1L
     }
 
     @Test
@@ -195,12 +191,12 @@ class StandardApiPostgresHttpTests {
         request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
         applicationDeleteStatus = 500
         request("DELETE", "/standard/1").statusCode() shouldBe 502
-        jdbc.queryForObject("SELECT count(*) FROM tb_standard_program", Long::class.java) shouldBe 1L
+        standards.count() shouldBe 1L
         applicationDeleteStatus = 204
         val deleted = request("DELETE", "/standard/1")
         deleted.statusCode() shouldBe 204
         deleted.body() shouldBe ""
-        jdbc.queryForObject("SELECT count(*) FROM tb_standard_program", Long::class.java) shouldBe 0L
+        standards.count() shouldBe 0L
         request("DELETE", "/standard/1").statusCode() shouldBe 404
         calls.count { it.path == "/internal/standard-program-applications/program/1" && it.method == "DELETE" } shouldBe 2
     }
@@ -232,20 +228,7 @@ class StandardApiPostgresHttpTests {
 
     @Test
     fun `다른 행사의 프로그램은 신청할 수 없다`() {
-        jdbc.update(
-            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            "another-expo",
-            "다른 박람회",
-            "설명",
-            "2026-09-24",
-            "2026-09-25",
-            "서울",
-            "127",
-            "37",
-            0,
-            0,
-        )
+        expos.save(Expo("another-expo", "다른 박람회", "설명", "2026-09-24", "2026-09-25", "서울", null, "127", "37", 0, 0))
         request("POST", "/standard/another-expo", program).statusCode() shouldBe 201
         val response = request("POST", "/standard/application/$expoId", """{"phoneNumber":"01012345678","standardProIds":[1]}""")
         response.statusCode() shouldBe 404

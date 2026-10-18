@@ -32,9 +32,11 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.DeleteExpoService
 import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
@@ -135,20 +137,31 @@ class TrainingSmsIntegrationTests {
     fun setup() {
         jdbc.execute("TRUNCATE TABLE tb_training_sms_outbox, tb_expo RESTART IDENTITY CASCADE")
         val day = LocalDate.now(ZoneId.of("Asia/Seoul")).toString()
-        jdbc.update(
-            """INSERT INTO tb_expo(id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,'테스트 박람회','description',?,?,'location','127','37',0,0)""",
-            EXPO,
-            day,
-            day,
-        )
+        val expo =
+            expos.saveAndFlush(
+                Expo(
+                    id = EXPO,
+                    title = "테스트 박람회",
+                    description = "description",
+                    startedDay = day,
+                    finishedDay = day,
+                    location = "location",
+                    coverImage = null,
+                    x = "127",
+                    y = "37",
+                    applicationPerson = 0,
+                    yesterdayApplicationPerson = 0,
+                ),
+            )
         listOf("2026-09-24T09:00", "2026-09-25T09:00").forEach { start ->
-            jdbc.update(
-                """INSERT INTO tb_training_program(title,started_at,ended_at,category,expo_id)
-                   VALUES ('연수',?,?,'CHOICE',?)""",
-                start,
-                start.replace("09:00", "10:00"),
-                EXPO,
+            programs.saveAndFlush(
+                TrainingProgram(
+                    title = "연수",
+                    startedAt = start,
+                    endedAt = start.replace("09:00", "10:00"),
+                    category = Category.CHOICE,
+                    expo = expo,
+                ),
             )
         }
         recipientBody = """{"items":[{"traineeId":42,"phoneNumber":"010-9876-5432"}],"nextCursor":null}"""
@@ -680,7 +693,7 @@ class TrainingSmsIntegrationTests {
     fun `삭제가 시작된 박람회는 명령 저장과 Application 호출 전에 충돌한다`() {
         val expo = expos.findById(EXPO).orElseThrow()
         val selected = programs.findByExpoIdOrderByIdAsc(EXPO)
-        jdbc.update("UPDATE tb_expo SET deleting_at = CURRENT_TIMESTAMP WHERE id = ?", EXPO)
+        expos.saveAndFlush(expos.findById(EXPO).orElseThrow().apply { markDeleting() })
         val failure = assertThrows(ExpectedException::class.java) { prepare(TrainingOperationType.ADD) }
         failure.status shouldBe HttpStatus.CONFLICT
         assertThrows(ExpectedException::class.java) {
@@ -696,7 +709,7 @@ class TrainingSmsIntegrationTests {
         assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
         outbox.hold(operation, "RECOVERY_LIMIT")
         assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
-        jdbc.queryForObject("SELECT deleting_at IS NULL FROM tb_expo WHERE id = ?", Boolean::class.java, EXPO) shouldBe true
+        expos.findById(EXPO).orElseThrow().deletingAt shouldBe null
         outbox.hasUnresolvedApplications(EXPO) shouldBe true
         jdbc.update("UPDATE tb_training_sms_outbox SET application_state = 'SUCCEEDED', hold_reason = 'STALE_RECEIPT'")
         outbox.hasUnresolvedApplications(EXPO) shouldBe false

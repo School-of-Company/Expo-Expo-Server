@@ -20,7 +20,12 @@ import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramRequest
+import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.ApplyTrainingProgramService
 import team.startup.expo.support.TestJwt
 import team.startup.expo.support.TrainingApplicationStub
@@ -57,6 +62,12 @@ class TrainingApplicationHttpContractTests {
     private lateinit var jdbc: JdbcTemplate
 
     @Autowired
+    private lateinit var expos: ExpoRepository
+
+    @Autowired
+    private lateinit var trainingPrograms: TrainingProgramRepository
+
+    @Autowired
     private lateinit var mapper: ObjectMapper
 
     @Autowired
@@ -90,27 +101,15 @@ class TrainingApplicationHttpContractTests {
         jdbc.execute(
             "TRUNCATE TABLE tb_training_sms_outbox, tb_expo_image, tb_training_program, tb_standard_program, tb_expo RESTART IDENTITY CASCADE",
         )
-        jdbc.update(
-            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            expoId,
-            "박람회",
-            "설명",
-            "2026-09-24",
-            "2026-09-25",
-            "서울",
-            "127",
-            "37",
-            0,
-            0,
-        )
-        jdbc.update(
-            """INSERT INTO tb_training_program (title,started_at,ended_at,category,expo_id) VALUES (?,?,?,?,?)""",
-            "연수",
-            "2026-09-24T09:00",
-            "2026-09-24T10:00",
-            "CHOICE",
-            expoId,
+        val expo = saveExpo(expoId, "박람회")
+        trainingPrograms.save(
+            TrainingProgram(
+                title = "연수",
+                startedAt = "2026-09-24T09:00",
+                endedAt = "2026-09-24T10:00",
+                category = Category.CHOICE,
+                expo = expo,
+            ),
         )
     }
 
@@ -154,12 +153,12 @@ class TrainingApplicationHttpContractTests {
     fun `삭제는 Application 정리가 성공해야 로컬 프로그램을 삭제한다`() {
         applicationDeleteStatus = 500
         request("DELETE", "/training/1").statusCode() shouldBe 502
-        jdbc.queryForObject("SELECT count(*) FROM tb_training_program", Long::class.java) shouldBe 1L
+        trainingPrograms.count() shouldBe 1L
         applicationDeleteStatus = 204
         val deleted = request("DELETE", "/training/1")
         deleted.statusCode() shouldBe 204
         deleted.body() shouldBe ""
-        jdbc.queryForObject("SELECT count(*) FROM tb_training_program", Long::class.java) shouldBe 0L
+        trainingPrograms.count() shouldBe 0L
         request("DELETE", "/training/1").statusCode() shouldBe 404
         calls.count { it.path == "/internal/training-program-applications/program/1" && it.method == "DELETE" } shouldBe 2
     }
@@ -235,20 +234,7 @@ class TrainingApplicationHttpContractTests {
         request("POST", path, """{"trainingId":"training-1","trainingProIds":[]}""", authority = null).statusCode() shouldBe 400
         request("POST", path, """{"trainingId":"training-1","trainingProIds":[1,null]}""", authority = null).statusCode() shouldBe 400
         calls.isEmpty() shouldBe true
-        jdbc.update(
-            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            "other-expo",
-            "다른 박람회",
-            "설명",
-            "2026-09-24",
-            "2026-09-25",
-            "서울",
-            "127",
-            "37",
-            0,
-            0,
-        )
+        saveExpo("other-expo", "다른 박람회")
         addProgram("2026-09-25T09:00", "other-expo")
         request("POST", path, """{"trainingId":"training-1","trainingProIds":[1,2]}""", authority = null).statusCode() shouldBe 404
         calls.isEmpty() shouldBe true
@@ -258,7 +244,7 @@ class TrainingApplicationHttpContractTests {
     fun `삭제 중인 행사와 빈 연수 번호는 공개 신청에서 외부 호출 전에 거절한다`() {
         request("POST", "/training/application/1", """{"trainingId":" "}""", authority = null).statusCode() shouldBe 400
         calls.isEmpty() shouldBe true
-        jdbc.update("UPDATE tb_expo SET deleting_at = CURRENT_TIMESTAMP WHERE id = ?", expoId)
+        expos.save(expos.findById(expoId).orElseThrow().apply { markDeleting() })
         request("POST", "/training/application/1", """{"trainingId":"training-1"}""", authority = null).statusCode() shouldBe 409
         request(
             "POST",
@@ -394,20 +380,7 @@ class TrainingApplicationHttpContractTests {
         calls.isEmpty() shouldBe true
 
         request("POST", traineePath, traineeBody("[1,999]"), authority = null).statusCode() shouldBe 404
-        jdbc.update(
-            """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            "other-expo",
-            "다른 박람회",
-            "설명",
-            "2026-09-24",
-            "2026-09-25",
-            "서울",
-            "127",
-            "37",
-            0,
-            0,
-        )
+        saveExpo("other-expo", "다른 박람회")
         addProgram("2026-09-25T09:00", "other-expo")
         request("POST", traineePath, traineeBody("[1,2]"), authority = null).statusCode() shouldBe 404
         formStatus = 404
@@ -415,7 +388,7 @@ class TrainingApplicationHttpContractTests {
         calls.map { it.path }.toSet() shouldBe setOf("/forms/$expoId")
         calls.clear()
 
-        jdbc.update("UPDATE tb_expo SET deleting_at = CURRENT_TIMESTAMP WHERE id = ?", expoId)
+        expos.save(expos.findById(expoId).orElseThrow().apply { markDeleting() })
         request("POST", traineePath, traineeBody(), authority = null).statusCode() shouldBe 409
         calls.isEmpty() shouldBe true
     }
@@ -599,17 +572,23 @@ class TrainingApplicationHttpContractTests {
     ) = """{"id":"f","expoId":"$expoId","participantType":"TRAINEE","applicationType":"PRE",""" +
         """"startDate":"$startDate","endDate":"$endDate","dynamicForm":[]}"""
 
+    private fun saveExpo(
+        id: String,
+        title: String,
+    ): Expo = expos.save(Expo(id, title, "설명", "2026-09-24", "2026-09-25", "서울", null, "127", "37", 0, 0))
+
     private fun addProgram(
         startedAt: String,
         ownerExpoId: String,
     ) {
-        jdbc.update(
-            """INSERT INTO tb_training_program (title,started_at,ended_at,category,expo_id) VALUES (?,?,?,?,?)""",
-            "추가 연수",
-            startedAt,
-            "2026-09-25T10:00",
-            "CHOICE",
-            ownerExpoId,
+        trainingPrograms.save(
+            TrainingProgram(
+                title = "추가 연수",
+                startedAt = startedAt,
+                endedAt = "2026-09-25T10:00",
+                category = Category.CHOICE,
+                expo = expos.findById(ownerExpoId).orElseThrow(),
+            ),
         )
     }
 

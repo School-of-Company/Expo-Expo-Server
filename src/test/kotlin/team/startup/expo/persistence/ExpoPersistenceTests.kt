@@ -143,10 +143,7 @@ class ExpoPersistenceTests {
             "INSERT INTO tb_expo VALUES (?, 't', 'd', '2026-09-22', '2026-09-23', 'l', NULL, 'x', 'y', 1, 1)",
             "x".repeat(37),
         )
-        jdbcTemplate.update(
-            "INSERT INTO tb_expo VALUES (?, 't', 'd', '2026-09-22', '2026-09-23', 'l', NULL, 'x', 'y', 1, 1)",
-            EXPO_ID,
-        )
+        expoRepository.saveAndFlush(expo())
         assertRejected(
             "INSERT INTO tb_expo VALUES (?, 't', 'd', '2026-09-22', '2026-09-23', 'l', NULL, 'x', 'y', 1, 1)",
             EXPO_ID,
@@ -342,12 +339,12 @@ class ExpoPersistenceTests {
         jdbcTemplate.update("DELETE FROM tb_expo WHERE id = ?", EXPO_ID) shouldBe 1
         entityManager.clear()
 
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_training_program", Long::class.java) shouldBe 1L
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_standard_program", Long::class.java) shouldBe 1L
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_expo", Long::class.java) shouldBe 1L
+        trainingProgramRepository.count() shouldBe 1L
+        standardProgramRepository.count() shouldBe 1L
+        expoRepository.count() shouldBe 1L
 
         jdbcTemplate.update("DELETE FROM tb_standard_program WHERE expo_id = ?", EXPO_B_ID) shouldBe 1
-        jdbcTemplate.queryForObject("SELECT COUNT(*) FROM tb_expo", Long::class.java) shouldBe 1L
+        expoRepository.count() shouldBe 1L
     }
 
     @Test

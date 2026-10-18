@@ -25,6 +25,8 @@ import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
+import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.global.exception.ExpectedException
@@ -75,6 +77,12 @@ class PreregisterSessionPostgresHttpTests {
     @Autowired
     private lateinit var expos: ExpoRepository
 
+    @Autowired
+    private lateinit var sessions: PreregisterSessionRepository
+
+    @Autowired
+    private lateinit var sessionChanges: PreregisterSessionChangeRepository
+
     private val http = HttpClient.newHttpClient()
 
     @BeforeEach
@@ -89,13 +97,11 @@ class PreregisterSessionPostgresHttpTests {
         ReflectionTestUtils.setField(changes, "applicationUrl", applicationUrl)
         ReflectionTestUtils.setField(changes, "internalToken", "test-application-token")
         jdbc.execute("TRUNCATE TABLE tb_expo RESTART IDENTITY CASCADE")
-        listOf(EXPO_ID, OTHER_EXPO_ID).forEach { id ->
-            jdbc.update(
-                """INSERT INTO tb_expo (id,title,description,started_day,finished_day,location,x,y,application_person,yesterday_application_person)
-                   VALUES (?,'박람회','설명','2026-10-31','2026-11-01','광주','127','37',5,3)""",
-                id,
-            )
-        }
+        expos.saveAllAndFlush(
+            listOf(EXPO_ID, OTHER_EXPO_ID).map { id ->
+                Expo(id, "박람회", "설명", "2026-10-31", "2026-11-01", "광주", null, "127", "37", 5, 3)
+            },
+        )
     }
 
     @Test
@@ -239,8 +245,10 @@ class PreregisterSessionPostgresHttpTests {
         mapper.readTree(internal.body()) shouldBe body
         mapper.readTree(request(path(id)).body()) shouldBe body
         mapper.readTree(request(internalPath(), token = "test-expo-token", role = null).body()).size() shouldBe 1
-        jdbc.queryForObject("SELECT application_person FROM tb_expo WHERE id = ?", Long::class.java, EXPO_ID) shouldBe 5L
-        jdbc.queryForObject("SELECT yesterday_application_person FROM tb_expo WHERE id = ?", Long::class.java, EXPO_ID) shouldBe 3L
+        expos.findById(EXPO_ID).orElseThrow().let {
+            it.applicationPerson shouldBe 5L
+            it.yesterdayApplicationPerson shouldBe 3L
+        }
         calls.size shouldBe 0
     }
 
@@ -296,7 +304,7 @@ class PreregisterSessionPostgresHttpTests {
         request(path(first), role = null).statusCode() shouldBe 401
 
         request(path("01900000-0000-7000-8000-000000000099") + "/public", role = null).statusCode() shouldBe 404
-        jdbc.update("UPDATE tb_expo SET deleting_at=now() WHERE id=?", EXPO_ID)
+        markExpoDeleting()
         request(public, role = null).statusCode() shouldBe 404
     }
 
@@ -728,8 +736,8 @@ class PreregisterSessionPostgresHttpTests {
         request(path(id)).statusCode() shouldBe 404
         request(path(keep, OTHER_EXPO_ID)).statusCode() shouldBe 200
         create()
-        jdbc.update("DELETE FROM tb_expo WHERE id = ?", EXPO_ID)
-        jdbc.queryForObject("SELECT COUNT(*) FROM tb_preregister_session", Long::class.java) shouldBe 1L
+        expos.deleteById(EXPO_ID)
+        sessions.count() shouldBe 1L
     }
 
     @Test
@@ -838,7 +846,7 @@ class PreregisterSessionPostgresHttpTests {
         read(id).get("revision").asLong() shouldBe 1L
         journalCount(id) shouldBe 0L
 
-        jdbc.update("UPDATE tb_expo SET deleting_at=now() WHERE id=?", EXPO_ID)
+        markExpoDeleting()
         calls.clear()
         request(target, "PUT", """{"expected":10}""").statusCode() shouldBe 409
         calls.size shouldBe 0
@@ -921,8 +929,11 @@ class PreregisterSessionPostgresHttpTests {
 
     private fun withDeadline(deadline: String): String = DEFINITION.dropLast(1) + ",\"cancelEndedAt\":\"$deadline\"}"
 
-    private fun journalCount(id: Long): Long =
-        jdbc.queryForObject("SELECT COUNT(*) FROM tb_preregister_session_change WHERE session_id=?", Long::class.java, id)!!
+    private fun journalCount(id: Long): Long = if (sessionChanges.existsById(id)) 1L else 0L
+
+    private fun markExpoDeleting() {
+        expos.saveAndFlush(expos.findById(EXPO_ID).orElseThrow().apply { markDeleting() })
+    }
 
     private fun updateBody(
         revision: Long = 1,
