@@ -49,7 +49,7 @@ data class ProgramPolicyRequest(
     @field:PositiveOrZero
     @param:JsonProperty(required = true)
     @field:JsonDeserialize(using = ProgramCapacityDeserializer::class)
-    @field:Schema(description = "현장 접수 정원. 0 이상, 생략 불가. 현장 개방·신청 권한을 의미하지 않음", example = "10")
+    @field:Schema(description = "현장 접수 정원. 0 이상, 생략 불가. 현장 개방은 onsiteStartedAt/onsiteEndedAt이 정함", example = "10")
     val onsiteCapacity: Int,
     @field:PositiveOrZero
     @param:JsonProperty(required = true)
@@ -66,6 +66,15 @@ data class ProgramPolicyRequest(
     @param:JsonProperty(required = true)
     @field:Schema(description = "모집 마감 여부", example = "false")
     val closed: Boolean,
+    @field:JsonInclude(JsonInclude.Include.NON_NULL)
+    @field:Schema(
+        description = "현장 접수 시작 일시. 종료와 함께 지정하며 null/생략이면 현장 접수를 열지 않음. 사전 모집 기간과 무관",
+        example = "2030-01-02T09:00:00Z",
+    )
+    val onsiteStartedAt: Instant? = null,
+    @field:JsonInclude(JsonInclude.Include.NON_NULL)
+    @field:Schema(description = "현장 접수 종료 일시. 시작보다 늦어야 함", example = "2030-01-02T18:00:00Z")
+    val onsiteEndedAt: Instant? = null,
     @field:Valid
     @field:JsonInclude(JsonInclude.Include.NON_NULL)
     @field:Schema(description = "이 회차의 초등 1~3학년 보호자 필수 설정. null/생략은 OFF이며 같은 묶음의 다른 회차로 전파하지 않음")
@@ -76,11 +85,15 @@ data class ProgramPolicyRequest(
             preRegistrationCapacity.toLong() + onsiteCapacity.toLong() != capacity.toLong() ||
             waitingCapacity < 0 || allowedOccupations.isEmpty() ||
             !applicationStartedAt.isBefore(applicationEndedAt) ||
-            cancelEndedAt.isBefore(applicationStartedAt) || promotionEndedAt.isBefore(applicationStartedAt)
+            cancelEndedAt.isBefore(applicationStartedAt) || promotionEndedAt.isBefore(applicationStartedAt) ||
+            (onsiteStartedAt == null) != (onsiteEndedAt == null) ||
+            (onsiteStartedAt != null && !onsiteStartedAt.isBefore(onsiteEndedAt))
         ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 모집 정책이 올바르지 않습니다.")
         }
-        if (listOf(applicationStartedAt, applicationEndedAt, cancelEndedAt, promotionEndedAt).any { it.nano % 1000 != 0 }) {
+        if (listOfNotNull(applicationStartedAt, applicationEndedAt, cancelEndedAt, promotionEndedAt, onsiteStartedAt, onsiteEndedAt)
+                .any { it.nano % 1000 != 0 }
+        ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 시각은 마이크로초 정밀도까지 지원합니다.")
         }
         guardianPolicy?.validate()

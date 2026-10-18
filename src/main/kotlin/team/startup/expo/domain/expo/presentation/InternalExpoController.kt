@@ -3,15 +3,20 @@ package team.startup.expo.domain.expo.presentation
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.responses.ApiResponse
 import jakarta.validation.Valid
+import org.springdoc.core.annotations.ParameterObject
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.ModelAttribute
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import team.startup.expo.domain.expo.presentation.dto.request.InternalExpoPageRequest
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoPeriodResponse
+import team.startup.expo.domain.expo.presentation.dto.response.InternalExpoPageResponse
 import team.startup.expo.domain.expo.service.GetExpoPeriodService
+import team.startup.expo.domain.expo.service.GetInternalExpoListService
 import team.startup.expo.domain.standard.presentation.dto.response.StandardProgramTitleResponse
 import team.startup.expo.domain.standard.service.GetStandardProgramService
 import team.startup.expo.domain.training.presentation.dto.request.TrainingProgramBatchRequest
@@ -25,7 +30,19 @@ class InternalExpoController(
     private val getExpoPeriodService: GetExpoPeriodService,
     private val getTrainingProgramBatchService: GetTrainingProgramBatchService,
     private val getStandardProgramService: GetStandardProgramService,
+    private val getInternalExpoListService: GetInternalExpoListService,
 ) {
+    @GetMapping
+    @Operation(
+        summary = "내부 진행 중·예정 박람회 목록 조회",
+        description = "삭제 중이 아니고 종료일이 오늘(KST) 이후인 박람회를 시작일순으로 반환합니다. 최대 100개.",
+    )
+    @ApiResponse(responseCode = "200", description = "처리 성공")
+    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    fun getExpoList(
+        @ParameterObject @Valid @ModelAttribute request: InternalExpoPageRequest,
+    ): ResponseEntity<InternalExpoPageResponse> = ResponseEntity.ok(getInternalExpoListService.execute(request))
+
     @GetMapping("/{expo_id}")
     @Operation(
         summary = "내부 박람회 기간 및 참가자 전화번호 인증 설정 조회",

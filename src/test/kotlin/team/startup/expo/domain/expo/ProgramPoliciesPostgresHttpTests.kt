@@ -383,6 +383,42 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `onsite window round trips separately from the pre period and must stay inside the program form period`() {
+        val onsite = ",\"onsiteStartedAt\":\"2026-10-20T00:00:00Z\",\"onsiteEndedAt\":\"2026-10-21T00:00:00Z\""
+        val withWindow = policy(capacity = 3, pre = 2, onsite = 1).replace("\"closed\":false", "\"closed\":false$onsite")
+        request("/standard/$EXPO", "POST", body("standard", policy = withWindow)).statusCode() shouldBe 201
+        val stored = mapper.readTree(jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!)
+        stored.get("onsiteStartedAt").asString() shouldBe "2026-10-20T00:00:00Z"
+        stored.get("onsiteEndedAt").asString() shouldBe "2026-10-21T00:00:00Z"
+        stored.get("applicationEndedAt").asString() shouldBe "2026-10-12T00:00:00Z"
+        list("standard")[0].get("policy") shouldBe stored
+        mapper
+            .readTree(request("/internal/expo/$EXPO/standard-programs/1", token = "expo-test-token", role = null).body())
+            .get("policy") shouldBe stored
+        val usage = mapper.readTree(internal("/internal/forms/by-id/$STANDARD_FORM/usage").body())
+        usage.get("applicationStartedAt").asString() shouldBe "2026-10-11T00:00:00Z"
+        usage.get("applicationEndedAt").asString() shouldBe "2026-10-21T00:00:00Z"
+        internal(formChange(), "PUT", shrink()).statusCode() shouldBe 409
+        listOf(
+            ",\"onsiteStartedAt\":\"2026-10-20T00:00:00Z\"",
+            ",\"onsiteStartedAt\":\"2026-10-21T00:00:00Z\",\"onsiteEndedAt\":\"2026-10-20T00:00:00Z\"",
+            ",\"onsiteStartedAt\":\"2026-10-31T00:00:00Z\",\"onsiteEndedAt\":\"2026-11-02T00:00:00Z\"",
+        ).forEach { window ->
+            val invalid = policy(capacity = 3, pre = 2, onsite = 1).replace("\"closed\":false", "\"closed\":false$window")
+            request("/standard/$EXPO", "POST", body("standard", policy = invalid)).statusCode() shouldBe 400
+        }
+        list("standard").size() shouldBe 1
+        val withoutWindow = policy(capacity = 3, pre = 2, onsite = 1)
+        request("/standard/1", "PATCH", body("standard", policy = withoutWindow, id = 1, revision = 1)).statusCode() shouldBe 204
+        val cleared = mapper.readTree(jdbc.queryForObject("SELECT policy_json FROM tb_standard_program WHERE id=1", String::class.java)!!)
+        cleared.has("onsiteStartedAt") shouldBe false
+        cleared.has("onsiteEndedAt") shouldBe false
+        val forwarded = mapper.readTree(calls.last { it.first.contains("/program-changes/") }.second).get("mutations")[0]
+        forwarded.get("previous").get("policy") shouldBe stored
+        forwarded.get("definition").get("policy") shouldBe cleared
+    }
+
+    @Test
     fun `admission capacities are required nonnegative integers with matching totals and no role quotas in API and DB`() {
         listOf("standard", "training").forEach { type ->
             val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
@@ -948,6 +984,61 @@ class ProgramPoliciesPostgresHttpTests {
         start: String = "2026-10-11T00:00:00Z",
         end: String = "2026-10-12T00:00:00Z",
     ): String = """{"kind":"SHRINK","startDate":"$start","endDate":"$end"}"""
+
+    @Test
+    fun `update rejects guardian references in either program type without reserving`() {
+        formQuestions = guardianQuestions()
+        listOf("standard", "training").forEach { type ->
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+            request("/$type/$EXPO", "POST", body(type, policy(form = form))).statusCode() shouldBe 201
+            request("/$type/$EXPO", "POST", body(type, guardianPolicy(form))).statusCode() shouldBe 201
+            val response = internal(formChange(form), "PUT", """{"kind":"UPDATE"}""")
+            response.statusCode() shouldBe 409
+            mapper.readTree(response.body()).get("message").asString() shouldBe "보호자 동반 정책에서 사용 중인 폼은 수정할 수 없습니다"
+        }
+        jdbc.queryForObject("SELECT count(*) FROM tb_program_form_change", Long::class.java) shouldBe 0L
+    }
+
+    @Test
+    fun `update accepts unused and ordinary referenced forms with existing reservation semantics`() {
+        create("standard")
+        formQuestions = guardianQuestions()
+        request("/training/$EXPO", "POST", body("training", guardianPolicy(TRAINING_FORM))).statusCode() shouldBe 201
+        listOf(STANDARD_FORM, UUID.randomUUID().toString()).forEach { form ->
+            val path = formChange(form)
+            val first = internal(path, "PUT", """{"kind":"UPDATE"}""")
+            first.statusCode() shouldBe 200
+            mapper.readTree(first.body()).get("referenced").asBoolean() shouldBe (form == STANDARD_FORM)
+            internal(path, "PUT", """{"kind":"UPDATE"}""").body() shouldBe first.body()
+            internal(formChange(form), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 409
+            internal(path, "DELETE").statusCode() shouldBe 204
+            internal(path, "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 409
+        }
+    }
+
+    @Test
+    fun `update rejects either date and requires internal authentication`() {
+        val path = formChange()
+        request(path, "PUT", """{"kind":"UPDATE"}""", role = null).statusCode() shouldBe 401
+        listOf("startDate", "endDate").forEach { field ->
+            internal(path, "PUT", """{"kind":"UPDATE","$field":"2026-10-11T00:00:00Z"}""").statusCode() shouldBe 400
+        }
+        jdbc.queryForObject("SELECT count(*) FROM tb_program_form_change", Long::class.java) shouldBe 0L
+    }
+
+    @Test
+    fun `update rejects guardian policy in a pending revision`() {
+        formQuestions = guardianQuestions()
+        create("standard")
+        lostResponse = true
+        update(1, guardianPolicy()).statusCode() shouldBe 502
+        list("standard")[0].get("policy").has("guardianPolicy") shouldBe false
+        pending() shouldBe 1L
+        val response = internal(formChange(), "PUT", """{"kind":"UPDATE"}""")
+        response.statusCode() shouldBe 409
+        mapper.readTree(response.body()).get("message").asString() shouldBe "보호자 동반 정책에서 사용 중인 폼은 수정할 수 없습니다"
+        jdbc.queryForObject("SELECT count(*) FROM tb_program_form_change", Long::class.java) shouldBe 0L
+    }
 
     @Test
     fun `form usage is internally authenticated and unused forms return null bounds`() {

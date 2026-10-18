@@ -34,6 +34,10 @@ class ReserveProgramFormChangeServiceImpl(
         if (forms.blocked(formId)) conflict("진행 중이거나 복구가 필요한 폼 변경이 있습니다.")
         val usage = forms.usage(formId)
         when (request.kind) {
+            ProgramFormChangeKind.UPDATE -> {
+                if (forms.guardianReferenced(formId)) conflict("보호자 동반 정책에서 사용 중인 폼은 수정할 수 없습니다")
+            }
+
             ProgramFormChangeKind.DELETE -> {
                 if (usage.referenced) conflict("프로그램이 참조하는 폼은 삭제할 수 없습니다.")
             }
