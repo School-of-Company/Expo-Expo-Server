@@ -778,7 +778,7 @@ class ExpoApiPostgresHttpTests {
 
         response.statusCode() shouldBe 200
         period.size() shouldBe 5
-        period.get("participantPhoneVerificationRequired").asBoolean() shouldBe false
+        period.get("participantPhoneVerificationRequired").asBoolean() shouldBe true
         period.get("participantPhoneVerificationRevision").asLong() shouldBe 0L
         period.get("title").asString() shouldBe "2026 박람회"
         period.get("startedDay").asString() shouldBe "2026-09-24"
@@ -806,7 +806,7 @@ class ExpoApiPostgresHttpTests {
             assertError(request(path, "PATCH", body), 400, "잘못된 요청입니다.")
         }
         expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 0L
-        for ((required, revision) in listOf(true to 1L, true to 1L, false to 2L, false to 2L)) {
+        for ((required, revision) in listOf(false to 1L, false to 1L, true to 2L, true to 2L)) {
             val response = request(path, "PATCH", """{"participantPhoneVerificationRequired":$required}""")
             response.statusCode() shouldBe 200
             val updated = objectMapper.readTree(response.body())
@@ -822,7 +822,7 @@ class ExpoApiPostgresHttpTests {
             persisted.participantPhoneVerificationRequired shouldBe required
             persisted.participantPhoneVerificationRevision shouldBe revision
             val other = expoRepository.findById(otherExpoId).orElseThrow()
-            other.participantPhoneVerificationRequired shouldBe false
+            other.participantPhoneVerificationRequired shouldBe true
             other.participantPhoneVerificationRevision shouldBe 0L
         }
         val expo = expoRepository.findById(expoId).orElseThrow()
@@ -846,20 +846,20 @@ class ExpoApiPostgresHttpTests {
             expoId,
             java.util.UUID.randomUUID(),
         )
-        val enabled = """{"participantPhoneVerificationRequired":true}"""
+        val disabled = """{"participantPhoneVerificationRequired":false}"""
         assertError(
-            request("/expo/$expoId/participant-phone-verification", "PATCH", enabled),
+            request("/expo/$expoId/participant-phone-verification", "PATCH", disabled),
             409,
             "진행 중인 프로그램 변경을 먼저 재시도해 주세요.",
         )
         request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token").let { response ->
             response.statusCode() shouldBe 200
             val period = objectMapper.readTree(response.body())
-            period.get("participantPhoneVerificationRequired").asBoolean() shouldBe false
+            period.get("participantPhoneVerificationRequired").asBoolean() shouldBe true
             period.get("participantPhoneVerificationRevision").asLong() shouldBe 0L
         }
         expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 0L
-        request("/expo/$otherExpoId/participant-phone-verification", "PATCH", enabled).statusCode() shouldBe 200
+        request("/expo/$otherExpoId/participant-phone-verification", "PATCH", disabled).statusCode() shouldBe 200
     }
 
     @Test
@@ -870,7 +870,7 @@ class ExpoApiPostgresHttpTests {
             try {
                 connection
                     .prepareStatement(
-                        "UPDATE tb_expo SET participant_phone_verification_required=true, participant_phone_verification_revision=1 WHERE id=?",
+                        "UPDATE tb_expo SET participant_phone_verification_required=false, participant_phone_verification_revision=1 WHERE id=?",
                     ).use { statement ->
                         statement.setString(1, expoId)
                         statement.executeUpdate() shouldBe 1
@@ -880,12 +880,12 @@ class ExpoApiPostgresHttpTests {
                 val before = lookup()
                 before.statusCode() shouldBe 200
                 objectMapper.readTree(before.body()).get("participantPhoneVerificationRevision").asLong() shouldBe 0L
-                objectMapper.readTree(before.body()).get("participantPhoneVerificationRequired").asBoolean() shouldBe false
+                objectMapper.readTree(before.body()).get("participantPhoneVerificationRequired").asBoolean() shouldBe true
                 connection.commit()
                 val after = lookup()
                 after.statusCode() shouldBe 200
                 objectMapper.readTree(after.body()).get("participantPhoneVerificationRevision").asLong() shouldBe 1L
-                objectMapper.readTree(after.body()).get("participantPhoneVerificationRequired").asBoolean() shouldBe true
+                objectMapper.readTree(after.body()).get("participantPhoneVerificationRequired").asBoolean() shouldBe false
             } finally {
                 connection.rollback()
             }
@@ -894,15 +894,15 @@ class ExpoApiPostgresHttpTests {
 
     @Test
     fun `전화번호 인증 설정 변경은 없는 박람회와 삭제 중인 박람회를 거부하고 내부 조회는 삭제 중에도 200을 반환한다`() {
-        val enabled = """{"participantPhoneVerificationRequired":true}"""
-        assertError(request("/expo/not-found/participant-phone-verification", "PATCH", enabled), 404, "박람회를 찾을 수 없습니다.")
+        val disabled = """{"participantPhoneVerificationRequired":false}"""
+        assertError(request("/expo/not-found/participant-phone-verification", "PATCH", disabled), 404, "박람회를 찾을 수 없습니다.")
         val expoId = createExpo()
         jdbcTemplate.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", expoId)
-        assertError(request("/expo/$expoId/participant-phone-verification", "PATCH", enabled), 409, "삭제 중인 박람회입니다.")
+        assertError(request("/expo/$expoId/participant-phone-verification", "PATCH", disabled), 409, "삭제 중인 박람회입니다.")
         request("/internal/expo/$expoId", "GET", authority = null, internalToken = "test-internal-token").let { response ->
             response.statusCode() shouldBe 200
             val period = objectMapper.readTree(response.body())
-            period.get("participantPhoneVerificationRequired").asBoolean() shouldBe false
+            period.get("participantPhoneVerificationRequired").asBoolean() shouldBe true
             period.get("participantPhoneVerificationRevision").asLong() shouldBe 0L
         }
         expoRepository.findById(expoId).orElseThrow().participantPhoneVerificationRevision shouldBe 0L
@@ -924,7 +924,7 @@ class ExpoApiPostgresHttpTests {
                             request(
                                 "/expo/$expoId/participant-phone-verification",
                                 "PATCH",
-                                """{"participantPhoneVerificationRequired":true}""",
+                                """{"participantPhoneVerificationRequired":false}""",
                             )
                         }
                     }
@@ -936,7 +936,7 @@ class ExpoApiPostgresHttpTests {
                     objectMapper.readTree(response.body()).get("participantPhoneVerificationRevision").asLong() shouldBe 1L
                 }
                 val persisted = expoRepository.findById(expoId).orElseThrow()
-                persisted.participantPhoneVerificationRequired shouldBe true
+                persisted.participantPhoneVerificationRequired shouldBe false
                 persisted.participantPhoneVerificationRevision shouldBe 1L
             } finally {
                 connection.rollback()
@@ -959,7 +959,7 @@ class ExpoApiPostgresHttpTests {
                         request(
                             "/expo/$expoId/participant-phone-verification",
                             "PATCH",
-                            """{"participantPhoneVerificationRequired":true}""",
+                            """{"participantPhoneVerificationRequired":false}""",
                         )
                     }
                 awaitPatchRowLock() shouldBe true
