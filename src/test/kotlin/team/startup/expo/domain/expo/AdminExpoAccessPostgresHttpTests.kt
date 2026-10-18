@@ -23,13 +23,17 @@ import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.entity.AdminApplicationCancelAccess
 import team.startup.expo.domain.expo.entity.AdminApplicationPromoteAccess
+import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.entity.ProgramChange
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramSessionPageRequest
 import team.startup.expo.domain.expo.repository.AdminApplicationCancelAccessRepository
 import team.startup.expo.domain.expo.repository.AdminApplicationPromoteAccessRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.repository.ProgramSessionQueryRepository
 import team.startup.expo.domain.expo.service.AdminAuthorityClient
 import team.startup.expo.domain.expo.service.GetProgramSessionPageService
+import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
@@ -65,6 +69,10 @@ class AdminExpoAccessPostgresHttpTests {
     @Autowired private lateinit var cancelGrants: AdminApplicationCancelAccessRepository
 
     @Autowired private lateinit var promoteGrants: AdminApplicationPromoteAccessRepository
+
+    @Autowired private lateinit var programChanges: ProgramChangeRepository
+
+    @Autowired private lateinit var trainingPrograms: TrainingProgramRepository
     private val http = HttpClient.newHttpClient()
 
     @BeforeEach
@@ -74,10 +82,7 @@ class AdminExpoAccessPostgresHttpTests {
         forwardedOriginalJwt = false
         jdbc.execute("TRUNCATE tb_expo RESTART IDENTITY CASCADE")
         listOf(EXPO, OTHER).forEach {
-            jdbc.update(
-                "INSERT INTO tb_expo VALUES (?, 'expo', 'description', '2026-10-12', '2026-10-13', 'place', NULL, '1', '2', 0, 0, NULL)",
-                it,
-            )
+            expos.save(Expo(it, "expo", "description", "2026-10-12", "2026-10-13", "place", null, "1", "2", 0, 0))
         }
         listOf("standard", "training").forEach { type ->
             val categoryColumn = if (type == "training") ",category" else ""
@@ -108,7 +113,7 @@ class AdminExpoAccessPostgresHttpTests {
         request(path, TestJwt.token("ROLE_STANDARD")).statusCode() shouldBe 403
         access(jwt = jwt).statusCode() shouldBe 200
         request("$path?permission=APPLICATION_CANCEL&adminId=999", jwt).statusCode() shouldBe 403
-        jdbc.update("INSERT INTO tb_admin_application_cancel_access(expo_id,admin_id) VALUES (?,1)", EXPO)
+        cancelGrants.save(AdminApplicationCancelAccess(EXPO, 1))
         val response = request(path, jwt)
         response.statusCode() shouldBe 200
         val body = mapper.readTree(response.body())
@@ -129,11 +134,11 @@ class AdminExpoAccessPostgresHttpTests {
         userStatus = 503
         request(path, jwt).statusCode() shouldBe 503
         userStatus = 200
-        jdbc.update("DELETE FROM tb_admin_application_cancel_access WHERE expo_id=? AND admin_id=1", EXPO)
+        cancelGrants.deleteAll()
         request(path, jwt).statusCode() shouldBe 403
         access(jwt = jwt).statusCode() shouldBe 200
-        jdbc.update("INSERT INTO tb_admin_application_cancel_access(expo_id,admin_id) VALUES (?,1)", EXPO)
-        jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        cancelGrants.save(AdminApplicationCancelAccess(EXPO, 1))
+        expos.save(expos.findById(EXPO).orElseThrow().apply { markDeleting() })
         request(path, jwt).statusCode() shouldBe 503
     }
 
@@ -212,7 +217,7 @@ class AdminExpoAccessPostgresHttpTests {
         userStatus = 200
         access(expo = "missing").statusCode() shouldBe 404
         access(expo = OTHER).statusCode() shouldBe 200
-        jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        expos.save(expos.findById(EXPO).orElseThrow().apply { markDeleting() })
         access().statusCode() shouldBe 503
         request(supply).statusCode() shouldBe 503
     }
@@ -265,18 +270,18 @@ class AdminExpoAccessPostgresHttpTests {
         request("$supply?page=1&size=1&definitionVersion=$version").statusCode() shouldBe 409
         val current = mapper.readTree(request("$supply?programType=TRAINING&programId=1").body())
         current.get("items")[0].get("revision").asLong() shouldBe 2L
-        jdbc.update("DELETE FROM tb_training_program WHERE expo_id=?", EXPO)
+        trainingPrograms.deleteAll(trainingPrograms.findByExpoIdOrderByIdAsc(EXPO))
         request("$supply?programType=TRAINING&programId=1").statusCode() shouldBe 404
         mapper.readTree(request(supply).body()).get("totalElements").asLong() shouldBe 1L
-        jdbc.update("DELETE FROM tb_expo WHERE id=?", EXPO)
+        expos.deleteById(EXPO)
         access().statusCode() shouldBe 404
     }
 
     @Test
     fun `pending change and definition database outage are unavailable rather than empty`() {
-        jdbc.update("INSERT INTO tb_program_change VALUES (?, ?, '[]', '{}')", EXPO, UUID.randomUUID())
+        programChanges.save(ProgramChange(EXPO, UUID.randomUUID(), "[]", "{}"))
         request(supply).statusCode() shouldBe 503
-        jdbc.update("DELETE FROM tb_program_change WHERE expo_id=?", EXPO)
+        programChanges.deleteById(EXPO)
         jdbc.execute("ALTER TABLE tb_standard_program RENAME TO test_unavailable_program")
         try {
             request(supply).statusCode() shouldBe 503
@@ -395,7 +400,7 @@ class AdminExpoAccessPostgresHttpTests {
         first.get("totalElements").asLong() shouldBe 105L
         page("?size=100&page=1").get("items").size() shouldBe 5
         page("?size=100&page=2").get("items").size() shouldBe 0
-        jdbc.update("UPDATE tb_expo SET deleting_at=CURRENT_TIMESTAMP WHERE id=?", EXPO)
+        expos.save(expos.findById(EXPO).orElseThrow().apply { markDeleting() })
         request("/expo/$EXPO/admin-change-history", jwt = TestJwt.token("ROLE_ADMIN"), token = null).statusCode() shouldBe 503
     }
 
