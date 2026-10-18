@@ -41,7 +41,7 @@ class Expo(
     yesterdayApplicationPerson: Long,
 ) {
     @field:Column(name = "participant_phone_verification_required", nullable = false)
-    var participantPhoneVerificationRequired: Boolean = false
+    var participantPhoneVerificationRequired: Boolean = true
         protected set
 
     @field:Column(name = "participant_phone_verification_revision", nullable = false)
