@@ -365,7 +365,7 @@ class ExpoPersistenceTests {
         flyway
             .info()
             .current()
-            .version.version shouldBe "37"
+            .version.version shouldBe "38"
 
         expoRepository.count() shouldBe 1L
         jdbcTemplate.queryForObject(
@@ -528,8 +528,9 @@ class ExpoPersistenceTests {
                             upgrade.migrate().migrationsExecuted shouldBe pending
                         }
                     val expo = upgradeJdbc.queryForMap("SELECT * FROM preregister_upgrade.tb_expo WHERE id='$EXPO_ID'")
-                    expo["participant_phone_verification_required"] shouldBe false
-                    expo["participant_phone_verification_revision"] shouldBe 0L
+                    // V38이 기존 박람회의 휴대폰 인증을 켜고 revision을 올린다.
+                    expo["participant_phone_verification_required"] shouldBe true
+                    expo["participant_phone_verification_revision"] shouldBe 1L
                     upgradeJdbc
                         .queryForList(
                             "SELECT version, script, checksum FROM preregister_upgrade.flyway_schema_history ORDER BY installed_rank",
