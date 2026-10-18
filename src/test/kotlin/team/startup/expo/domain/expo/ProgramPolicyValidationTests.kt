@@ -1,5 +1,6 @@
 package team.startup.expo.domain.expo
 
+import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -66,6 +67,33 @@ class ProgramPolicyValidationTests {
             policy.copy(cancelEndedAt = start.minusSeconds(1)),
             policy.copy(promotionEndedAt = start.minusSeconds(1)),
             policy.copy(applicationStartedAt = start.plusNanos(1)),
+        ).forEach { invalid ->
+            val exception = assertThrows(ExpectedException::class.java) { invalid.validate() }
+            assertEquals(HttpStatus.BAD_REQUEST, exception.status)
+        }
+    }
+
+    @Test
+    fun `auto promotion may stop at or before the final promotion deadline only for waiting sessions`() {
+        val waiting = policy.copy(waitingCapacity = 1)
+        policy.customizesPromotion() shouldBe false
+        policy.copy(autoPromotionEnabled = true).validate()
+        listOf(
+            waiting.copy(autoPromotionEnabled = false),
+            waiting.copy(autoPromotionEndedAt = start),
+            waiting.copy(autoPromotionEndedAt = end),
+            waiting.copy(autoPromotionEnabled = true, autoPromotionEndedAt = start.plusSeconds(1)),
+        ).forEach {
+            it.customizesPromotion() shouldBe true
+            it.validate()
+        }
+        listOf(
+            waiting.copy(autoPromotionEnabled = false, autoPromotionEndedAt = start),
+            waiting.copy(autoPromotionEndedAt = start.minusSeconds(1)),
+            waiting.copy(autoPromotionEndedAt = end.plusSeconds(1)),
+            waiting.copy(autoPromotionEndedAt = start.plusNanos(1)),
+            policy.copy(autoPromotionEnabled = false),
+            policy.copy(autoPromotionEndedAt = start),
         ).forEach { invalid ->
             val exception = assertThrows(ExpectedException::class.java) { invalid.validate() }
             assertEquals(HttpStatus.BAD_REQUEST, exception.status)

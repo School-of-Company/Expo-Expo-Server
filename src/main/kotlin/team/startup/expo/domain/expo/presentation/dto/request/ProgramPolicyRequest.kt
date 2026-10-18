@@ -61,7 +61,7 @@ data class ProgramPolicyRequest(
     val applicationEndedAt: Instant,
     @field:Schema(description = "취소 마감 일시 (UTC 오프셋 ISO 8601)", example = "2030-01-01T11:00:00Z")
     val cancelEndedAt: Instant,
-    @field:Schema(description = "대기 승급 마감 일시 (UTC 오프셋 ISO 8601)", example = "2030-01-01T11:00:00Z")
+    @field:Schema(description = "대기 승급 최종 마감 일시. 자동 승급과 관리자 수동 확정 모두 이 시각 전까지만 가능 (UTC 오프셋 ISO 8601)", example = "2030-01-01T11:00:00Z")
     val promotionEndedAt: Instant,
     @param:JsonProperty(required = true)
     @field:Schema(description = "모집 마감 여부", example = "false")
@@ -79,7 +79,19 @@ data class ProgramPolicyRequest(
     @field:JsonInclude(JsonInclude.Include.NON_NULL)
     @field:Schema(description = "이 회차의 초등 1~3학년 보호자 필수 설정. null/생략은 OFF이며 같은 묶음의 다른 회차로 전파하지 않음")
     val guardianPolicy: ProgramGuardianPolicyRequest? = null,
+    @field:JsonInclude(JsonInclude.Include.NON_NULL)
+    @field:Schema(description = "자동 승급 허용 여부. null/생략은 true이며 false면 대기자는 관리자 수동 확정으로만 승급. 대기 정원이 0이면 지정 불가", example = "true")
+    val autoPromotionEnabled: Boolean? = null,
+    @field:JsonInclude(JsonInclude.Include.NON_NULL)
+    @field:Schema(
+        description = "자동 승급 종료 일시. 이후 promotionEndedAt까지는 관리자 수동 확정만 가능. null/생략은 promotionEndedAt까지 자동 승급",
+        example = "2030-01-01T10:30:00Z",
+    )
+    val autoPromotionEndedAt: Instant? = null,
 ) {
+    // 기본값(자동 승급을 promotionEndedAt까지 유지)과 다른 설정이면 Application의 지원 확인이 필요하다.
+    fun customizesPromotion(): Boolean = autoPromotionEnabled == false || autoPromotionEndedAt != null
+
     fun validate() {
         if (capacity <= 0 || preRegistrationCapacity < 0 || onsiteCapacity < 0 ||
             preRegistrationCapacity.toLong() + onsiteCapacity.toLong() != capacity.toLong() ||
@@ -87,12 +99,25 @@ data class ProgramPolicyRequest(
             !applicationStartedAt.isBefore(applicationEndedAt) ||
             cancelEndedAt.isBefore(applicationStartedAt) || promotionEndedAt.isBefore(applicationStartedAt) ||
             (onsiteStartedAt == null) != (onsiteEndedAt == null) ||
-            (onsiteStartedAt != null && !onsiteStartedAt.isBefore(onsiteEndedAt))
+            (onsiteStartedAt != null && !onsiteStartedAt.isBefore(onsiteEndedAt)) ||
+            (autoPromotionEndedAt != null && autoPromotionEnabled == false) ||
+            (
+                autoPromotionEndedAt != null &&
+                    (autoPromotionEndedAt.isBefore(applicationStartedAt) || autoPromotionEndedAt.isAfter(promotionEndedAt))
+            ) ||
+            (waitingCapacity == 0 && customizesPromotion())
         ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 모집 정책이 올바르지 않습니다.")
         }
-        if (listOfNotNull(applicationStartedAt, applicationEndedAt, cancelEndedAt, promotionEndedAt, onsiteStartedAt, onsiteEndedAt)
-                .any { it.nano % 1000 != 0 }
+        if (listOfNotNull(
+                applicationStartedAt,
+                applicationEndedAt,
+                cancelEndedAt,
+                promotionEndedAt,
+                onsiteStartedAt,
+                onsiteEndedAt,
+                autoPromotionEndedAt,
+            ).any { it.nano % 1000 != 0 }
         ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 시각은 마이크로초 정밀도까지 지원합니다.")
         }
