@@ -45,16 +45,19 @@ class UpdatePreregisterSessionServiceImpl(
                 val current =
                     sessions.findByIdAndExpoId(sessionId, expoId) ?: throw ExpectedException(HttpStatus.NOT_FOUND, "회차를 찾지 못 했습니다.")
                 val original = current.toResponse()
+                val capacities = definition.capacities(current.teacherCapacity, current.nonTeacherCapacity)
                 val desired =
                     original.copy(
                         title = definition.title,
                         startedAt = definition.startedAt.truncatedTo(ChronoUnit.MICROS),
                         endedAt = definition.endedAt.truncatedTo(ChronoUnit.MICROS),
                         place = definition.place,
-                        capacity = definition.capacity,
+                        capacity = capacities.capacity,
                         waitingCapacity = definition.waitingCapacity,
                         closed = definition.closed,
                         cancelEndedAt = definition.cancelEndedAt?.truncatedTo(ChronoUnit.MICROS),
+                        teacherCapacity = capacities.teacherCapacity,
+                        nonTeacherCapacity = capacities.nonTeacherCapacity,
                     )
                 if (current.revision != request.revision) {
                     if (current.revision > 1 && request.revision == current.revision - 1 && original == desired) {

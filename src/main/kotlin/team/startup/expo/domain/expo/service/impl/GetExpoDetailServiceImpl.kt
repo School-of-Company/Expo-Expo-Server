@@ -28,6 +28,8 @@ class GetExpoDetailServiceImpl(
             coverImage = expo.coverImage,
             x = expo.x,
             y = expo.y,
+            preregisterTeacherCapacity = expo.preregisterTeacherCapacity,
+            preregisterNonTeacherCapacity = expo.preregisterNonTeacherCapacity,
         )
     }
 }

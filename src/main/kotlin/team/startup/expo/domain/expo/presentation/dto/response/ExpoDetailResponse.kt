@@ -19,4 +19,8 @@ data class ExpoDetailResponse(
     val x: String,
     @field:Schema(description = "위도 문자열", example = "37.0000")
     val y: String,
+    @field:Schema(description = "새 사전등록 회차의 교사·예비교사 정원 기본값. null이면 미설정", example = "300")
+    val preregisterTeacherCapacity: Int? = null,
+    @field:Schema(description = "새 사전등록 회차의 교사·예비교사 외 대상 정원 기본값. null이면 미설정", example = "1000")
+    val preregisterNonTeacherCapacity: Int? = null,
 )
