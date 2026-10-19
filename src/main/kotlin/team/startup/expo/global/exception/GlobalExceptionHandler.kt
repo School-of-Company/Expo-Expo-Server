@@ -1,5 +1,6 @@
 package team.startup.expo.global.exception
 
+import org.springframework.dao.PessimisticLockingFailureException
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
@@ -18,6 +19,10 @@ class GlobalExceptionHandler(
     @ExceptionHandler(ExpectedException::class)
     fun handleExpectedException(exception: ExpectedException): ResponseEntity<ErrorResponse> =
         errorResponse(exception.status, exception.message)
+
+    @ExceptionHandler(PessimisticLockingFailureException::class)
+    fun handleLockTimeout(exception: PessimisticLockingFailureException): ResponseEntity<ErrorResponse> =
+        errorResponse(HttpStatus.CONFLICT, "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.")
 
     @ExceptionHandler(Exception::class)
     fun handleUnexpected(exception: Exception): ResponseEntity<ErrorResponse> {

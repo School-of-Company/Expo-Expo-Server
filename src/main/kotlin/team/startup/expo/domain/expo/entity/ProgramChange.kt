@@ -20,4 +20,7 @@ class ProgramChange(
     val payloadJson: String,
     @field:Column(name = "admin_id")
     val adminId: Long? = null,
+    // 로컬 반영은 커밋됐고 삭제한 프로그램의 원격 정리만 남았다.
+    @field:Column(name = "applied", nullable = false)
+    var applied: Boolean = false,
 )

@@ -101,17 +101,18 @@ class ProgramAttendanceHttpContractTests {
     @Test
     fun `삭제는 종류별 ID 영역과 토큰을 보존하고 장애 후 재시도한다`() {
         Kind.entries.forEach { kind ->
-            listOf(200, 401, 403, 404, 500).forEach { status ->
+            attentionStatus = 200
+            request("DELETE", "/${kind.path}/1").statusCode() shouldBe 502
+            programExists(kind, 1) shouldBe false
+            listOf(401, 403, 404, 500).forEach { status ->
                 attentionStatus = status
-                request("DELETE", "/${kind.path}/1").statusCode() shouldBe 502
-                programExists(kind, 1) shouldBe true
+                request("POST", "/expo/$expoId/program-changes/retry").statusCode() shouldBe 502
             }
             attentionDrop = true
-            request("DELETE", "/${kind.path}/1").statusCode() shouldBe 503
-            programExists(kind, 1) shouldBe true
+            request("POST", "/expo/$expoId/program-changes/retry").statusCode() shouldBe 503
             attentionDrop = false
             attentionStatus = 204
-            request("DELETE", "/${kind.path}/1").statusCode() shouldBe 204
+            request("POST", "/expo/$expoId/program-changes/retry").statusCode() shouldBe 204
             remoteAttendances.contains("${kind.path}/1") shouldBe false
             remoteAttendances.contains("standard/2") shouldBe true
             if (kind == Kind.STANDARD) remoteAttendances.contains("training/1") shouldBe true

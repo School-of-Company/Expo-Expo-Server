@@ -41,6 +41,9 @@ class ProgramPolicySupport(
     private val forms: ProgramFormChangeRepository,
     private val history: AdminChangeHistoryRepository,
 ) {
+    private val pendingForms = ThreadLocal<MutableList<ProgramDefinition>>()
+    private val checkedForms = ThreadLocal<Map<Any, FormCheck>>()
+
     fun command(vararg values: Any?): String = mapper.writeValueAsString(values)
 
     fun policy(json: String?): ProgramPolicyRequest? = json?.let { mapper.readValue(it, ProgramPolicyRequest::class.java) }
@@ -176,17 +179,17 @@ class ProgramPolicySupport(
         command: String,
         build: (Expo) -> ProgramChangePayload,
     ): ProgramChange? =
-        transactions.execute {
+        transaction {
             val expo = expos.findLockedById(expoId) ?: missingExpo()
             if (expo.deletingAt != null) conflict("삭제 중인 박람회입니다.")
             changes.findByIdOrNull(expoId)?.let {
                 if (it.commandJson != command) conflict("진행 중인 프로그램 변경을 먼저 재시도해 주세요.")
-                return@execute it
+                return@transaction it
             }
             if (operations.hasUnresolvedApplications(expoId)) conflict("확인 중인 연수 신청이 있어 프로그램을 변경할 수 없습니다.")
             val payload = build(expo)
             if (payload.mutations.any { it.previous?.revision == Long.MAX_VALUE }) conflict("프로그램 버전을 더 늘릴 수 없습니다.")
-            if (payload.mutations.isEmpty() && payload.expoUpdate == null) return@execute null
+            if (payload.mutations.isEmpty() && payload.expoUpdate == null) return@transaction null
             changes.saveAndFlush(
                 ProgramChange(
                     expoId,
@@ -206,6 +209,7 @@ class ProgramPolicySupport(
         val results = mutableListOf<ProgramPolicyBulkResult>()
         val pending =
             stage(expoId, command) {
+                results.clear()
                 val currents =
                     standards.findByExpoIdOrderByIdAsc(expoId).map(::definition) +
                         trainings.findByExpoIdOrderByIdAsc(expoId).map(::definition)
@@ -274,16 +278,99 @@ class ProgramPolicySupport(
             forms.lock()
             if (forms.blocked(it.formId)) conflict("프로그램 폼 변경이 진행 중이거나 복구가 필요합니다.")
         }
-        if (validateForm) client.validateForm(definition)
+        if (validateForm) checkForm(definition)
     }
 
-    fun validateForApply(definition: ProgramDefinition) {
+    fun validateForApply(
+        definition: ProgramDefinition,
+        checks: Map<Any, FormCheck>,
+    ) {
         definition.policy?.let {
             forms.lock()
             if (forms.blocked(it.formId)) conflict("프로그램 폼 변경이 진행 중이거나 복구가 필요합니다.")
-            client.validateForm(definition)
+            checkForm(definition, checks)
         }
     }
+
+    // #160: Form 조회를 박람회·폼 락과 트랜잭션 밖에서 한다. 본문을 한 번 실행해 폼 검증이 필요한 정책을 모으고, 있으면 롤백한 뒤
+    // 락 밖에서 검증하고 본문을 다시 실행한다. 다시 실행할 때는 원격 호출 없이 같은 정책을 검증했는지와 그사이 폼 변경이 없었는지만 대조한다.
+    // 롤백해도 IDENTITY 값은 소모되므로 프로그램 행을 만드는 본문에는 creating을 쓴다.
+    private fun <T> transaction(block: () -> T): T? {
+        val pending = mutableListOf<ProgramDefinition>()
+        pendingForms.set(pending)
+        val result =
+            try {
+                transactions.execute { status -> block().also { if (pending.isNotEmpty()) status.setRollbackOnly() } }
+            } finally {
+                pendingForms.remove()
+            }
+        return if (pending.isEmpty()) result else checked(checkForms(pending), block)
+    }
+
+    // 생성은 요청 정책만으로 폼 검증이 정해지므로 본문을 미리 실행하지 않고 요청 정책을 먼저 검증한다.
+    fun <T> creating(
+        expoId: String,
+        programs: List<Pair<ProgramType, ProgramPolicyRequest?>>,
+        block: () -> T,
+    ): T? =
+        checked(
+            checkForms(
+                programs.mapNotNull { (type, policy) ->
+                    policy?.let { ProgramDefinition(expoId, type, null, "", "", "", groupId = UUID(0, 0), policy = it, revision = 0) }
+                },
+            ),
+            block,
+        )
+
+    private fun <T> checked(
+        checks: Map<Any, FormCheck>,
+        block: () -> T,
+    ): T? {
+        checkedForms.set(checks)
+        try {
+            return transactions.execute { block() }
+        } finally {
+            checkedForms.remove()
+        }
+    }
+
+    // 트랜잭션 밖에서 호출한다. 폼 변경 행은 지우지 않으므로 조회 전 행 수가 락 안에서도 같으면 그사이 새 폼 변경이 없었다.
+    fun checkForms(definitions: List<ProgramDefinition>): Map<Any, FormCheck> =
+        definitions.filter { it.policy != null }.associateBy(::formKey).mapValues { (_, definition) ->
+            val version = forms.version(requireNotNull(definition.policy).formId)
+            val failure =
+                try {
+                    definition.policy.validate()
+                    if (version != null) client.validateForm(definition)
+                    null
+                } catch (exception: ExpectedException) {
+                    exception
+                }
+            FormCheck(version, failure)
+        }
+
+    private fun checkForm(
+        definition: ProgramDefinition,
+        checks: Map<Any, FormCheck>? = checkedForms.get(),
+    ) {
+        val policy = definition.policy ?: return
+        pendingForms.get()?.let {
+            it += definition
+            return
+        }
+        val check = checks?.get(formKey(definition))
+        if (check == null || check.version != forms.version(policy.formId)) conflict("확인하는 동안 프로그램 폼이 바뀌었습니다. 다시 시도해 주세요.")
+        check.failure?.let { throw it }
+    }
+
+    // Form 검증 결과는 행사·유형·정책으로만 정해진다. 묶음 ID는 생성할 때마다 새로 정해지므로 뺀다.
+    private fun formKey(definition: ProgramDefinition): Any =
+        Triple(definition.expoId, definition.programType, definition.policy?.copy(groupId = null))
+
+    data class FormCheck(
+        val version: Long?,
+        val failure: ExpectedException?,
+    )
 
     private fun missingExpo(): Nothing = throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
 

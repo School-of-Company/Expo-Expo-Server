@@ -96,6 +96,14 @@ class ProgramFormChangeRepository(
             formId,
         )!!
 
+    // 해제되지 않은 변경이 있으면 null, 없으면 지금까지의 변경 행 수
+    fun version(formId: UUID): Long? =
+        jdbc.queryForObject(
+            "SELECT CASE WHEN bool_or(NOT released) THEN NULL ELSE count(*) END FROM tb_program_form_change WHERE form_id=?",
+            Long::class.javaObjectType,
+            formId,
+        )
+
     fun now(): Instant = jdbc.queryForObject("SELECT clock_timestamp()", { row, _ -> row.getTimestamp(1).toInstant() })!!
 
     fun reserve(

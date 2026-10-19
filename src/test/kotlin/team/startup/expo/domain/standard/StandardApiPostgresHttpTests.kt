@@ -27,7 +27,9 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.sql.DriverManager
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeUnit
 
 @SpringBootTest(
     webEnvironment = RANDOM_PORT,
@@ -61,6 +63,7 @@ class StandardApiPostgresHttpTests {
     @BeforeEach
     fun setUp() {
         calls.clear()
+        lockedCalls.clear()
         userResolveStatus = 200
         userNamesStatus = 200
         applicationCreateStatus = 201
@@ -174,6 +177,30 @@ class StandardApiPostgresHttpTests {
     }
 
     @Test
+    fun `신청은 박람회 행을 잠근 채 원격 호출하지 않고 락 대기는 409로 끝낸다`() {
+        // #160: User·Application 응답을 기다리는 동안 같은 박람회의 다른 요청이 줄 서지 않는다.
+        request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
+        request(
+            "POST",
+            "/standard/application/$expoId",
+            """{"phoneNumber":"01012345678","standardProIds":[1]}""",
+            null,
+        ).statusCode() shouldBe
+            201
+        lockedCalls.toList() shouldBe emptyList()
+
+        DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { holder ->
+            holder.autoCommit = false
+            holder.createStatement().use { it.execute("SELECT id FROM tb_expo FOR UPDATE") }
+            val started = System.nanoTime()
+            val response = request("POST", "/standard/application/$expoId", """{"phoneNumber":"01012345678","standardProIds":[1]}""", null)
+            response.statusCode() shouldBe 409
+            (TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 10) shouldBe true
+            holder.rollback()
+        }
+    }
+
+    @Test
     fun `신청자가 없으면 빈 배열이고 없는 프로그램은 404다`() {
         request("GET", "/standard/999").statusCode() shouldBe 404
         calls.isEmpty() shouldBe true
@@ -187,17 +214,17 @@ class StandardApiPostgresHttpTests {
     }
 
     @Test
-    fun `프로그램 삭제는 신청 기록 정리 성공 후에만 완료한다`() {
+    fun `프로그램 삭제는 로컬 커밋 뒤 신청 기록을 정리하고 실패하면 변경 재시도로 마무리한다`() {
         request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
         applicationDeleteStatus = 500
         request("DELETE", "/standard/1").statusCode() shouldBe 502
-        standards.count() shouldBe 1L
-        applicationDeleteStatus = 204
-        val deleted = request("DELETE", "/standard/1")
-        deleted.statusCode() shouldBe 204
-        deleted.body() shouldBe ""
         standards.count() shouldBe 0L
         request("DELETE", "/standard/1").statusCode() shouldBe 404
+        applicationDeleteStatus = 204
+        val retried = request("POST", "/expo/$expoId/program-changes/retry")
+        retried.statusCode() shouldBe 204
+        retried.body() shouldBe ""
+        request("POST", "/expo/$expoId/program-changes/retry").statusCode() shouldBe 204
         calls.count { it.path == "/internal/standard-program-applications/program/1" && it.method == "DELETE" } shouldBe 2
     }
 
@@ -273,6 +300,7 @@ class StandardApiPostgresHttpTests {
         )
 
         private val calls = ConcurrentLinkedQueue<DependencyCall>()
+        private val lockedCalls = ConcurrentLinkedQueue<String>()
         private var userResolveStatus = 200
         private var userNamesStatus = 200
         private var applicationCreateStatus = 201
@@ -301,6 +329,7 @@ class StandardApiPostgresHttpTests {
 
         private fun respond(exchange: HttpExchange) {
             val path = exchange.requestURI.path
+            if (expoRowLocked()) lockedCalls.add(path)
             calls.add(
                 DependencyCall(
                     path = path,
@@ -331,6 +360,12 @@ class StandardApiPostgresHttpTests {
             if (bytes.isNotEmpty() && status != 204) exchange.responseBody.write(bytes)
             exchange.close()
         }
+
+        private fun expoRowLocked(): Boolean =
+            DriverManager.getConnection(postgres.jdbcUrl, postgres.username, postgres.password).use { connection ->
+                connection.autoCommit = false
+                runCatching { connection.createStatement().use { it.execute("SELECT id FROM tb_expo FOR UPDATE NOWAIT") } }.isFailure
+            }
 
         @Container
         @ServiceConnection

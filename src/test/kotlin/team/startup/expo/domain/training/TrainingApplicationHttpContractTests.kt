@@ -150,16 +150,16 @@ class TrainingApplicationHttpContractTests {
     }
 
     @Test
-    fun `삭제는 Application 정리가 성공해야 로컬 프로그램을 삭제한다`() {
+    fun `삭제는 로컬 커밋 뒤 Application을 정리하고 실패하면 변경 재시도로 마무리한다`() {
         applicationDeleteStatus = 500
         request("DELETE", "/training/1").statusCode() shouldBe 502
-        trainingPrograms.count() shouldBe 1L
-        applicationDeleteStatus = 204
-        val deleted = request("DELETE", "/training/1")
-        deleted.statusCode() shouldBe 204
-        deleted.body() shouldBe ""
         trainingPrograms.count() shouldBe 0L
         request("DELETE", "/training/1").statusCode() shouldBe 404
+        applicationDeleteStatus = 204
+        val retried = request("POST", "/expo/$expoId/program-changes/retry")
+        retried.statusCode() shouldBe 204
+        retried.body() shouldBe ""
+        request("POST", "/expo/$expoId/program-changes/retry").statusCode() shouldBe 204
         calls.count { it.path == "/internal/training-program-applications/program/1" && it.method == "DELETE" } shouldBe 2
     }
 
