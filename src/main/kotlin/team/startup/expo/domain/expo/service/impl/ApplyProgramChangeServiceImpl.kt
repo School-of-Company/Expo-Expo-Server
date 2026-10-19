@@ -4,6 +4,8 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
@@ -19,6 +21,7 @@ import team.startup.expo.domain.standard.service.StandardDependenciesClient
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.global.attendance.ProgramAttendanceClient
 import team.startup.expo.global.exception.ExpectedException
 import java.util.UUID
 
@@ -30,6 +33,7 @@ class ApplyProgramChangeServiceImpl(
     private val trainings: TrainingProgramRepository,
     private val standardDependencies: StandardDependenciesClient,
     private val trainingDependencies: TrainingDependenciesClient,
+    private val attendances: ProgramAttendanceClient,
     private val support: ProgramPolicySupport,
     private val client: ProgramPolicyClient,
     private val images: AttachExpoImageService,
@@ -48,13 +52,35 @@ class ApplyProgramChangeServiceImpl(
                 changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }
             } ?: return
         val payload = support.payload(change)
+        val deleted = payload.mutations.filter { it.definition == null }.map { requireNotNull(it.previous) }
+        if (!change.applied) applyLocally(expoId, changeId, payload, deleted)
+        if (deleted.isEmpty()) return
+        // 원격 삭제는 되돌릴 수 없으므로 로컬 삭제 커밋 뒤에 실행하고, 실패하면 변경을 남겨 재시도한다.
+        deleted.forEach { previous ->
+            when (previous.programType) {
+                ProgramType.STANDARD -> standardDependencies.deleteApplications(requireNotNull(previous.id))
+                ProgramType.TRAINING -> trainingDependencies.deleteApplications(requireNotNull(previous.id))
+            }
+        }
+        transactions.executeWithoutResult {
+            expos.findLockedById(expoId) ?: return@executeWithoutResult
+            changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }?.let(changes::delete)
+        }
+    }
+
+    private fun applyLocally(
+        expoId: String,
+        changeId: UUID,
+        payload: ProgramChangePayload,
+        deleted: List<ProgramDefinition>,
+    ) {
         try {
             client.prepare(expoId, changeId, payload)
         } catch (exception: ExpectedException) {
             if (exception.status == HttpStatus.CONFLICT) {
                 transactions.executeWithoutResult {
                     expos.findLockedById(expoId) ?: return@executeWithoutResult
-                    changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }?.let {
+                    changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
                         payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
                         changes.delete(it)
                     }
@@ -63,12 +89,15 @@ class ApplyProgramChangeServiceImpl(
             throw exception
         }
         try {
+            // 설정 누락처럼 재시도로 풀리지 않는 실패는 로컬 삭제 전에 거부한다.
+            if (deleted.isNotEmpty()) attendances.requireConfiguration()
             // #160: Form 조회는 박람회·폼 락 밖에서 끝낸다.
             val forms = support.checkForms(payload.mutations.mapNotNull { it.definition })
             transactions.executeWithoutResult {
                 val expo = expos.findLockedById(expoId) ?: missing()
                 if (expo.deletingAt != null) conflict()
-                val current = changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId } ?: return@executeWithoutResult
+                val current =
+                    changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied } ?: return@executeWithoutResult
                 payload.mutations.mapNotNull { it.definition }.forEach { support.validateForApply(it, forms) }
                 payload.mutations.mapNotNull { it.previous }.forEach { previous ->
                     val actual =
@@ -151,8 +180,7 @@ class ApplyProgramChangeServiceImpl(
                 }
                 standards.flush()
                 trainings.flush()
-                payload.mutations.filter { it.definition == null }.forEach { mutation ->
-                    val previous = requireNotNull(mutation.previous)
+                deleted.forEach { previous ->
                     history.record(
                         expoId,
                         "PROGRAM_DELETE",
@@ -162,24 +190,17 @@ class ApplyProgramChangeServiceImpl(
                         current.adminId,
                     )
                     when (previous.programType) {
-                        ProgramType.STANDARD -> {
-                            standardDependencies.deleteApplications(requireNotNull(previous.id))
-                            standards.deleteById(previous.id)
-                        }
-
-                        ProgramType.TRAINING -> {
-                            trainingDependencies.deleteApplications(requireNotNull(previous.id))
-                            trainings.deleteById(previous.id)
-                        }
+                        ProgramType.STANDARD -> standards.deleteById(requireNotNull(previous.id))
+                        ProgramType.TRAINING -> trainings.deleteById(requireNotNull(previous.id))
                     }
                 }
-                changes.delete(current)
+                if (deleted.isEmpty()) changes.delete(current) else changes.save(current.apply { applied = true })
             }
         } catch (exception: Exception) {
             if (payload.mutations.none { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }) {
                 transactions.executeWithoutResult {
                     expos.findLockedById(expoId) ?: return@executeWithoutResult
-                    changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }?.let {
+                    changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
                         payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
                         changes.delete(it)
                     }

@@ -214,17 +214,17 @@ class StandardApiPostgresHttpTests {
     }
 
     @Test
-    fun `프로그램 삭제는 신청 기록 정리 성공 후에만 완료한다`() {
+    fun `프로그램 삭제는 로컬 커밋 뒤 신청 기록을 정리하고 실패하면 변경 재시도로 마무리한다`() {
         request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
         applicationDeleteStatus = 500
         request("DELETE", "/standard/1").statusCode() shouldBe 502
-        standards.count() shouldBe 1L
-        applicationDeleteStatus = 204
-        val deleted = request("DELETE", "/standard/1")
-        deleted.statusCode() shouldBe 204
-        deleted.body() shouldBe ""
         standards.count() shouldBe 0L
         request("DELETE", "/standard/1").statusCode() shouldBe 404
+        applicationDeleteStatus = 204
+        val retried = request("POST", "/expo/$expoId/program-changes/retry")
+        retried.statusCode() shouldBe 204
+        retried.body() shouldBe ""
+        request("POST", "/expo/$expoId/program-changes/retry").statusCode() shouldBe 204
         calls.count { it.path == "/internal/standard-program-applications/program/1" && it.method == "DELETE" } shouldBe 2
     }
 
