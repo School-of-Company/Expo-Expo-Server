@@ -1360,29 +1360,31 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `누락 프로그램 원격 정리 실패는 로컬을 보존하고 재시도는 이미 정리된 신청도 안전하게 처리한다`() {
+    fun `누락 프로그램 원격 정리 실패는 로컬 삭제를 유지한 채 변경을 남기고 재시도는 이미 정리된 신청도 안전하게 처리한다`() {
         val expoId = createExpo()
-        val before = databaseSnapshot(expoId)
         val standardPath = "/internal/standard-program-applications/program/1"
         val trainingPath = "/internal/training-program-applications/program/1"
         remoteApplications.addAll(listOf(standardPath, trainingPath))
         failedProgramDeletion = standardPath
         request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 502
-        databaseSnapshot(expoId) shouldBe before
+        standardProgramRepository.count() shouldBe 0L
+        trainingProgramRepository.count() shouldBe 0L
+        programChangeRepository.findById(expoId).orElseThrow().applied shouldBe true
         remoteApplications.toSet() shouldBe setOf(standardPath, trainingPath)
         programDeletionCalls.toList() shouldBe listOf(standardPath)
 
         failedProgramDeletion = trainingPath
-        request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 502
-        databaseSnapshot(expoId) shouldBe before
+        request("/expo/$expoId/program-changes/retry", "POST").statusCode() shouldBe 502
+        programChangeRepository.existsById(expoId) shouldBe true
         remoteApplications.toSet() shouldBe setOf(trainingPath)
 
         failedProgramDeletion = null
-        request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 204
+        request("/expo/$expoId/program-changes/retry", "POST").statusCode() shouldBe 204
         remoteApplications.isEmpty() shouldBe true
         standardProgramRepository.count() shouldBe 0L
         trainingProgramRepository.count() shouldBe 0L
         programDeletionCalls.toList() shouldBe listOf(standardPath, standardPath, trainingPath, standardPath, trainingPath)
+        programChangeRepository.existsById(expoId) shouldBe false
         programDeletionCalls.clear()
         request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 204
         programDeletionCalls.isEmpty() shouldBe true
@@ -1409,7 +1411,7 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `원격 정리 성공 뒤 로컬 삭제 실패는 DB를 롤백하고 같은 요청 재시도로 완료한다`() {
+    fun `로컬 삭제 커밋 실패는 원격 신청을 지우지 않고 같은 요청 재시도로 완료한다`() {
         val expoId = createExpo()
         val before = databaseSnapshot(expoId)
         remoteApplications.addAll(
@@ -1430,22 +1432,23 @@ class ExpoApiPostgresHttpTests {
             )
             request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 500
             databaseSnapshot(expoId) shouldBe before
-            remoteApplications.isEmpty() shouldBe true
+            remoteApplications.size shouldBe 2
+            programDeletionCalls.isEmpty() shouldBe true
         } finally {
             jdbcTemplate.execute("DROP TRIGGER IF EXISTS fail_program_delete ON tb_training_program")
             jdbcTemplate.execute("DROP FUNCTION IF EXISTS fail_program_delete()")
         }
         request("/expo/$expoId", "PATCH", EMPTY_UPDATE_REQUEST_JSON).statusCode() shouldBe 204
-        programDeletionCalls.size shouldBe 4
+        programDeletionCalls.size shouldBe 2
+        remoteApplications.isEmpty() shouldBe true
         standardProgramRepository.count() shouldBe 0L
         trainingProgramRepository.count() shouldBe 0L
     }
 
     @Test
-    fun `PATCH 출석 정리 일부 성공은 로컬을 보존하고 재시도하며 다른 ID 영역을 유지한다`() {
+    fun `PATCH 출석 정리 일부 성공은 로컬 삭제를 유지한 채 재시도하며 다른 ID 영역을 유지한다`() {
         val expoId = createExpo()
         request("/standard/$expoId", "POST", STANDARD_PROGRAM_JSON).statusCode() shouldBe 201
-        val before = databaseSnapshot(expoId)
         val standard = "/internal/program-attendances/standard/2"
         val training = "/internal/program-attendances/training/1"
         remoteAttendances.addAll(listOf(standard, training, "/internal/program-attendances/standard/1"))
@@ -1453,10 +1456,11 @@ class ExpoApiPostgresHttpTests {
         payload.withArray("updateTrainingProRequestDto").removeAll()
         failedProgramDeletion = training
         request("/expo/$expoId", "PATCH", payload.toString()).statusCode() shouldBe 502
-        databaseSnapshot(expoId) shouldBe before
+        standardProgramRepository.existsById(2) shouldBe false
+        trainingProgramRepository.existsById(1) shouldBe false
         remoteAttendances.toSet() shouldBe setOf(training, "/internal/program-attendances/standard/1")
         failedProgramDeletion = null
-        request("/expo/$expoId", "PATCH", payload.toString()).statusCode() shouldBe 204
+        request("/expo/$expoId/program-changes/retry", "POST").statusCode() shouldBe 204
         remoteAttendances.toSet() shouldBe setOf("/internal/program-attendances/standard/1")
         attendanceDeletionCalls.toList() shouldBe listOf(standard, training, standard, training)
     }

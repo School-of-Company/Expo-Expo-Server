@@ -1,0 +1,1 @@
+ALTER TABLE tb_program_change ADD COLUMN applied BOOLEAN NOT NULL DEFAULT FALSE;
