@@ -3,7 +3,6 @@ package team.startup.expo.domain.expo.service.impl
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
@@ -30,88 +29,96 @@ class CreateExpoServiceImpl(
     private val attachExpoImageService: AttachExpoImageService,
     private val history: AdminChangeHistoryRepository,
 ) : CreateExpoService {
-    @Transactional
     override fun execute(request: CreateExpoRequest): CreateExpoResponse {
-        request.validatePreregisterCapacities()
-        val expo =
-            Expo(
-                id = expoIdGenerator.generate(),
-                title = request.title,
-                description = request.description,
-                startedDay = request.startedDay.toString(),
-                finishedDay = request.finishedDay.toString(),
-                location = request.location,
-                coverImage = request.coverImage,
-                x = request.x,
-                y = request.y,
-                applicationPerson = 0L,
-                yesterdayApplicationPerson = 0L,
-                preregisterTeacherCapacity = request.preregisterTeacherCapacity,
-                preregisterNonTeacherCapacity = request.preregisterNonTeacherCapacity,
-            )
-        expoRepository.saveAndFlush(expo)
-
-        standardProgramRepository
-            .saveAllAndFlush(
-                request.addStandardProRequestDto.map { program ->
-                    val definition =
-                        policies.create(
-                            expo.id,
-                            ProgramType.STANDARD,
-                            program.title,
-                            program.startedAt.toString(),
-                            program.endedAt.toString(),
-                            null,
-                            program.policy,
-                            place = program.place,
-                        )
-                    StandardProgram(
-                        title = program.title,
-                        startedAt = program.startedAt.toString(),
-                        endedAt = program.endedAt.toString(),
-                        expo = expo,
-                        groupId = definition.groupId,
-                        policyJson = policies.json(definition.policy),
-                        place = definition.place,
+        // 폼 검증을 트랜잭션 밖에서 먼저 하도록 ID를 미리 만든다.
+        val expoId = expoIdGenerator.generate()
+        val programs =
+            request.addStandardProRequestDto.map { ProgramType.STANDARD to it.policy } +
+                request.addTrainingProRequestDto.map { ProgramType.TRAINING to it.policy }
+        return requireNotNull(
+            policies.creating(expoId, programs) {
+                request.validatePreregisterCapacities()
+                val expo =
+                    Expo(
+                        id = expoId,
+                        title = request.title,
+                        description = request.description,
+                        startedDay = request.startedDay.toString(),
+                        finishedDay = request.finishedDay.toString(),
+                        location = request.location,
+                        coverImage = request.coverImage,
+                        x = request.x,
+                        y = request.y,
+                        applicationPerson = 0L,
+                        yesterdayApplicationPerson = 0L,
+                        preregisterTeacherCapacity = request.preregisterTeacherCapacity,
+                        preregisterNonTeacherCapacity = request.preregisterNonTeacherCapacity,
                     )
-                },
-            ).forEach {
-                history.record(expo.id, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())
-            }
-        trainingProgramRepository
-            .saveAllAndFlush(
-                request.addTrainingProRequestDto.map { program ->
-                    val definition =
-                        policies.create(
-                            expo.id,
-                            ProgramType.TRAINING,
-                            program.title,
-                            program.startedAt.toString(),
-                            program.endedAt.toString(),
-                            program.category,
-                            program.policy,
-                            place = program.place,
-                        )
-                    TrainingProgram(
-                        title = program.title,
-                        startedAt = program.startedAt.toString(),
-                        endedAt = program.endedAt.toString(),
-                        category = program.category,
-                        expo = expo,
-                        groupId = definition.groupId,
-                        policyJson = policies.json(definition.policy),
-                        place = definition.place,
-                    )
-                },
-            ).forEach {
-                history.record(expo.id, "PROGRAM_CREATE", "TRAINING", requireNotNull(it.id), it.title, history.currentAdminId())
-            }
+                expoRepository.saveAndFlush(expo)
 
-        val uploadedBy =
-            SecurityContextHolder.getContext().authentication?.name
-                ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
-        attachExpoImageService.execute(request.coverImage, uploadedBy, expo.id)
+                standardProgramRepository
+                    .saveAllAndFlush(
+                        request.addStandardProRequestDto.map { program ->
+                            val definition =
+                                policies.create(
+                                    expo.id,
+                                    ProgramType.STANDARD,
+                                    program.title,
+                                    program.startedAt.toString(),
+                                    program.endedAt.toString(),
+                                    null,
+                                    program.policy,
+                                    place = program.place,
+                                )
+                            StandardProgram(
+                                title = program.title,
+                                startedAt = program.startedAt.toString(),
+                                endedAt = program.endedAt.toString(),
+                                expo = expo,
+                                groupId = definition.groupId,
+                                policyJson = policies.json(definition.policy),
+                                place = definition.place,
+                            )
+                        },
+                    ).forEach {
+                        history.record(expo.id, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())
+                    }
+                trainingProgramRepository
+                    .saveAllAndFlush(
+                        request.addTrainingProRequestDto.map { program ->
+                            val definition =
+                                policies.create(
+                                    expo.id,
+                                    ProgramType.TRAINING,
+                                    program.title,
+                                    program.startedAt.toString(),
+                                    program.endedAt.toString(),
+                                    program.category,
+                                    program.policy,
+                                    place = program.place,
+                                )
+                            TrainingProgram(
+                                title = program.title,
+                                startedAt = program.startedAt.toString(),
+                                endedAt = program.endedAt.toString(),
+                                category = program.category,
+                                expo = expo,
+                                groupId = definition.groupId,
+                                policyJson = policies.json(definition.policy),
+                                place = definition.place,
+                            )
+                        },
+                    ).forEach {
+                        history.record(expo.id, "PROGRAM_CREATE", "TRAINING", requireNotNull(it.id), it.title, history.currentAdminId())
+                    }
 
-        return CreateExpoResponse(expoId = expo.id)
+                val uploadedBy =
+                    SecurityContextHolder.getContext().authentication?.name
+                        ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+                attachExpoImageService.execute(request.coverImage, uploadedBy, expo.id)
+
+                CreateExpoResponse(expoId = expo.id)
+            },
+        )
     }
 }

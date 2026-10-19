@@ -1,12 +1,14 @@
 package team.startup.expo.domain.expo.repository
 
 import jakarta.persistence.LockModeType
+import jakarta.persistence.QueryHint
 import org.springframework.data.domain.Pageable
 import org.springframework.data.domain.Slice
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
+import org.springframework.data.jpa.repository.QueryHints
 import org.springframework.data.repository.query.Param
 import team.startup.expo.domain.expo.entity.Expo
 
@@ -18,7 +20,9 @@ interface ExpoRepository : JpaRepository<Expo, String> {
         pageable: Pageable,
     ): Slice<Expo>
 
+    // #160: 락 대기는 5초까지만 하고 PessimisticLockingFailureException(409)으로 끝낸다.
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("select expo from Expo expo where expo.id = :id")
     fun findLockedById(
         @Param("id") id: String,
