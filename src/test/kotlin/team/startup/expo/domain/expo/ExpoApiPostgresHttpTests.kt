@@ -829,6 +829,33 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `참가자용 공개 조회는 비로그인으로 제한된 필드만 반환하고 기존 상세는 관리자만 조회한다`() {
+        val expoId = createExpo()
+
+        val response = request("/expo/$expoId/public", "GET", authority = null)
+
+        response.statusCode() shouldBe 200
+        objectMapper.readTree(response.body()).let { tree ->
+            tree.get("title").asString() shouldBe "2026 박람회"
+            tree.get("location").asString() shouldBe "서울"
+            tree.propertyNames().asSequence().toSet() shouldBe setOf("title", "description", "location", "startedDay", "finishedDay")
+        }
+        request("/expo/$expoId/public", "GET", authority = "ROLE_USER").statusCode() shouldBe 200
+        request("/expo/$expoId", "GET", authority = null).statusCode() shouldBe 401
+        request("/expo/$expoId", "GET", authority = "ROLE_USER").statusCode() shouldBe 403
+        request("/expo/$expoId", "GET").statusCode() shouldBe 200
+    }
+
+    @Test
+    fun `참가자용 공개 조회는 없거나 삭제 중인 박람회를 404로 답한다`() {
+        val expoId = createExpo()
+
+        assertError(request("/expo/not-found/public", "GET", authority = null), expectedStatus = 404, expectedMessage = "박람회를 찾지 못 했습니다.")
+        markExpoDeleting(expoId)
+        assertError(request("/expo/$expoId/public", "GET", authority = null), expectedStatus = 404, expectedMessage = "박람회를 찾지 못 했습니다.")
+    }
+
+    @Test
     fun `실제 HTTP 목록은 빈 배열이고 없는 상세는 404다`() {
         val listResponse = request("/expo", "GET")
         val detailResponse = request("/expo/not-found", "GET")
