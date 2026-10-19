@@ -134,7 +134,7 @@ class SecurityConfig {
                         "/internal/expo/{expo_id}/preregister-sessions",
                         "/internal/expo/{expo_id}/preregister-sessions/{session_id}",
                     ).hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
-                    .requestMatchers(HttpMethod.GET, "/expo/{expo_id}/preregister-sessions/public")
+                    .requestMatchers(HttpMethod.GET, "/expo/{expo_id}/preregister-sessions/public", "/expo/{expo_id}/public")
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.POST,
