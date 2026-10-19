@@ -1312,10 +1312,11 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
-    fun `reservation waits in Postgres until a validated connection commits`() {
+    fun `Form lookup holds no Expo or form guard lock and a reservation made meanwhile rejects the create`() {
+        // #160: Form 응답이 늦어도 박람회 행과 폼 가드를 잡지 않는다. 그사이 들어온 폼 변경 예약은 바로 처리되고 생성은 락 안에서 거절된다.
         val formLookup = CountDownLatch(1)
         val reply = CountDownLatch(1)
-        val executor = Executors.newFixedThreadPool(2)
+        val executor = Executors.newSingleThreadExecutor()
         beforeFormReply = {
             formLookup.countDown()
             reply.await(5, TimeUnit.SECONDS)
@@ -1323,27 +1324,34 @@ class ProgramPoliciesPostgresHttpTests {
         try {
             val create = CompletableFuture.supplyAsync({ request("/standard/$EXPO", "POST", body("standard")).statusCode() }, executor)
             formLookup.await(5, TimeUnit.SECONDS) shouldBe true
-            val reserve = CompletableFuture.supplyAsync({ internal(formChange(), "PUT", """{"kind":"DELETE"}""").statusCode() }, executor)
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-            var waiting = false
-            while (!waiting && System.nanoTime() < deadline) {
-                waiting =
-                    jdbc.queryForObject(
-                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'SELECT id FROM tb_program_form_guard%')",
-                        Boolean::class.java,
-                    )!!
-                if (!waiting) Thread.sleep(10)
+            transactions.executeWithoutResult {
+                jdbc.queryForList("SELECT id FROM tb_expo WHERE id=? FOR UPDATE NOWAIT", EXPO).size shouldBe 1
+                jdbc.queryForList("SELECT id FROM tb_program_form_guard WHERE id=1 FOR UPDATE NOWAIT").size shouldBe 1
             }
-            waiting shouldBe true
-            reserve.isDone shouldBe false
+            internal(formChange(), "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 200
             reply.countDown()
-            create.get(10, TimeUnit.SECONDS) shouldBe 201
-            reserve.get(10, TimeUnit.SECONDS) shouldBe 409
+            create.get(10, TimeUnit.SECONDS) shouldBe 409
+            standards.count() shouldBe 0L
         } finally {
             reply.countDown()
             beforeFormReply = null
             executor.shutdownNow()
         }
+    }
+
+    @Test
+    fun `a form change finished during the lookup makes the create retry instead of trusting the old form`() {
+        val path = formChange()
+        beforeFormReply = {
+            beforeFormReply = null
+            internal(path, "PUT", shrink()).statusCode() shouldBe 200
+            internal(path, "DELETE").statusCode() shouldBe 204
+        }
+        val response = request("/standard/$EXPO", "POST", body("standard"))
+        response.statusCode() shouldBe 409
+        response.body().contains("다시 시도") shouldBe true
+        standards.count() shouldBe 0L
+        create("standard")
     }
 
     @Test

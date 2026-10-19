@@ -91,12 +91,14 @@ class ApplyProgramChangeServiceImpl(
         try {
             // 설정 누락처럼 재시도로 풀리지 않는 실패는 로컬 삭제 전에 거부한다.
             if (deleted.isNotEmpty()) attendances.requireConfiguration()
+            // #160: Form 조회는 박람회·폼 락 밖에서 끝낸다.
+            val forms = support.checkForms(payload.mutations.mapNotNull { it.definition })
             transactions.executeWithoutResult {
                 val expo = expos.findLockedById(expoId) ?: missing()
                 if (expo.deletingAt != null) conflict()
                 val current =
                     changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied } ?: return@executeWithoutResult
-                payload.mutations.mapNotNull { it.definition }.forEach(support::validateForApply)
+                payload.mutations.mapNotNull { it.definition }.forEach { support.validateForApply(it, forms) }
                 payload.mutations.mapNotNull { it.previous }.forEach { previous ->
                     val actual =
                         when (previous.programType) {
