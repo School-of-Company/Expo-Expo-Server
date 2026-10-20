@@ -6,7 +6,9 @@ import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.entity.ProgramChange
+import team.startup.expo.domain.expo.presentation.dto.request.NOTICE_PLACE_MAX_LENGTH
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
+import team.startup.expo.domain.expo.presentation.dto.request.validateNoticeLabel
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
@@ -136,6 +138,7 @@ class ProgramPolicySupport(
                     it.isNotEmpty()
                 },
             )
+        validateLabels(result)
         validate(result, policy?.groupId)
         return result
     }
@@ -169,6 +172,7 @@ class ProgramPolicySupport(
             conflict("프로그램 버전이 변경됐습니다. 다시 조회해 주세요.")
         }
         if (desired == current) return null
+        validateLabels(desired, current)
         validate(desired, if (group != current.groupId) group else null, desired.policy != current.policy)
         if (current.revision == Long.MAX_VALUE) conflict("프로그램 버전을 더 늘릴 수 없습니다.")
         return ProgramMutation(current, desired.copy(revision = current.revision + 1))
@@ -254,6 +258,15 @@ class ProgramPolicySupport(
                 ProgramChangePayload(mutations)
             }
         return pending to results
+    }
+
+    // 저장된 값과 같은 제목·장소는 통과시켜 #172 이전에 저장된 프로그램도 그대로 수정할 수 있게 한다.
+    private fun validateLabels(
+        definition: ProgramDefinition,
+        current: ProgramDefinition? = null,
+    ) {
+        if (definition.title != current?.title) validateNoticeLabel("프로그램 제목", definition.title)
+        definition.place?.takeIf { it != current?.place }?.let { validateNoticeLabel("프로그램 장소", it, NOTICE_PLACE_MAX_LENGTH) }
     }
 
     private fun validate(

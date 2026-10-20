@@ -82,7 +82,7 @@ data class UpdateStandardProgramRequest(
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long? = null,
     @field:CodePointLength(max = 255)
-    @field:Schema(description = "Optional session place: omitted/null preserves on update; blank clears; max 255 code points")
+    @field:Schema(description = "Optional place: omitted/null preserves on update; blank clears; max 255 UTF-16 units, no control chars")
     val place: String? = null,
 )
 
@@ -109,6 +109,6 @@ data class UpdateTrainingProgramRequest(
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long? = null,
     @field:CodePointLength(max = 255)
-    @field:Schema(description = "Optional session place: omitted/null preserves on update; blank clears; max 255 code points")
+    @field:Schema(description = "Optional place: omitted/null preserves on update; blank clears; max 255 UTF-16 units, no control chars")
     val place: String? = null,
 )

@@ -29,7 +29,7 @@ data class PreregisterSessionRequest(
     @field:Schema(description = "종료 일시 (UTC 오프셋 ISO 8601)", example = "2030-01-01T11:00:00Z")
     val endedAt: Instant,
     @field:NotBlank
-    @field:Schema(description = "회차 장소", example = "가상 강의실")
+    @field:Schema(description = "회차 장소. UTF-16 기준 255자 이하이며 줄바꿈·제어·서식 문자는 쓸 수 없습니다.", example = "가상 강의실")
     val place: String,
     @field:Positive
     @field:Schema(
@@ -61,6 +61,15 @@ data class PreregisterSessionRequest(
         if (!endedAt.truncatedTo(ChronoUnit.MICROS).isAfter(startedAt.truncatedTo(ChronoUnit.MICROS))) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "회차 종료는 시작보다 늦어야 합니다.")
         }
+    }
+
+    // On update, values equal to the stored ones pass so sessions saved before #172 stay editable.
+    fun validateLabels(
+        currentTitle: String? = null,
+        currentPlace: String? = null,
+    ) {
+        if (title != currentTitle) validateNoticeLabel("회차 제목", title)
+        if (place != currentPlace) validateNoticeLabel("회차 장소", place, NOTICE_PLACE_MAX_LENGTH)
     }
 
     // Omitted target capacities fall back to the expo default on create and the stored values on update.
@@ -97,6 +106,25 @@ fun validateTargetCapacities(
     }
     if (teacher != null && nonTeacher != null && teacher.toLong() + nonTeacher !in 1..Int.MAX_VALUE.toLong()) {
         throw ExpectedException(HttpStatus.BAD_REQUEST, "구분 정원의 합은 1 이상 ${Int.MAX_VALUE} 이하여야 합니다.")
+    }
+}
+
+// #172: Notification SMS labels are trimmed, non-empty, and free of \p{C}\p{Zl}\p{Zp}; locations allow 255 UTF-16 units.
+const val NOTICE_PLACE_MAX_LENGTH = 255
+
+private val NOTICE_LABEL_FORBIDDEN = Regex("[\\p{C}\\p{Zl}\\p{Zp}]")
+
+fun validateNoticeLabel(
+    name: String,
+    value: String,
+    maxLength: Int = Int.MAX_VALUE,
+) {
+    if (value.isBlank()) throw ExpectedException(HttpStatus.BAD_REQUEST, "$name 값이 비어 있습니다.")
+    if (NOTICE_LABEL_FORBIDDEN.containsMatchIn(value)) {
+        throw ExpectedException(HttpStatus.BAD_REQUEST, "${name}에 줄바꿈·제어 문자를 쓸 수 없습니다.")
+    }
+    if (value.length > maxLength) {
+        throw ExpectedException(HttpStatus.BAD_REQUEST, "$name 길이는 UTF-16 기준 ${maxLength}자 이하여야 합니다.")
     }
 }
 

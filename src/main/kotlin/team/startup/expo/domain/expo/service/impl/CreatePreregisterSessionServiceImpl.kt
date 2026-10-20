@@ -26,6 +26,7 @@ class CreatePreregisterSessionServiceImpl(
         request: PreregisterSessionRequest,
     ): PreregisterSessionResponse {
         request.validatePeriod()
+        request.validateLabels()
         val expo = expos.findLockedById(expoId) ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
         if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
         val capacities = request.capacities(expo.preregisterTeacherCapacity, expo.preregisterNonTeacherCapacity)

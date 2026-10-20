@@ -24,6 +24,7 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.entity.PreregisterSession
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
@@ -348,6 +349,60 @@ class PreregisterSessionPostgresHttpTests {
         request(path(id), "DELETE").statusCode() shouldBe 400
         request(path(id) + "?revision=0", "DELETE").statusCode() shouldBe 400
         calls.size shouldBe 0
+    }
+
+    @Test
+    fun `회차 제목과 장소는 문자 안내 라벨 규칙을 따르고 저장된 기존 값은 그대로 수정할 수 있다`() {
+        val place = "\"place\":\"광주\""
+        listOf("1층\\n강당", "강당\\u200b", "강당\\u2028", "\\u0007", "가".repeat(256), "😀".repeat(128)).forEach {
+            val response = request(path(), "POST", DEFINITION.replace(place, "\"place\":\"$it\""))
+            response.statusCode() shouldBe 400
+            mapper.readTree(response.body()).get("status").asInt() shouldBe 400
+        }
+        request(path(), "POST", DEFINITION.replace("오전 회차", "오전\\t회차")).statusCode() shouldBe 400
+        sessions.count() shouldBe 0L
+        val boundary = "😀".repeat(127) + "가"
+        val id = create(DEFINITION.replace(place, "\"place\":\"$boundary\""))
+        read(id).get("place").asString() shouldBe boundary
+        create(DEFINITION.replace(place, "\"place\":\"${"가".repeat(255)}\""))
+
+        val current = sessions.findById(id).orElseThrow()
+        val legacyTitle = "오전\t회차"
+        val legacyPlace = "1층\n강당" + "가".repeat(300)
+        sessions.saveAndFlush(
+            PreregisterSession(
+                id,
+                expos.findById(EXPO_ID).orElseThrow(),
+                legacyTitle,
+                current.startedAt,
+                current.endedAt,
+                legacyPlace,
+                current.capacity,
+                current.waitingCapacity,
+                current.closed,
+            ),
+        )
+        val withLegacyTitle = DEFINITION.replace("\"오전 회차\"", mapper.writeValueAsString(legacyTitle))
+        val legacy = withLegacyTitle.replace(place, "\"place\":${mapper.writeValueAsString(legacyPlace)}")
+        request(path(id), "PATCH", updateBody(definition = legacy.replace("false", "true"))).statusCode() shouldBe 204
+        read(id).let {
+            it.get("title").asString() shouldBe legacyTitle
+            it.get("place").asString() shouldBe legacyPlace
+            it.get("closed").asBoolean() shouldBe true
+        }
+        request(
+            path(id),
+            "PATCH",
+            updateBody(revision = 2, definition = withLegacyTitle.replace(place, "\"place\":\"1층\\n본관\"")),
+        ).statusCode() shouldBe
+            400
+        request(path(id), "PATCH", updateBody(revision = 2, definition = DEFINITION.replace(place, "\"place\":\"${"가".repeat(256)}\"")))
+            .statusCode() shouldBe 400
+        request(path(id), "PATCH", updateBody(revision = 2, definition = DEFINITION.replace("오전 회차", "오후\\u200b회차")))
+            .statusCode() shouldBe 400
+        read(id).get("revision").asLong() shouldBe 2L
+        request(path(id), "PATCH", updateBody(revision = 2, definition = DEFINITION)).statusCode() shouldBe 204
+        read(id).get("place").asString() shouldBe "광주"
     }
 
     @Test

@@ -19,6 +19,7 @@ import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.support.TestJwt
 import tools.jackson.databind.ObjectMapper
@@ -103,6 +104,48 @@ class StandardApiPostgresHttpTests {
         }
         request("POST", "/standard/$expoId", program.replace("일반", "😀".repeat(51))).statusCode() shouldBe 400
         standards.count() shouldBe 2L
+    }
+
+    @Test
+    fun `프로그램 제목과 장소는 문자 안내 라벨 규칙을 따르고 저장된 기존 값은 그대로 수정할 수 있다`() {
+        val placed = program.dropLast(1) + ""","place":"PLACE"}"""
+        listOf("1층\\n강당", "강당\\u200b", "강당\\u2029본관", "😀".repeat(128)).forEach {
+            val response = request("POST", "/standard/$expoId", placed.replace("PLACE", it))
+            response.statusCode() shouldBe 400
+            mapper.readTree(response.body()).get("status").asInt() shouldBe 400
+            request("POST", "/standard/list/$expoId", "[${placed.replace("PLACE", it)}]").statusCode() shouldBe 400
+        }
+        request("POST", "/standard/$expoId", program.replace("일반", "일반\\u200b")).statusCode() shouldBe 400
+        request("POST", "/standard/$expoId", program.replace("일반", " ")).statusCode() shouldBe 400
+        standards.count() shouldBe 0L
+        val boundary = "😀".repeat(127) + "가"
+        request("POST", "/standard/$expoId", placed.replace("PLACE", boundary)).statusCode() shouldBe 201
+        standards.findById(1).orElseThrow().place shouldBe boundary
+
+        val current = standards.findById(1).orElseThrow()
+        standards.saveAndFlush(
+            StandardProgram(
+                1,
+                "일반\t과정",
+                current.startedAt,
+                current.endedAt,
+                expos.findById(expoId).orElseThrow(),
+                current.groupId,
+                place = "1층\n강당",
+            ),
+        )
+        val legacy = """{"id":1,"title":"일반\t과정","startedAt":"2026-09-24 09:00","endedAt":"2026-09-24 11:00"}"""
+        request("PATCH", "/standard/1", legacy).statusCode() shouldBe 204
+        request("PATCH", "/standard/1", legacy.dropLast(1) + ""","place":"1층\n강당"}""").statusCode() shouldBe 204
+        standards.findById(1).orElseThrow().let {
+            it.title shouldBe "일반\t과정"
+            it.place shouldBe "1층\n강당"
+            it.revision shouldBe 2L
+        }
+        request("PATCH", "/standard/1", legacy.dropLast(1) + ""","place":"1층\n본관"}""").statusCode() shouldBe 400
+        request("PATCH", "/standard/1", legacy.replace("일반\\t과정", "일반\\u2028과정")).statusCode() shouldBe 400
+        request("PATCH", "/standard/1", legacy.dropLast(1) + ""","place":" "}""").statusCode() shouldBe 204
+        standards.findById(1).orElseThrow().place shouldBe null
     }
 
     @Test
