@@ -838,7 +838,9 @@ class ExpoApiPostgresHttpTests {
         objectMapper.readTree(response.body()).let { tree ->
             tree.get("title").asString() shouldBe "2026 박람회"
             tree.get("location").asString() shouldBe "서울"
-            tree.propertyNames().asSequence().toSet() shouldBe setOf("title", "description", "location", "startedDay", "finishedDay")
+            tree.propertyNames().asSequence().toSet() shouldBe
+                setOf("title", "description", "location", "startedDay", "finishedDay", "participantPhoneVerificationRequired")
+            tree.get("participantPhoneVerificationRequired").asBoolean() shouldBe true
         }
         request("/expo/$expoId/public", "GET", authority = "ROLE_USER").statusCode() shouldBe 200
         request("/expo/$expoId", "GET", authority = null).statusCode() shouldBe 401
@@ -915,6 +917,14 @@ class ExpoApiPostgresHttpTests {
             val internal = objectMapper.readTree(lookup.body())
             internal.get("participantPhoneVerificationRequired").asBoolean() shouldBe required
             internal.get("participantPhoneVerificationRevision").asLong() shouldBe revision
+            objectMapper
+                .readTree(request("/expo/$expoId", "GET").body())
+                .get("participantPhoneVerificationRequired")
+                .asBoolean() shouldBe required
+            objectMapper
+                .readTree(request("/expo/$expoId/public", "GET", authority = null).body())
+                .get("participantPhoneVerificationRequired")
+                .asBoolean() shouldBe required
             val persisted = expoRepository.findById(expoId).orElseThrow()
             persisted.participantPhoneVerificationRequired shouldBe required
             persisted.participantPhoneVerificationRevision shouldBe revision

@@ -30,6 +30,7 @@ class GetExpoDetailServiceImpl(
             y = expo.y,
             preregisterTeacherCapacity = expo.preregisterTeacherCapacity,
             preregisterNonTeacherCapacity = expo.preregisterNonTeacherCapacity,
+            participantPhoneVerificationRequired = expo.participantPhoneVerificationRequired,
         )
     }
 }
