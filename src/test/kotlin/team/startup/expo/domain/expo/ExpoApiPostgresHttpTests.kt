@@ -1135,7 +1135,7 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
-    fun `내부 연수 프로그램 일괄 조회는 중복을 합쳐 ID순으로 반환하고 시간을 yyyy-MM-dd HH mm으로 맞춘다`() {
+    fun `내부 연수 프로그램 일괄 조회는 중복을 합쳐 ID순으로 반환하고 시간은 저장값 그대로 준다`() {
         val expoId = createExpo()
         val expo = expoRepository.findById(expoId).orElseThrow()
         val firstId = trainingProgramRepository.findByExpo(expo).single().id!!
@@ -1158,7 +1158,7 @@ class ExpoApiPostgresHttpTests {
         legacyProgramFields(objectMapper.readTree(response.body())) shouldBe
             objectMapper.readTree(
                 """[
-                    {"id":$firstId,"title":"연수 프로그램","startedAt":"2026-09-24 10:00","endedAt":"2026-09-24 11:00","category":"ESSENTIAL"},
+                    {"id":$firstId,"title":"연수 프로그램","startedAt":"2026-09-24T10:00","endedAt":"2026-09-24T11:00","category":"ESSENTIAL"},
                     {"id":$secondId,"title":"두 번째 연수","startedAt":"2026-09-24 13:00","endedAt":"2026-09-24 14:00","category":"CHOICE"}
                 ]""",
             )

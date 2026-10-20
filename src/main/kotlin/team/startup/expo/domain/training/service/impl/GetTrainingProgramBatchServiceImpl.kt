@@ -10,9 +10,7 @@ import team.startup.expo.domain.training.presentation.dto.request.TrainingProgra
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramResponse
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.GetTrainingProgramBatchService
-import team.startup.expo.global.common.time.toProgramDateTime
 import team.startup.expo.global.exception.ExpectedException
-import java.time.LocalDateTime
 
 @Service
 class GetTrainingProgramBatchServiceImpl(
@@ -45,13 +43,10 @@ class GetTrainingProgramBatchServiceImpl(
                 groupId = program.groupId,
                 policy = policies.policy(program.policyJson),
                 revision = program.revision,
-                startedAt = program.startedAt.toProgramDateTimeText(),
-                endedAt = program.endedAt.toProgramDateTimeText(),
+                startedAt = program.startedAt,
+                endedAt = program.endedAt,
                 category = program.category,
             )
         }
     }
-
-    // 저장값은 "yyyy-MM-dd'T'HH:mm"과 "yyyy-MM-dd HH:mm"이 섞여 있어 내부 응답은 "yyyy-MM-dd HH:mm"으로 맞춘다
-    private fun String.toProgramDateTimeText(): String = LocalDateTime.parse(replace(' ', 'T')).toProgramDateTime()
 }
