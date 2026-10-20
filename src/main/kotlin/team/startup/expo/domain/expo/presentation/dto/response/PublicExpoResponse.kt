@@ -13,4 +13,6 @@ data class PublicExpoResponse(
     val startedDay: String,
     @field:Schema(description = "박람회 종료일", example = "2030-01-02")
     val finishedDay: String,
+    @field:Schema(description = "참가자 전화번호 인증 필요 여부", example = "true")
+    val participantPhoneVerificationRequired: Boolean,
 )

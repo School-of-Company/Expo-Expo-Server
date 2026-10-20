@@ -23,4 +23,6 @@ data class ExpoDetailResponse(
     val preregisterTeacherCapacity: Int? = null,
     @field:Schema(description = "새 사전등록 회차의 교사·예비교사 외 대상 정원 기본값. null이면 미설정", example = "1000")
     val preregisterNonTeacherCapacity: Int? = null,
+    @field:Schema(description = "참가자 전화번호 인증 필요 여부", example = "true")
+    val participantPhoneVerificationRequired: Boolean,
 )
