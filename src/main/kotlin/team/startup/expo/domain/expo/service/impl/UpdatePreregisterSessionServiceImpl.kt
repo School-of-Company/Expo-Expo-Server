@@ -45,6 +45,7 @@ class UpdatePreregisterSessionServiceImpl(
                 val current =
                     sessions.findByIdAndExpoId(sessionId, expoId) ?: throw ExpectedException(HttpStatus.NOT_FOUND, "회차를 찾지 못 했습니다.")
                 val original = current.toResponse()
+                definition.validateLabels(original.title, original.place)
                 val capacities = definition.capacities(current.teacherCapacity, current.nonTeacherCapacity)
                 val desired =
                     original.copy(
