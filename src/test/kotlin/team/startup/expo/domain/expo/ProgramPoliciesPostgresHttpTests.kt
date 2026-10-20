@@ -600,6 +600,41 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `program times use the stored text on every path and a legacy space time is not a change`() {
+        // #183: Application은 정의를 문자열로 비교하므로 같은 회차는 모든 경로에서 같은 시간 문자열이어야 한다.
+        listOf("standard", "training").forEach { type ->
+            create(type)
+            val form = if (type == "standard") STANDARD_FORM else TRAINING_FORM
+
+            fun stored(column: String) = jdbc.queryForObject("SELECT $column FROM tb_${type}_program WHERE id = 1", String::class.java)
+            stored("started_at") shouldBe "2026-10-13T09:00"
+            if (type == "training") {
+                val batch =
+                    request(
+                        "/internal/expo/$EXPO/training-programs/batch",
+                        "POST",
+                        """{"programIds":[1]}""",
+                        role = null,
+                        token = "expo-test-token",
+                    )
+                mapper.readTree(batch.body())[0].get("startedAt").asString() shouldBe "2026-10-13T09:00"
+            }
+
+            // dcbbc76~fe99e31 사이에 저장된 예전 형식 행
+            jdbc.update("UPDATE tb_${type}_program SET started_at = '2026-10-13 09:00', ended_at = '2026-10-13 10:00' WHERE id = 1")
+            val prepares = calls.count { it.first.contains("/program-changes/") }
+            request("/$type/1", "PATCH", body(type, policy(form = form), 1, 1)).statusCode() shouldBe 204
+            list(type)[0].get("revision").asLong() shouldBe 1L
+            calls.count { it.first.contains("/program-changes/") } shouldBe prepares
+
+            request("/$type/1", "PATCH", body(type, policy(form = form), 1, 1).replace("10:00\"", "11:00\"")).statusCode() shouldBe 204
+            list(type)[0].get("revision").asLong() shouldBe 2L
+            stored("started_at") shouldBe "2026-10-13 09:00"
+            stored("ended_at") shouldBe "2026-10-13T11:00"
+        }
+    }
+
+    @Test
     fun `lost approval response persists pending blocks admission and replays the exact operation`() {
         create("standard")
         seed("STANDARD", 1)

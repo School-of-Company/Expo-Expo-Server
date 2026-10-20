@@ -25,6 +25,7 @@ import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
+import team.startup.expo.global.common.time.toProgramLocalDateTime
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.time.LocalDateTime
@@ -161,8 +162,8 @@ class ProgramPolicySupport(
             current.copy(
                 title = title,
                 place = if (place == null) current.place else place.trim().takeIf { it.isNotEmpty() },
-                startedAt = startedAt,
-                endedAt = endedAt,
+                startedAt = storedIfSameTime(startedAt, current.startedAt),
+                endedAt = storedIfSameTime(endedAt, current.endedAt),
                 category = category,
                 groupId = group,
                 policy = policy?.copy(groupId = group) ?: current.policy,
@@ -177,6 +178,20 @@ class ProgramPolicySupport(
         if (current.revision == Long.MAX_VALUE) conflict("프로그램 버전을 더 늘릴 수 없습니다.")
         return ProgramMutation(current, desired.copy(revision = current.revision + 1))
     }
+
+    // #183: 예전 "yyyy-MM-dd HH:mm" 저장값과 같은 시각이면 저장값을 유지해 표기만 다른 수정을 변경으로 보지 않는다.
+    private fun storedIfSameTime(
+        requested: String,
+        stored: String,
+    ): String =
+        if (runCatching {
+                requested.toProgramLocalDateTime() == stored.toProgramLocalDateTime()
+            }.getOrDefault(false)
+        ) {
+            stored
+        } else {
+            requested
+        }
 
     fun stage(
         expoId: String,
