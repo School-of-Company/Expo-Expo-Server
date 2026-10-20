@@ -27,6 +27,7 @@ class UpdateExpoServiceImpl(
         expoId: String,
         request: UpdateExpoRequest,
     ) {
+        request.validatePeriod()
         request.validatePreregisterCapacities()
         val uploadedBy =
             SecurityContextHolder.getContext().authentication?.name

@@ -24,6 +24,7 @@ class GetExpoPeriodServiceImpl(
             finishedDay = expo.finishedDay,
             participantPhoneVerificationRequired = expo.participantPhoneVerificationRequired,
             participantPhoneVerificationRevision = expo.participantPhoneVerificationRevision,
+            location = expo.location,
         )
     }
 }

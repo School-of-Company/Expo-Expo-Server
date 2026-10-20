@@ -7,8 +7,10 @@ import jakarta.validation.constraints.Positive
 import jakarta.validation.constraints.PositiveOrZero
 import jakarta.validation.constraints.Size
 import org.hibernate.validator.constraints.CodePointLength
+import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.global.exception.ExpectedException
 import java.time.LocalDate
 import java.time.LocalDateTime
 
@@ -50,6 +52,12 @@ data class UpdateExpoRequest(
     @field:Schema(description = "새 사전등록 회차의 교사·예비교사 외 대상 정원 기본값", example = "1000")
     val preregisterNonTeacherCapacity: Int? = null,
 ) {
+    fun validatePeriod() {
+        if (finishedDay.isBefore(startedDay)) {
+            throw ExpectedException(HttpStatus.BAD_REQUEST, "박람회 종료일은 시작일보다 빠를 수 없습니다.")
+        }
+    }
+
     fun validatePreregisterCapacities() = validateTargetCapacities(preregisterTeacherCapacity, preregisterNonTeacherCapacity)
 }
 

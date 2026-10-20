@@ -873,12 +873,13 @@ class ExpoApiPostgresHttpTests {
         val period = objectMapper.readTree(response.body())
 
         response.statusCode() shouldBe 200
-        period.size() shouldBe 5
+        period.size() shouldBe 6
         period.get("participantPhoneVerificationRequired").asBoolean() shouldBe true
         period.get("participantPhoneVerificationRevision").asLong() shouldBe 0L
         period.get("title").asString() shouldBe "2026 박람회"
         period.get("startedDay").asString() shouldBe "2026-09-24"
         period.get("finishedDay").asString() shouldBe "2026-09-25"
+        period.get("location").asString() shouldBe "서울"
         assertError(
             request("/internal/expo/not-found", "GET", authority = null, internalToken = "test-internal-token"),
             expectedStatus = 404,

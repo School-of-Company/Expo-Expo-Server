@@ -37,6 +37,7 @@ class CreateExpoServiceImpl(
                 request.addTrainingProRequestDto.map { ProgramType.TRAINING to it.policy }
         return requireNotNull(
             policies.creating(expoId, programs) {
+                request.validatePeriod()
                 request.validatePreregisterCapacities()
                 val expo =
                     Expo(

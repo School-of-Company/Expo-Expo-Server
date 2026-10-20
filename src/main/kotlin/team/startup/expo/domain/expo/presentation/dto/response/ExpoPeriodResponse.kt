@@ -13,4 +13,6 @@ data class ExpoPeriodResponse(
     val participantPhoneVerificationRequired: Boolean,
     @field:Schema(description = "참가자 전화번호 인증 설정 revision", example = "0", minimum = "0")
     val participantPhoneVerificationRevision: Long,
+    @field:Schema(description = "박람회 장소", example = "광주 김대중컨벤션센터", nullable = true)
+    val location: String? = null,
 )
