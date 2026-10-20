@@ -106,7 +106,7 @@ class ExpoController(
     ): ResponseEntity<ExpoDetailResponse> = ResponseEntity.ok(getExpoDetailService.execute(expoId))
 
     @GetMapping("/{expo_id}/public")
-    @Operation(summary = "참가자용 박람회 공개 조회", description = "로그인 없이 조회하며 제목·설명·장소·시작일·종료일만 반환합니다.")
+    @Operation(summary = "참가자용 박람회 공개 조회", description = "로그인 없이 조회하며 제목·설명·장소·시작일·종료일과 참가자 전화번호 인증 필요 여부만 반환합니다.")
     @ApiResponse(responseCode = "200", description = "처리 성공")
     @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
     fun getPublicExpo(

@@ -24,6 +24,7 @@ class GetPublicExpoServiceImpl(
             location = expo.location,
             startedDay = expo.startedDay,
             finishedDay = expo.finishedDay,
+            participantPhoneVerificationRequired = expo.participantPhoneVerificationRequired,
         )
     }
 }

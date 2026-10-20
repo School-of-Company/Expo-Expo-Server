@@ -228,9 +228,10 @@ class ExpoDtoContractTests(
                 coverImage = null,
                 x = "127.123",
                 y = "37.456",
+                participantPhoneVerificationRequired = false,
             ),
         ) shouldBe
-            "{\"title\":\"2026 박람회\",\"description\":\"설명\",\"startedDay\":\"2026-09-24\",\"finishedDay\":\"2026-09-25\",\"location\":\"서울\",\"coverImage\":null,\"x\":\"127.123\",\"y\":\"37.456\",\"preregisterTeacherCapacity\":null,\"preregisterNonTeacherCapacity\":null}"
+            "{\"title\":\"2026 박람회\",\"description\":\"설명\",\"startedDay\":\"2026-09-24\",\"finishedDay\":\"2026-09-25\",\"location\":\"서울\",\"coverImage\":null,\"x\":\"127.123\",\"y\":\"37.456\",\"preregisterTeacherCapacity\":null,\"preregisterNonTeacherCapacity\":null,\"participantPhoneVerificationRequired\":false}"
     }
 
     @Test
