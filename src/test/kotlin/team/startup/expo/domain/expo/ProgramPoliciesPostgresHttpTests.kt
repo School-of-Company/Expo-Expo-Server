@@ -97,6 +97,7 @@ class ProgramPoliciesPostgresHttpTests {
         supplierMapper = mapper
         lostResponse = false
         rejectChange = false
+        rejectBody = null
         beforeReply = null
         beforeFormReply = null
         wrongFormExpo = false
@@ -569,6 +570,27 @@ class ProgramPoliciesPostgresHttpTests {
         update(1, policy(capacity = 1, waiting = 0), revision = 2).statusCode() shouldBe 204
         update(1, policy(capacity = 4), revision = 1).statusCode() shouldBe 409
         request("/standard/1", "PATCH", body("standard", id = 1)).statusCode() shouldBe 400
+    }
+
+    @Test
+    fun `Application 409 reason code and message reach the admin and legacy rejections keep the fixed message`() {
+        create("standard")
+        rejectChange = true
+        rejectBody = """{"status":409,"code":"BELOW_WAITING_COUNT","message":"대기 인원보다 작게 줄일 수 없습니다."}"""
+        val forwarded = mapper.readTree(update(1, policy(capacity = 4)).also { it.statusCode() shouldBe 409 }.body())
+        forwarded.get("code").asString() shouldBe "BELOW_WAITING_COUNT"
+        forwarded.get("message").asString() shouldBe "대기 인원보다 작게 줄일 수 없습니다."
+        rejectBody = """{"status":409,"code":"APPLICATION_CONFLICT"}"""
+        val codeOnly = mapper.readTree(update(1, policy(capacity = 4)).body())
+        codeOnly.get("code").asString() shouldBe "APPLICATION_CONFLICT"
+        codeOnly.get("message").asString() shouldBe "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다."
+        listOf(null, """{"status":409,"message":"internal detail"}""", "not json").forEach { legacy ->
+            rejectBody = legacy
+            val response = mapper.readTree(update(1, policy(capacity = 4)).body())
+            response.get("message").asString() shouldBe "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다."
+            response.has("code") shouldBe false
+        }
+        list("standard")[0].get("revision").asLong() shouldBe 1L
     }
 
     @Test
@@ -1657,6 +1679,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var rejectChange = false
 
+        @Volatile private var rejectBody: String? = null
+
         @Volatile private var wrongFormExpo = false
 
         @Volatile private var unrestrictedForm = false
@@ -1721,7 +1745,13 @@ class ProgramPoliciesPostgresHttpTests {
                             beforeReply?.invoke()
                             if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
                             if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
-                            exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
+                            val reject = rejectBody?.takeIf { status == 409 }?.toByteArray()
+                            if (reject == null) {
+                                exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
+                            } else {
+                                exchange.sendResponseHeaders(status, reject.size.toLong())
+                                exchange.responseBody.write(reject)
+                            }
                         } else if (path.endsWith("/resolve")) {
                             val bytes = """{"participantId":42}""".toByteArray()
                             exchange.sendResponseHeaders(200, bytes.size.toLong())

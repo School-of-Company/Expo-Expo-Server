@@ -5,4 +5,5 @@ import org.springframework.http.HttpStatus
 class ExpectedException(
     val status: HttpStatus,
     override val message: String,
+    val code: String? = null,
 ) : RuntimeException(message)

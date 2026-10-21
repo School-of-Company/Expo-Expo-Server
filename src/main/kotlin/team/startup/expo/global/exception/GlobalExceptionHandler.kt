@@ -18,7 +18,9 @@ class GlobalExceptionHandler(
 ) : ResponseEntityExceptionHandler() {
     @ExceptionHandler(ExpectedException::class)
     fun handleExpectedException(exception: ExpectedException): ResponseEntity<ErrorResponse> =
-        errorResponse(exception.status, exception.message)
+        ResponseEntity
+            .status(exception.status)
+            .body(ErrorResponse(status = exception.status.value(), message = exception.message, code = exception.code))
 
     @ExceptionHandler(PessimisticLockingFailureException::class)
     fun handleLockTimeout(exception: PessimisticLockingFailureException): ResponseEntity<ErrorResponse> =

@@ -92,6 +92,7 @@ class PreregisterSessionPostgresHttpTests {
         pending.clear()
         histories.clear()
         forcedStatus = null
+        conflictBody = null
         responseHook = null
         reconciliationHook = { true }
         loseReconciliationResponse = false
@@ -501,6 +502,28 @@ class PreregisterSessionPostgresHttpTests {
         read(id).get("closed").asBoolean() shouldBe false
         calls.map { it.operation } shouldBe listOf("UPDATE", "DELETE", "UPDATE", "UPDATE")
         mapper.readTree(calls[2].body).get("definitionChanged").asBoolean() shouldBe false
+    }
+
+    @Test
+    fun `Application 409 사유 코드와 문구를 관리자에게 전달하고 코드가 없으면 기존 문구로 대체한다`() {
+        val id = create()
+        histories += id
+        val changed = updateBody(definition = DEFINITION.replace("2026-10-31T09:30", "2026-10-31T10:00"))
+        conflictBody = """{"status":409,"code":"TIME_LOCKED_BY_HISTORY","message":"신청 이력이 있는 회차의 시간은 바꿀 수 없습니다."}"""
+        val forwarded = request(path(id), "PATCH", changed)
+        forwarded.statusCode() shouldBe 409
+        mapper.readTree(forwarded.body()).let {
+            it.get("status").asInt() shouldBe 409
+            it.get("code").asString() shouldBe "TIME_LOCKED_BY_HISTORY"
+            it.get("message").asString() shouldBe "신청 이력이 있는 회차의 시간은 바꿀 수 없습니다."
+        }
+        listOf(null, """{"status":409,"message":"신청 이력이 있는 회차입니다."}""", "", "{").forEach { legacy ->
+            conflictBody = legacy
+            val response = mapper.readTree(request(path(id), "PATCH", changed).body())
+            response.get("message").asString() shouldBe "신청 이력 또는 진행 중인 변경으로 회차를 변경할 수 없습니다."
+            response.has("code") shouldBe false
+        }
+        read(id).get("revision").asLong() shouldBe 1L
     }
 
     @Test
@@ -1037,6 +1060,9 @@ class PreregisterSessionPostgresHttpTests {
         private var forcedStatus: Int? = null
 
         @Volatile
+        private var conflictBody: String? = null
+
+        @Volatile
         private var responseHook: ((ChangeCall, Int) -> Unit)? = null
 
         @Volatile
@@ -1098,7 +1124,13 @@ class PreregisterSessionPostgresHttpTests {
                             if (previous == null || previous == body) 204 else 409
                         }
                     responseHook?.invoke(call, status)
-                    exchange.sendResponseHeaders(status, -1)
+                    val conflict = conflictBody?.takeIf { status == 409 }?.toByteArray()
+                    if (conflict == null) {
+                        exchange.sendResponseHeaders(status, -1)
+                    } else {
+                        exchange.sendResponseHeaders(status, conflict.size.toLong())
+                        exchange.responseBody.use { it.write(conflict) }
+                    }
                     exchange.close()
                 }
                 executor = serverExecutor
