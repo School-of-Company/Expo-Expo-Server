@@ -61,9 +61,11 @@ class PreregisterSessionChangesClient(
         definitionChanged: Boolean,
         definition: PreregisterSessionResponse?,
     ) {
-        when (put("$expoId/preregister-sessions/$sessionId/changes/$nextRevision", Change(operation, definitionChanged, definition))) {
+        val response =
+            put("$expoId/preregister-sessions/$sessionId/changes/$nextRevision", Change(operation, definitionChanged, definition))
+        when (response.statusCode()) {
             204 -> Unit
-            409 -> throw ExpectedException(HttpStatus.CONFLICT, "신청 이력 또는 진행 중인 변경으로 회차를 변경할 수 없습니다.")
+            409 -> throw applicationConflict(mapper, response.body(), "신청 이력 또는 진행 중인 변경으로 회차를 변경할 수 없습니다.")
             else -> throw ExpectedException(HttpStatus.BAD_GATEWAY, "신청 서비스 회차 변경 응답을 확인할 수 없습니다.")
         }
     }
@@ -74,7 +76,7 @@ class PreregisterSessionChangesClient(
         sessionId: Long,
         expected: Int,
     ) {
-        when (put("$expoId/preregister-sessions/$sessionId/waiting-capacity", mapOf("expected" to expected))) {
+        when (put("$expoId/preregister-sessions/$sessionId/waiting-capacity", mapOf("expected" to expected)).statusCode()) {
             204 -> Unit
             404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "신청 서비스에서 회차를 찾지 못 했습니다.")
             409 -> throw ExpectedException(HttpStatus.CONFLICT, "대기 정원이 Expo 현재 값과 다르거나 회차 변경 확인 중입니다.")
@@ -85,7 +87,7 @@ class PreregisterSessionChangesClient(
     private fun put(
         path: String,
         body: Any,
-    ): Int {
+    ): HttpResponse<String> {
         if (applicationUrl.isBlank() || internalToken.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "회차 변경 내부 연동이 설정되지 않았습니다.")
         }
@@ -98,7 +100,7 @@ class PreregisterSessionChangesClient(
                     .header("X-Internal-Token", internalToken)
                     .PUT(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                     .build()
-            return http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode()
+            return http.send(request, HttpResponse.BodyHandlers.ofString())
         } catch (exception: InterruptedException) {
             Thread.currentThread().interrupt()
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "회차 변경 요청이 중단됐습니다.")

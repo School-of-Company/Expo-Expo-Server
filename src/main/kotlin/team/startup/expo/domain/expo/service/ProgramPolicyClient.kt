@@ -131,7 +131,7 @@ class ProgramPolicyClient(
             }
 
             409 -> {
-                throw ExpectedException(HttpStatus.CONFLICT, "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다.")
+                throw applicationConflict(mapper, response.body(), "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다.")
             }
 
             else -> {

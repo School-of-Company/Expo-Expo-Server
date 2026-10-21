@@ -2,6 +2,7 @@ package team.startup.expo.domain.expo
 
 import com.sun.net.httpserver.HttpServer
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -97,6 +98,7 @@ class ProgramPoliciesPostgresHttpTests {
         supplierMapper = mapper
         lostResponse = false
         rejectChange = false
+        rejectBody = null
         beforeReply = null
         beforeFormReply = null
         wrongFormExpo = false
@@ -569,6 +571,47 @@ class ProgramPoliciesPostgresHttpTests {
         update(1, policy(capacity = 1, waiting = 0), revision = 2).statusCode() shouldBe 204
         update(1, policy(capacity = 4), revision = 1).statusCode() shouldBe 409
         request("/standard/1", "PATCH", body("standard", id = 1)).statusCode() shouldBe 400
+    }
+
+    @Test
+    fun `Application 409 reason code and message reach the admin and legacy rejections keep the fixed message`() {
+        create("standard")
+        create("training")
+        val fallback = "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다."
+        val rejected =
+            mapOf(
+                "standard PATCH" to { update(1, policy(capacity = 4)) },
+                "standard DELETE" to { request("/standard/1", "DELETE") },
+                "training DELETE" to { request("/training/1", "DELETE") },
+                "expo PATCH" to {
+                    val training = body("training", policy = policy(form = TRAINING_FORM, capacity = 4), id = 1, revision = 1)
+                    request("/expo/$EXPO", "PATCH", expoBody(body("standard", policy(capacity = 4), 1, 1), training))
+                },
+                "expo PATCH removing a program" to
+                    { request("/expo/$EXPO", "PATCH", expoBody(body("standard", id = 1, revision = 1), null)) },
+            )
+        rejectChange = true
+        rejected.forEach { (route, send) ->
+            withClue(route) {
+                rejectBody = """{"status":409,"code":"BELOW_WAITING_COUNT","message":"대기 인원보다 작게 줄일 수 없습니다."}"""
+                val forwarded = send().also { it.statusCode() shouldBe 409 }.let { mapper.readTree(it.body()) }
+                forwarded.get("code").asString() shouldBe "BELOW_WAITING_COUNT"
+                forwarded.get("message").asString() shouldBe "대기 인원보다 작게 줄일 수 없습니다."
+                rejectBody = """{"status":409,"code":"APPLICATION_CONFLICT"}"""
+                val codeOnly = mapper.readTree(send().body())
+                codeOnly.get("code").asString() shouldBe "APPLICATION_CONFLICT"
+                codeOnly.get("message").asString() shouldBe fallback
+                listOf(null, """{"status":409,"message":"internal detail"}""", "not json").forEach { legacy ->
+                    rejectBody = legacy
+                    val response = send().also { it.statusCode() shouldBe 409 }.let { mapper.readTree(it.body()) }
+                    response.get("message").asString() shouldBe fallback
+                    response.has("code") shouldBe false
+                }
+            }
+        }
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        list("training")[0].get("revision").asLong() shouldBe 1L
+        pending() shouldBe 0L
     }
 
     @Test
@@ -1657,6 +1700,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var rejectChange = false
 
+        @Volatile private var rejectBody: String? = null
+
         @Volatile private var wrongFormExpo = false
 
         @Volatile private var unrestrictedForm = false
@@ -1721,7 +1766,13 @@ class ProgramPoliciesPostgresHttpTests {
                             beforeReply?.invoke()
                             if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
                             if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
-                            exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
+                            val reject = rejectBody?.takeIf { status == 409 }?.toByteArray()
+                            if (reject == null) {
+                                exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
+                            } else {
+                                exchange.sendResponseHeaders(status, reject.size.toLong())
+                                exchange.responseBody.write(reject)
+                            }
                         } else if (path.endsWith("/resolve")) {
                             val bytes = """{"participantId":42}""".toByteArray()
                             exchange.sendResponseHeaders(200, bytes.size.toLong())
