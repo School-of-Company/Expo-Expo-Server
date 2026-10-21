@@ -2,6 +2,7 @@ package team.startup.expo.domain.expo
 
 import com.sun.net.httpserver.HttpServer
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -575,22 +576,42 @@ class ProgramPoliciesPostgresHttpTests {
     @Test
     fun `Application 409 reason code and message reach the admin and legacy rejections keep the fixed message`() {
         create("standard")
+        create("training")
+        val fallback = "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다."
+        val rejected =
+            mapOf(
+                "standard PATCH" to { update(1, policy(capacity = 4)) },
+                "standard DELETE" to { request("/standard/1", "DELETE") },
+                "training DELETE" to { request("/training/1", "DELETE") },
+                "expo PATCH" to {
+                    val training = body("training", policy = policy(form = TRAINING_FORM, capacity = 4), id = 1, revision = 1)
+                    request("/expo/$EXPO", "PATCH", expoBody(body("standard", policy(capacity = 4), 1, 1), training))
+                },
+                "expo PATCH removing a program" to
+                    { request("/expo/$EXPO", "PATCH", expoBody(body("standard", id = 1, revision = 1), null)) },
+            )
         rejectChange = true
-        rejectBody = """{"status":409,"code":"BELOW_WAITING_COUNT","message":"대기 인원보다 작게 줄일 수 없습니다."}"""
-        val forwarded = mapper.readTree(update(1, policy(capacity = 4)).also { it.statusCode() shouldBe 409 }.body())
-        forwarded.get("code").asString() shouldBe "BELOW_WAITING_COUNT"
-        forwarded.get("message").asString() shouldBe "대기 인원보다 작게 줄일 수 없습니다."
-        rejectBody = """{"status":409,"code":"APPLICATION_CONFLICT"}"""
-        val codeOnly = mapper.readTree(update(1, policy(capacity = 4)).body())
-        codeOnly.get("code").asString() shouldBe "APPLICATION_CONFLICT"
-        codeOnly.get("message").asString() shouldBe "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다."
-        listOf(null, """{"status":409,"message":"internal detail"}""", "not json").forEach { legacy ->
-            rejectBody = legacy
-            val response = mapper.readTree(update(1, policy(capacity = 4)).body())
-            response.get("message").asString() shouldBe "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다."
-            response.has("code") shouldBe false
+        rejected.forEach { (route, send) ->
+            withClue(route) {
+                rejectBody = """{"status":409,"code":"BELOW_WAITING_COUNT","message":"대기 인원보다 작게 줄일 수 없습니다."}"""
+                val forwarded = send().also { it.statusCode() shouldBe 409 }.let { mapper.readTree(it.body()) }
+                forwarded.get("code").asString() shouldBe "BELOW_WAITING_COUNT"
+                forwarded.get("message").asString() shouldBe "대기 인원보다 작게 줄일 수 없습니다."
+                rejectBody = """{"status":409,"code":"APPLICATION_CONFLICT"}"""
+                val codeOnly = mapper.readTree(send().body())
+                codeOnly.get("code").asString() shouldBe "APPLICATION_CONFLICT"
+                codeOnly.get("message").asString() shouldBe fallback
+                listOf(null, """{"status":409,"message":"internal detail"}""", "not json").forEach { legacy ->
+                    rejectBody = legacy
+                    val response = send().also { it.statusCode() shouldBe 409 }.let { mapper.readTree(it.body()) }
+                    response.get("message").asString() shouldBe fallback
+                    response.has("code") shouldBe false
+                }
+            }
         }
         list("standard")[0].get("revision").asLong() shouldBe 1L
+        list("training")[0].get("revision").asLong() shouldBe 1L
+        pending() shouldBe 0L
     }
 
     @Test

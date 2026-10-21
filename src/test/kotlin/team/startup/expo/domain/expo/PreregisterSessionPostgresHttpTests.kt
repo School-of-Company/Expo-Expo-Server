@@ -509,20 +509,26 @@ class PreregisterSessionPostgresHttpTests {
         val id = create()
         histories += id
         val changed = updateBody(definition = DEFINITION.replace("2026-10-31T09:30", "2026-10-31T10:00"))
-        conflictBody = """{"status":409,"code":"TIME_LOCKED_BY_HISTORY","message":"신청 이력이 있는 회차의 시간은 바꿀 수 없습니다."}"""
-        val forwarded = request(path(id), "PATCH", changed)
-        forwarded.statusCode() shouldBe 409
-        mapper.readTree(forwarded.body()).let {
-            it.get("status").asInt() shouldBe 409
-            it.get("code").asString() shouldBe "TIME_LOCKED_BY_HISTORY"
-            it.get("message").asString() shouldBe "신청 이력이 있는 회차의 시간은 바꿀 수 없습니다."
-        }
-        listOf(null, """{"status":409,"message":"신청 이력이 있는 회차입니다."}""", "", "{").forEach { legacy ->
-            conflictBody = legacy
-            val response = mapper.readTree(request(path(id), "PATCH", changed).body())
-            response.get("message").asString() shouldBe "신청 이력 또는 진행 중인 변경으로 회차를 변경할 수 없습니다."
-            response.has("code") shouldBe false
-        }
+        mapOf("PATCH" to { request(path(id), "PATCH", changed) }, "DELETE" to { request(path(id) + "?revision=1", "DELETE") })
+            .forEach { (route, send) ->
+                withClue(route) {
+                    conflictBody = """{"status":409,"code":"TIME_LOCKED_BY_HISTORY","message":"신청 이력이 있는 회차의 시간은 바꿀 수 없습니다."}"""
+                    val forwarded = send()
+                    forwarded.statusCode() shouldBe 409
+                    mapper.readTree(forwarded.body()).let {
+                        it.get("status").asInt() shouldBe 409
+                        it.get("code").asString() shouldBe "TIME_LOCKED_BY_HISTORY"
+                        it.get("message").asString() shouldBe "신청 이력이 있는 회차의 시간은 바꿀 수 없습니다."
+                    }
+                    listOf(null, """{"status":409,"message":"신청 이력이 있는 회차입니다."}""", "", "{").forEach { legacy ->
+                        conflictBody = legacy
+                        val response = send().also { it.statusCode() shouldBe 409 }.let { mapper.readTree(it.body()) }
+                        response.get("message").asString() shouldBe "신청 이력 또는 진행 중인 변경으로 회차를 변경할 수 없습니다."
+                        response.has("code") shouldBe false
+                    }
+                }
+            }
+        calls.map { it.operation }.distinct() shouldBe listOf("UPDATE", "DELETE")
         read(id).get("revision").asLong() shouldBe 1L
     }
 
