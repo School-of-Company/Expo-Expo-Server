@@ -2,6 +2,7 @@ package team.startup.expo.domain.expo
 
 import com.sun.net.httpserver.HttpServer
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -97,6 +98,7 @@ class ProgramPoliciesPostgresHttpTests {
         supplierMapper = mapper
         lostResponse = false
         rejectChange = false
+        rejectBody = null
         beforeReply = null
         beforeFormReply = null
         wrongFormExpo = false
@@ -110,6 +112,8 @@ class ProgramPoliciesPostgresHttpTests {
         guardianSupport = true
         guardianPrepareSupport = true
         guardianSupportVersion = "1"
+        schoolValueSupport = true
+        schoolValuePrepareSupport = true
         guardianPrepareStatus = null
         promotionSupport = true
         calls.clear()
@@ -245,6 +249,40 @@ class ProgramPoliciesPostgresHttpTests {
         list("standard").size() shouldBe 0
         formQuestions = original.replace("초등학생", "초등학교 재학생").replace("학년", "학년 선택")
         request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
+    }
+
+    @Test
+    fun `guardian school value must be a school type option and needs an Application that enforces it`() {
+        formQuestions = guardianQuestions()
+        val withGuardian = guardianPolicy(guardianValue = "guardian")
+        formQuestions = guardianQuestions().replace(",\"guardian\":\"보호자\"", "")
+        request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 400
+        formQuestions = guardianQuestions()
+        // 구버전 Application은 모르는 필드를 무시하고 승인하므로 보호자 선택지 지원 헤더를 확인해야 저장한다.
+        schoolValueSupport = false
+        request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 503
+        list("standard").size() shouldBe 0
+        schoolValueSupport = true
+        request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 201
+        list("standard")[0]
+            .get("policy")
+            .get("guardianPolicy")
+            .get("guardianSchoolValue")
+            .asString() shouldBe "guardian"
+        // 필드가 없는 기존 정책은 보호자 선택지 지원 헤더 없이도 저장·조회된다.
+        schoolValueSupport = false
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
+        list("standard")[1].get("policy").get("guardianPolicy").has("guardianSchoolValue") shouldBe false
+        schoolValueSupport = true
+        schoolValuePrepareSupport = false
+        update(2, withGuardian).statusCode() shouldBe 503
+        schoolValuePrepareSupport = true
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("standard")[1]
+            .get("policy")
+            .get("guardianPolicy")
+            .get("guardianSchoolValue")
+            .asString() shouldBe "guardian"
     }
 
     @Test
@@ -569,6 +607,47 @@ class ProgramPoliciesPostgresHttpTests {
         update(1, policy(capacity = 1, waiting = 0), revision = 2).statusCode() shouldBe 204
         update(1, policy(capacity = 4), revision = 1).statusCode() shouldBe 409
         request("/standard/1", "PATCH", body("standard", id = 1)).statusCode() shouldBe 400
+    }
+
+    @Test
+    fun `Application 409 reason code and message reach the admin and legacy rejections keep the fixed message`() {
+        create("standard")
+        create("training")
+        val fallback = "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다."
+        val rejected =
+            mapOf(
+                "standard PATCH" to { update(1, policy(capacity = 4)) },
+                "standard DELETE" to { request("/standard/1", "DELETE") },
+                "training DELETE" to { request("/training/1", "DELETE") },
+                "expo PATCH" to {
+                    val training = body("training", policy = policy(form = TRAINING_FORM, capacity = 4), id = 1, revision = 1)
+                    request("/expo/$EXPO", "PATCH", expoBody(body("standard", policy(capacity = 4), 1, 1), training))
+                },
+                "expo PATCH removing a program" to
+                    { request("/expo/$EXPO", "PATCH", expoBody(body("standard", id = 1, revision = 1), null)) },
+            )
+        rejectChange = true
+        rejected.forEach { (route, send) ->
+            withClue(route) {
+                rejectBody = """{"status":409,"code":"BELOW_WAITING_COUNT","message":"대기 인원보다 작게 줄일 수 없습니다."}"""
+                val forwarded = send().also { it.statusCode() shouldBe 409 }.let { mapper.readTree(it.body()) }
+                forwarded.get("code").asString() shouldBe "BELOW_WAITING_COUNT"
+                forwarded.get("message").asString() shouldBe "대기 인원보다 작게 줄일 수 없습니다."
+                rejectBody = """{"status":409,"code":"APPLICATION_CONFLICT"}"""
+                val codeOnly = mapper.readTree(send().body())
+                codeOnly.get("code").asString() shouldBe "APPLICATION_CONFLICT"
+                codeOnly.get("message").asString() shouldBe fallback
+                listOf(null, """{"status":409,"message":"internal detail"}""", "not json").forEach { legacy ->
+                    rejectBody = legacy
+                    val response = send().also { it.statusCode() shouldBe 409 }.let { mapper.readTree(it.body()) }
+                    response.get("message").asString() shouldBe fallback
+                    response.has("code") shouldBe false
+                }
+            }
+        }
+        list("standard")[0].get("revision").asLong() shouldBe 1L
+        list("training")[0].get("revision").asLong() shouldBe 1L
+        pending() shouldBe 0L
     }
 
     @Test
@@ -1578,18 +1657,21 @@ class ProgramPoliciesPostgresHttpTests {
             ",\"groupId\":\"$it\""
         } ?: ""}}"""
 
-    private fun guardianPolicy(form: String = STANDARD_FORM): String =
+    private fun guardianPolicy(
+        form: String = STANDARD_FORM,
+        guardianValue: String? = null,
+    ): String =
         policy(form = form, occupation = "ELEMENTARY_STUDENT")
             .replace("[\"ELEMENTARY_STUDENT\"]", "[\"ELEMENTARY_STUDENT\",\"PARENT\"]")
-            .replace("\"closed\":false", "\"closed\":false,\"guardianPolicy\":${guardian()}")
+            .replace("\"closed\":false", "\"closed\":false,\"guardianPolicy\":${guardian(guardianValue)}")
 
-    private fun guardian(): String =
+    private fun guardian(guardianValue: String? = null): String =
         """{"formVersion":1,"schoolTypeQuestionId":101,"elementarySchoolValue":"primary","gradeQuestionId":102,"gradeValues":{${(1..6).joinToString {
             "\"g$it\":$it"
-        }}}}"""
+        }}}${guardianValue?.let { ",\"guardianSchoolValue\":\"$it\"" } ?: ""}}"""
 
     private fun guardianQuestions(): String =
-        """[{"id":101,"title":"학교급","formType":"DROPDOWN","requiredStatus":true,"jsonData":{"primary":"초등학생","other":"그 외"},"otherJson":null},{"id":102,"title":"학년","formType":"DROPDOWN","requiredStatus":true,"jsonData":{${(1..6).joinToString {
+        """[{"id":101,"title":"학교급","formType":"DROPDOWN","requiredStatus":true,"jsonData":{"primary":"초등학생","other":"그 외","guardian":"보호자"},"otherJson":null},{"id":102,"title":"학년","formType":"DROPDOWN","requiredStatus":true,"jsonData":{${(1..6).joinToString {
             "\"g$it\":\"${it}학년\""
         }}},"otherJson":{"conditional":{"parentIndex":0,"triggerValue":"primary"}}}]"""
 
@@ -1657,6 +1739,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var rejectChange = false
 
+        @Volatile private var rejectBody: String? = null
+
         @Volatile private var wrongFormExpo = false
 
         @Volatile private var unrestrictedForm = false
@@ -1678,6 +1762,10 @@ class ProgramPoliciesPostgresHttpTests {
         @Volatile private var guardianPrepareSupport = true
 
         @Volatile private var guardianSupportVersion = "1"
+
+        @Volatile private var schoolValueSupport = true
+
+        @Volatile private var schoolValuePrepareSupport = true
 
         @Volatile private var guardianPrepareStatus: Int? = null
 
@@ -1714,14 +1802,22 @@ class ProgramPoliciesPostgresHttpTests {
                         } else if (path.endsWith("/program-policy-capabilities")) {
                             exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "application-token"
                             if (guardianSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", guardianSupportVersion)
+                            if (schoolValueSupport) exchange.responseHeaders.add("X-Program-Guardian-School-Value-Version", "1")
                             if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (guardianSupport) 204 else 404, -1)
                         } else if (path.contains("/program-changes/")) {
                             val status = guardianPrepareStatus ?: if (rejectChange) 409 else prepare(path, body)
                             beforeReply?.invoke()
                             if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
+                            if (schoolValuePrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-School-Value-Version", "1")
                             if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
-                            exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
+                            val reject = rejectBody?.takeIf { status == 409 }?.toByteArray()
+                            if (reject == null) {
+                                exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
+                            } else {
+                                exchange.sendResponseHeaders(status, reject.size.toLong())
+                                exchange.responseBody.write(reject)
+                            }
                         } else if (path.endsWith("/resolve")) {
                             val bytes = """{"participantId":42}""".toByteArray()
                             exchange.sendResponseHeaders(200, bytes.size.toLong())

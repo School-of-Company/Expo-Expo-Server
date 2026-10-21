@@ -3,10 +3,14 @@ package team.startup.expo.domain.expo.service.impl
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
+import team.startup.expo.domain.expo.entity.AdminApplicationCancelAccess
+import team.startup.expo.domain.expo.entity.AdminApplicationPromoteAccess
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.repository.AdminApplicationCancelAccessRepository
+import team.startup.expo.domain.expo.repository.AdminApplicationPromoteAccessRepository
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.CreateExpoService
@@ -28,6 +32,8 @@ class CreateExpoServiceImpl(
     private val expoIdGenerator: ExpoIdGenerator,
     private val attachExpoImageService: AttachExpoImageService,
     private val history: AdminChangeHistoryRepository,
+    private val cancelAccess: AdminApplicationCancelAccessRepository,
+    private val promoteAccess: AdminApplicationPromoteAccessRepository,
 ) : CreateExpoService {
     override fun execute(request: CreateExpoRequest): CreateExpoResponse {
         // 폼 검증을 트랜잭션 밖에서 먼저 하도록 ID를 미리 만든다.
@@ -56,6 +62,11 @@ class CreateExpoServiceImpl(
                         preregisterNonTeacherCapacity = request.preregisterNonTeacherCapacity,
                     )
                 expoRepository.saveAndFlush(expo)
+                // 새 행사는 생성자에게만 신청 취소·수동 확정 권한을 준다. 다른 관리자는 명시 부여한다(docs/admin-application-cancel-access.md).
+                val creatorId =
+                    history.currentAdminId() ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+                cancelAccess.saveAndFlush(AdminApplicationCancelAccess(expo.id, creatorId))
+                promoteAccess.saveAndFlush(AdminApplicationPromoteAccess(expo.id, creatorId))
 
                 standardProgramRepository
                     .saveAllAndFlush(

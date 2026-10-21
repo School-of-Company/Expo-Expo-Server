@@ -90,6 +90,7 @@ class ProgramPolicyClient(
                 school.path("formType").asString() != "DROPDOWN" || !school.path("requiredStatus").asBoolean() ||
                 (schoolConditional != null && !schoolConditional.isMissingNode && !schoolConditional.isNull) ||
                 !school.path("jsonData").has(guardian.elementarySchoolValue) ||
+                (guardian.guardianSchoolValue != null && !school.path("jsonData").has(guardian.guardianSchoolValue)) ||
                 grade.path("formType").asString() != "DROPDOWN" || !grade.path("requiredStatus").asBoolean() ||
                 gradeKeys != guardian.gradeValues.keys ||
                 (conditional.hasNonNull("triggerValue") && conditional.hasNonNull("triggerValues")) ||
@@ -101,7 +102,7 @@ class ProgramPolicyClient(
         if (policy.guardianPolicy != null || policy.customizesPromotion()) {
             val support =
                 send(applicationUrl, applicationToken, "/internal/expos/${definition.expoId}/program-policy-capabilities", "GET", "")
-            if (policy.guardianPolicy != null) requireGuardianSupport(support)
+            policy.guardianPolicy?.let { requireGuardianSupport(support, it.guardianSchoolValue != null) }
             if (policy.customizesPromotion()) requirePromotionSupport(support)
         }
     }
@@ -114,6 +115,13 @@ class ProgramPolicyClient(
         val guarded = payload.mutations.filter { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }
         if (guarded.isEmpty()) return
         val guardianChange = guarded.any { it.previous?.policy?.guardianPolicy != null || it.definition?.policy?.guardianPolicy != null }
+        val schoolValueChange =
+            guarded.any {
+                it.definition
+                    ?.policy
+                    ?.guardianPolicy
+                    ?.guardianSchoolValue != null
+            }
         val promotionChange =
             guarded.any { it.previous?.policy?.customizesPromotion() == true || it.definition?.policy?.customizesPromotion() == true }
         val response =
@@ -126,25 +134,30 @@ class ProgramPolicyClient(
             )
         when (response.statusCode()) {
             204 -> {
-                if (guardianChange) requireGuardianSupport(response)
+                if (guardianChange) requireGuardianSupport(response, schoolValueChange)
                 if (promotionChange) requirePromotionSupport(response)
             }
 
             409 -> {
-                throw ExpectedException(HttpStatus.CONFLICT, "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다.")
+                throw applicationConflict(mapper, response.body(), "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다.")
             }
 
             else -> {
-                if (guardianChange && response.statusCode() in listOf(404, 405)) requireGuardianSupport(response)
+                if (guardianChange && response.statusCode() in listOf(404, 405)) requireGuardianSupport(response, schoolValueChange)
                 badResponse()
             }
         }
     }
 
-    // 구버전 Application이 새 정책을 무시한 채 승인하는 것을 막는다.
-    private fun requireGuardianSupport(response: HttpResponse<String>) {
+    // 구버전 Application이 새 정책을 무시한 채 승인하는 것을 막는다. guardianSchoolValue도 모르는 필드로 무시되므로 별도 헤더로 확인한다.
+    private fun requireGuardianSupport(
+        response: HttpResponse<String>,
+        schoolValue: Boolean,
+    ) {
+        val headers = response.headers()
         if (response.statusCode() !in listOf(200, 204) ||
-            response.headers().firstValue("X-Program-Guardian-Policy-Version").orElse("") != "1"
+            headers.firstValue("X-Program-Guardian-Policy-Version").orElse("") != "1" ||
+            (schoolValue && headers.firstValue("X-Program-Guardian-School-Value-Version").orElse("") != "1")
         ) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Application의 보호자 동반 정책 지원 확인이 필요합니다.")
         }
