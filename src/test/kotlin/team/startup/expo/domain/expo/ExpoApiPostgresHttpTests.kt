@@ -27,6 +27,8 @@ import team.startup.expo.domain.expo.entity.PreregisterSession
 import team.startup.expo.domain.expo.entity.PreregisterSessionChange
 import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
 import team.startup.expo.domain.expo.entity.ProgramChange
+import team.startup.expo.domain.expo.repository.AdminApplicationCancelAccessRepository
+import team.startup.expo.domain.expo.repository.AdminApplicationPromoteAccessRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
@@ -114,6 +116,12 @@ class ExpoApiPostgresHttpTests {
     private lateinit var trainingProgramRepository: TrainingProgramRepository
 
     @Autowired
+    private lateinit var cancelAccessRepository: AdminApplicationCancelAccessRepository
+
+    @Autowired
+    private lateinit var promoteAccessRepository: AdminApplicationPromoteAccessRepository
+
+    @Autowired
     private lateinit var preregisterSessionRepository: PreregisterSessionRepository
 
     @Autowired
@@ -198,6 +206,9 @@ class ExpoApiPostgresHttpTests {
             program.category.name shouldBe "ESSENTIAL"
             program.expo?.id shouldBe expoId
         }
+        // 생성자(JWT 주체 1)에게만 신청 취소·수동 확정 권한을 기본 부여한다.
+        cancelAccessRepository.findAll().map { it.expoId to it.adminId } shouldBe listOf(expoId to 1L)
+        promoteAccessRepository.findAll().map { it.expoId to it.adminId } shouldBe listOf(expoId to 1L)
     }
 
     @Test
@@ -322,6 +333,8 @@ class ExpoApiPostgresHttpTests {
             assertError(response, 500, "서버 오류가 발생했습니다.")
             expoRepository.count() shouldBe 0L
             imageRepository.findAll().single().status shouldBe ExpoImage.PENDING
+            cancelAccessRepository.count() shouldBe 0L
+            promoteAccessRepository.count() shouldBe 0L
         } finally {
             jdbcTemplate.execute("DROP TRIGGER IF EXISTS fail_image_attach ON tb_expo_image")
             jdbcTemplate.execute("DROP FUNCTION IF EXISTS fail_image_attach()")
