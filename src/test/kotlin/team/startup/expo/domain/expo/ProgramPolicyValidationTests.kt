@@ -13,7 +13,7 @@ import java.time.Instant
 import java.util.UUID
 
 class ProgramPolicyValidationTests {
-    private val guardian = ProgramGuardianPolicyRequest(1, 101, "primary", 102, (1..6).associate { "g$it" to it })
+    private val guardian = ProgramGuardianPolicyRequest(1, 101, "primary", 102, (1..6).associate { "g$it" to it }, "guardian")
     private val start = Instant.parse("2026-10-11T00:00:00Z")
     private val end = Instant.parse("2026-10-12T00:00:00Z")
     private val policy =
@@ -34,12 +34,16 @@ class ProgramPolicyValidationTests {
     @Test
     fun `guardian grade mapping covers exactly six grades without inferring labels`() {
         policy.copy(guardianPolicy = guardian).validate()
+        // 보호자 선택지 키가 없는 기존 정책도 그대로 읽고 다시 저장할 수 있다.
+        policy.copy(guardianPolicy = guardian.copy(guardianSchoolValue = null)).validate()
         listOf(
             guardian.copy(formVersion = 0),
             guardian.copy(schoolTypeQuestionId = 0),
             guardian.copy(gradeQuestionId = -1),
             guardian.copy(gradeQuestionId = guardian.schoolTypeQuestionId),
             guardian.copy(elementarySchoolValue = " "),
+            guardian.copy(guardianSchoolValue = " "),
+            guardian.copy(guardianSchoolValue = guardian.elementarySchoolValue),
             guardian.copy(gradeValues = guardian.gradeValues - "g6"),
             guardian.copy(gradeValues = guardian.gradeValues + ("g6" to 3)),
             guardian.copy(gradeValues = guardian.gradeValues + ("g6" to 7)),

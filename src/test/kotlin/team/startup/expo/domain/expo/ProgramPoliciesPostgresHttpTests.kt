@@ -110,6 +110,7 @@ class ProgramPoliciesPostgresHttpTests {
         guardianSupport = true
         guardianPrepareSupport = true
         guardianSupportVersion = "1"
+        guardianPrepareVersion = "1"
         guardianPrepareStatus = null
         promotionSupport = true
         calls.clear()
@@ -248,6 +249,37 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `guardian school value must be a school type option and needs an Application that enforces it`() {
+        formQuestions = guardianQuestions()
+        val withGuardian = guardianPolicy(guardianValue = "guardian")
+        formQuestions = guardianQuestions().replace(",\"guardian\":\"보호자\"", "")
+        request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 400
+        formQuestions = guardianQuestions()
+        // 구버전 Application은 모르는 필드를 무시하고 승인하므로 버전 2 지원을 확인해야 저장한다.
+        request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 503
+        list("standard").size() shouldBe 0
+        guardianSupportVersion = "2"
+        request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 201
+        list("standard")[0]
+            .get("policy")
+            .get("guardianPolicy")
+            .get("guardianSchoolValue")
+            .asString() shouldBe "guardian"
+        // 필드가 없는 기존 정책은 버전 2 Application에서도 저장·조회된다.
+        request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
+        list("standard")[1].get("policy").get("guardianPolicy").has("guardianSchoolValue") shouldBe false
+        guardianPrepareVersion = "1"
+        update(2, withGuardian).statusCode() shouldBe 503
+        guardianPrepareVersion = "2"
+        request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
+        list("standard")[1]
+            .get("policy")
+            .get("guardianPolicy")
+            .get("guardianSchoolValue")
+            .asString() shouldBe "guardian"
+    }
+
+    @Test
     fun `guardian ON and OFF changes preserve revisions and reject confirmed or waiting participants`() {
         formQuestions = guardianQuestions()
         create("standard")
@@ -276,7 +308,7 @@ class ProgramPoliciesPostgresHttpTests {
         request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
         list("standard").size() shouldBe 0
         guardianSupport = true
-        guardianSupportVersion = "2"
+        guardianSupportVersion = "3"
         request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
         list("standard").size() shouldBe 0
         guardianSupportVersion = "1"
@@ -1578,18 +1610,21 @@ class ProgramPoliciesPostgresHttpTests {
             ",\"groupId\":\"$it\""
         } ?: ""}}"""
 
-    private fun guardianPolicy(form: String = STANDARD_FORM): String =
+    private fun guardianPolicy(
+        form: String = STANDARD_FORM,
+        guardianValue: String? = null,
+    ): String =
         policy(form = form, occupation = "ELEMENTARY_STUDENT")
             .replace("[\"ELEMENTARY_STUDENT\"]", "[\"ELEMENTARY_STUDENT\",\"PARENT\"]")
-            .replace("\"closed\":false", "\"closed\":false,\"guardianPolicy\":${guardian()}")
+            .replace("\"closed\":false", "\"closed\":false,\"guardianPolicy\":${guardian(guardianValue)}")
 
-    private fun guardian(): String =
+    private fun guardian(guardianValue: String? = null): String =
         """{"formVersion":1,"schoolTypeQuestionId":101,"elementarySchoolValue":"primary","gradeQuestionId":102,"gradeValues":{${(1..6).joinToString {
             "\"g$it\":$it"
-        }}}}"""
+        }}}${guardianValue?.let { ",\"guardianSchoolValue\":\"$it\"" } ?: ""}}"""
 
     private fun guardianQuestions(): String =
-        """[{"id":101,"title":"학교급","formType":"DROPDOWN","requiredStatus":true,"jsonData":{"primary":"초등학생","other":"그 외"},"otherJson":null},{"id":102,"title":"학년","formType":"DROPDOWN","requiredStatus":true,"jsonData":{${(1..6).joinToString {
+        """[{"id":101,"title":"학교급","formType":"DROPDOWN","requiredStatus":true,"jsonData":{"primary":"초등학생","other":"그 외","guardian":"보호자"},"otherJson":null},{"id":102,"title":"학년","formType":"DROPDOWN","requiredStatus":true,"jsonData":{${(1..6).joinToString {
             "\"g$it\":\"${it}학년\""
         }}},"otherJson":{"conditional":{"parentIndex":0,"triggerValue":"primary"}}}]"""
 
@@ -1679,6 +1714,8 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var guardianSupportVersion = "1"
 
+        @Volatile private var guardianPrepareVersion = "1"
+
         @Volatile private var guardianPrepareStatus: Int? = null
 
         @Volatile private var promotionSupport = true
@@ -1719,7 +1756,12 @@ class ProgramPoliciesPostgresHttpTests {
                         } else if (path.contains("/program-changes/")) {
                             val status = guardianPrepareStatus ?: if (rejectChange) 409 else prepare(path, body)
                             beforeReply?.invoke()
-                            if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
+                            if (guardianPrepareSupport) {
+                                exchange.responseHeaders.add(
+                                    "X-Program-Guardian-Policy-Version",
+                                    guardianPrepareVersion,
+                                )
+                            }
                             if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
                         } else if (path.endsWith("/resolve")) {

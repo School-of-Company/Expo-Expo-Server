@@ -3,6 +3,7 @@ package team.startup.expo.domain.expo.service
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramGuardianPolicyRequest
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.global.exception.ExpectedException
@@ -90,6 +91,7 @@ class ProgramPolicyClient(
                 school.path("formType").asString() != "DROPDOWN" || !school.path("requiredStatus").asBoolean() ||
                 (schoolConditional != null && !schoolConditional.isMissingNode && !schoolConditional.isNull) ||
                 !school.path("jsonData").has(guardian.elementarySchoolValue) ||
+                (guardian.guardianSchoolValue != null && !school.path("jsonData").has(guardian.guardianSchoolValue)) ||
                 grade.path("formType").asString() != "DROPDOWN" || !grade.path("requiredStatus").asBoolean() ||
                 gradeKeys != guardian.gradeValues.keys ||
                 (conditional.hasNonNull("triggerValue") && conditional.hasNonNull("triggerValues")) ||
@@ -101,7 +103,7 @@ class ProgramPolicyClient(
         if (policy.guardianPolicy != null || policy.customizesPromotion()) {
             val support =
                 send(applicationUrl, applicationToken, "/internal/expos/${definition.expoId}/program-policy-capabilities", "GET", "")
-            if (policy.guardianPolicy != null) requireGuardianSupport(support)
+            policy.guardianPolicy?.let { requireGuardianSupport(support, guardianVersion(it)) }
             if (policy.customizesPromotion()) requirePromotionSupport(support)
         }
     }
@@ -114,6 +116,8 @@ class ProgramPolicyClient(
         val guarded = payload.mutations.filter { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }
         if (guarded.isEmpty()) return
         val guardianChange = guarded.any { it.previous?.policy?.guardianPolicy != null || it.definition?.policy?.guardianPolicy != null }
+        val guardianVersion =
+            guarded.mapNotNull { it.definition?.policy?.guardianPolicy }.maxOfOrNull(::guardianVersion) ?: 1
         val promotionChange =
             guarded.any { it.previous?.policy?.customizesPromotion() == true || it.definition?.policy?.customizesPromotion() == true }
         val response =
@@ -126,7 +130,7 @@ class ProgramPolicyClient(
             )
         when (response.statusCode()) {
             204 -> {
-                if (guardianChange) requireGuardianSupport(response)
+                if (guardianChange) requireGuardianSupport(response, guardianVersion)
                 if (promotionChange) requirePromotionSupport(response)
             }
 
@@ -135,17 +139,27 @@ class ProgramPolicyClient(
             }
 
             else -> {
-                if (guardianChange && response.statusCode() in listOf(404, 405)) requireGuardianSupport(response)
+                if (guardianChange && response.statusCode() in listOf(404, 405)) requireGuardianSupport(response, guardianVersion)
                 badResponse()
             }
         }
     }
 
+    // 버전 1 Application은 guardianSchoolValue를 모르는 필드로 무시하므로 이 필드가 있는 정책은 버전 2 지원을 요구한다.
+    private fun guardianVersion(policy: ProgramGuardianPolicyRequest): Int = if (policy.guardianSchoolValue == null) 1 else 2
+
     // 구버전 Application이 새 정책을 무시한 채 승인하는 것을 막는다.
-    private fun requireGuardianSupport(response: HttpResponse<String>) {
-        if (response.statusCode() !in listOf(200, 204) ||
-            response.headers().firstValue("X-Program-Guardian-Policy-Version").orElse("") != "1"
-        ) {
+    private fun requireGuardianSupport(
+        response: HttpResponse<String>,
+        required: Int,
+    ) {
+        val version =
+            response
+                .headers()
+                .firstValue("X-Program-Guardian-Policy-Version")
+                .orElse("")
+                .toIntOrNull()
+        if (response.statusCode() !in listOf(200, 204) || version == null || version !in required..2) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Application의 보호자 동반 정책 지원 확인이 필요합니다.")
         }
     }
