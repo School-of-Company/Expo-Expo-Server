@@ -110,7 +110,8 @@ class ProgramPoliciesPostgresHttpTests {
         guardianSupport = true
         guardianPrepareSupport = true
         guardianSupportVersion = "1"
-        guardianPrepareVersion = "1"
+        schoolValueSupport = true
+        schoolValuePrepareSupport = true
         guardianPrepareStatus = null
         promotionSupport = true
         calls.clear()
@@ -255,22 +256,25 @@ class ProgramPoliciesPostgresHttpTests {
         formQuestions = guardianQuestions().replace(",\"guardian\":\"보호자\"", "")
         request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 400
         formQuestions = guardianQuestions()
-        // 구버전 Application은 모르는 필드를 무시하고 승인하므로 버전 2 지원을 확인해야 저장한다.
+        // 구버전 Application은 모르는 필드를 무시하고 승인하므로 보호자 선택지 지원 헤더를 확인해야 저장한다.
+        schoolValueSupport = false
         request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 503
         list("standard").size() shouldBe 0
-        guardianSupportVersion = "2"
+        schoolValueSupport = true
         request("/standard/$EXPO", "POST", body("standard", withGuardian)).statusCode() shouldBe 201
         list("standard")[0]
             .get("policy")
             .get("guardianPolicy")
             .get("guardianSchoolValue")
             .asString() shouldBe "guardian"
-        // 필드가 없는 기존 정책은 버전 2 Application에서도 저장·조회된다.
+        // 필드가 없는 기존 정책은 보호자 선택지 지원 헤더 없이도 저장·조회된다.
+        schoolValueSupport = false
         request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 201
         list("standard")[1].get("policy").get("guardianPolicy").has("guardianSchoolValue") shouldBe false
-        guardianPrepareVersion = "1"
+        schoolValueSupport = true
+        schoolValuePrepareSupport = false
         update(2, withGuardian).statusCode() shouldBe 503
-        guardianPrepareVersion = "2"
+        schoolValuePrepareSupport = true
         request("/expo/$EXPO/program-changes/retry", "POST").statusCode() shouldBe 204
         list("standard")[1]
             .get("policy")
@@ -308,7 +312,7 @@ class ProgramPoliciesPostgresHttpTests {
         request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
         list("standard").size() shouldBe 0
         guardianSupport = true
-        guardianSupportVersion = "3"
+        guardianSupportVersion = "2"
         request("/standard/$EXPO", "POST", body("standard", guardianPolicy())).statusCode() shouldBe 503
         list("standard").size() shouldBe 0
         guardianSupportVersion = "1"
@@ -1714,7 +1718,9 @@ class ProgramPoliciesPostgresHttpTests {
 
         @Volatile private var guardianSupportVersion = "1"
 
-        @Volatile private var guardianPrepareVersion = "1"
+        @Volatile private var schoolValueSupport = true
+
+        @Volatile private var schoolValuePrepareSupport = true
 
         @Volatile private var guardianPrepareStatus: Int? = null
 
@@ -1751,17 +1757,14 @@ class ProgramPoliciesPostgresHttpTests {
                         } else if (path.endsWith("/program-policy-capabilities")) {
                             exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "application-token"
                             if (guardianSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", guardianSupportVersion)
+                            if (schoolValueSupport) exchange.responseHeaders.add("X-Program-Guardian-School-Value-Version", "1")
                             if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (guardianSupport) 204 else 404, -1)
                         } else if (path.contains("/program-changes/")) {
                             val status = guardianPrepareStatus ?: if (rejectChange) 409 else prepare(path, body)
                             beforeReply?.invoke()
-                            if (guardianPrepareSupport) {
-                                exchange.responseHeaders.add(
-                                    "X-Program-Guardian-Policy-Version",
-                                    guardianPrepareVersion,
-                                )
-                            }
+                            if (guardianPrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-Policy-Version", "1")
+                            if (schoolValuePrepareSupport) exchange.responseHeaders.add("X-Program-Guardian-School-Value-Version", "1")
                             if (promotionSupport) exchange.responseHeaders.add("X-Program-Promotion-Policy-Version", "1")
                             exchange.sendResponseHeaders(if (status == 204 && lostResponse) 503 else status, -1)
                         } else if (path.endsWith("/resolve")) {

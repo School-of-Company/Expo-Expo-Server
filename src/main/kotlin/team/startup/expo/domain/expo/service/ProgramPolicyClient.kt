@@ -3,7 +3,6 @@ package team.startup.expo.domain.expo.service
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
-import team.startup.expo.domain.expo.presentation.dto.request.ProgramGuardianPolicyRequest
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.global.exception.ExpectedException
@@ -103,7 +102,7 @@ class ProgramPolicyClient(
         if (policy.guardianPolicy != null || policy.customizesPromotion()) {
             val support =
                 send(applicationUrl, applicationToken, "/internal/expos/${definition.expoId}/program-policy-capabilities", "GET", "")
-            policy.guardianPolicy?.let { requireGuardianSupport(support, guardianVersion(it)) }
+            policy.guardianPolicy?.let { requireGuardianSupport(support, it.guardianSchoolValue != null) }
             if (policy.customizesPromotion()) requirePromotionSupport(support)
         }
     }
@@ -116,8 +115,13 @@ class ProgramPolicyClient(
         val guarded = payload.mutations.filter { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }
         if (guarded.isEmpty()) return
         val guardianChange = guarded.any { it.previous?.policy?.guardianPolicy != null || it.definition?.policy?.guardianPolicy != null }
-        val guardianVersion =
-            guarded.mapNotNull { it.definition?.policy?.guardianPolicy }.maxOfOrNull(::guardianVersion) ?: 1
+        val schoolValueChange =
+            guarded.any {
+                it.definition
+                    ?.policy
+                    ?.guardianPolicy
+                    ?.guardianSchoolValue != null
+            }
         val promotionChange =
             guarded.any { it.previous?.policy?.customizesPromotion() == true || it.definition?.policy?.customizesPromotion() == true }
         val response =
@@ -130,7 +134,7 @@ class ProgramPolicyClient(
             )
         when (response.statusCode()) {
             204 -> {
-                if (guardianChange) requireGuardianSupport(response, guardianVersion)
+                if (guardianChange) requireGuardianSupport(response, schoolValueChange)
                 if (promotionChange) requirePromotionSupport(response)
             }
 
@@ -139,27 +143,22 @@ class ProgramPolicyClient(
             }
 
             else -> {
-                if (guardianChange && response.statusCode() in listOf(404, 405)) requireGuardianSupport(response, guardianVersion)
+                if (guardianChange && response.statusCode() in listOf(404, 405)) requireGuardianSupport(response, schoolValueChange)
                 badResponse()
             }
         }
     }
 
-    // 버전 1 Application은 guardianSchoolValue를 모르는 필드로 무시하므로 이 필드가 있는 정책은 버전 2 지원을 요구한다.
-    private fun guardianVersion(policy: ProgramGuardianPolicyRequest): Int = if (policy.guardianSchoolValue == null) 1 else 2
-
-    // 구버전 Application이 새 정책을 무시한 채 승인하는 것을 막는다.
+    // 구버전 Application이 새 정책을 무시한 채 승인하는 것을 막는다. guardianSchoolValue도 모르는 필드로 무시되므로 별도 헤더로 확인한다.
     private fun requireGuardianSupport(
         response: HttpResponse<String>,
-        required: Int,
+        schoolValue: Boolean,
     ) {
-        val version =
-            response
-                .headers()
-                .firstValue("X-Program-Guardian-Policy-Version")
-                .orElse("")
-                .toIntOrNull()
-        if (response.statusCode() !in listOf(200, 204) || version == null || version !in required..2) {
+        val headers = response.headers()
+        if (response.statusCode() !in listOf(200, 204) ||
+            headers.firstValue("X-Program-Guardian-Policy-Version").orElse("") != "1" ||
+            (schoolValue && headers.firstValue("X-Program-Guardian-School-Value-Version").orElse("") != "1")
+        ) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Application의 보호자 동반 정책 지원 확인이 필요합니다.")
         }
     }
