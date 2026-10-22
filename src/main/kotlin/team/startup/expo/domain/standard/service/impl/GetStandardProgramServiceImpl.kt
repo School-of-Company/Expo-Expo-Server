@@ -10,6 +10,9 @@ import team.startup.expo.domain.standard.presentation.dto.response.StandardProgr
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.standard.service.GetStandardProgramService
 import team.startup.expo.global.exception.ExpectedException
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 
 @Service
 class GetStandardProgramServiceImpl(
@@ -33,12 +36,22 @@ class GetStandardProgramServiceImpl(
             id = requireNotNull(program.id),
             title = program.title,
             place = program.place,
-            startedAt = program.startedAt,
-            endedAt = program.endedAt,
+            startedAt = toInstant(program.startedAt),
+            endedAt = toInstant(program.endedAt),
             expoId = expoId,
             groupId = program.groupId,
             policy = policies.policy(program.policyJson),
             revision = program.revision,
         )
+    }
+
+    // 일반 프로그램 일정은 관리자 화면 입력(KST 지역 일시)을 문자열로 저장한다. 비어 있거나 읽을 수 없으면 null.
+    private fun toInstant(value: String?): Instant? =
+        value
+            ?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { LocalDateTime.parse(it.trim().replace(' ', 'T')).atZone(SEOUL).toInstant() }.getOrNull() }
+
+    private companion object {
+        val SEOUL: ZoneId = ZoneId.of("Asia/Seoul")
     }
 }
