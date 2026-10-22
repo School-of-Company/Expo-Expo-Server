@@ -75,6 +75,9 @@ class ProgramPoliciesPostgresHttpTests {
     private lateinit var transactions: TransactionTemplate
 
     @Autowired
+    private lateinit var forms: team.startup.expo.domain.expo.repository.ProgramFormChangeRepository
+
+    @Autowired
     private lateinit var standards: StandardProgramRepository
 
     @Autowired
@@ -1222,6 +1225,7 @@ class ProgramPoliciesPostgresHttpTests {
             val response = internal(formChange(form), "PUT", """{"kind":"UPDATE"}""")
             response.statusCode() shouldBe 409
             mapper.readTree(response.body()).get("message").asString() shouldBe "보호자 동반 정책에서 사용 중인 폼은 수정할 수 없습니다"
+            mapper.readTree(response.body()).get("code").asString() shouldBe "PROGRAM_FORM_GUARDIAN_POLICY_IN_USE"
         }
         jdbc.queryForObject("SELECT count(*) FROM tb_program_form_change", Long::class.java) shouldBe 0L
     }
@@ -1237,7 +1241,9 @@ class ProgramPoliciesPostgresHttpTests {
             first.statusCode() shouldBe 200
             mapper.readTree(first.body()).get("referenced").asBoolean() shouldBe (form == STANDARD_FORM)
             internal(path, "PUT", """{"kind":"UPDATE"}""").body() shouldBe first.body()
-            internal(formChange(form), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 409
+            val concurrent = internal(formChange(form), "PUT", """{"kind":"UPDATE"}""")
+            concurrent.statusCode() shouldBe 409
+            mapper.readTree(concurrent.body()).get("code").asString() shouldBe "PROGRAM_FORM_CHANGE_IN_PROGRESS"
             internal(path, "DELETE").statusCode() shouldBe 204
             internal(path, "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 409
         }
@@ -1345,7 +1351,7 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
-    fun `expired reservations cannot be renewed and keep connections blocked until release`() {
+    fun `expired reservations cannot be renewed but no longer block the form`() {
         val id = UUID.randomUUID().toString()
         val path = formChange(id = id)
         val response = internal(path, "PUT", """{"kind":"DELETE"}""")
@@ -1356,15 +1362,62 @@ class ProgramPoliciesPostgresHttpTests {
                 .between(java.time.Instant.now(), expires)
                 .seconds in 290..300
         ) shouldBe true
+        val other = internal(formChange(), "PUT", """{"kind":"DELETE"}""")
+        other.statusCode() shouldBe 409
+        mapper.readTree(other.body()).get("code").asString() shouldBe "PROGRAM_FORM_CHANGE_IN_PROGRESS"
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 409
+        expire(id)
+        internal(path, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 201
+        val next = formChange()
+        internal(next, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
+        internal(next, "DELETE").statusCode() shouldBe 204
+        // 만료된 예약은 새 예약이 들어올 때 해제 처리돼 폼당 미해제 행은 하나뿐이다.
+        val fresh = formChange()
+        internal(fresh, "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 200
+        jdbc.queryForObject(
+            "SELECT released FROM tb_program_form_change WHERE change_id=?",
+            Boolean::class.java,
+            UUID.fromString(id),
+        ) shouldBe
+            true
+        jdbc.queryForObject("SELECT count(*) FROM tb_program_form_change WHERE NOT released", Long::class.java) shouldBe 1L
+    }
+
+    @Test
+    fun `an expired unreleased reservation lets another change reserve and a late release stays harmless`() {
+        val expired = UUID.randomUUID().toString()
+        internal(formChange(id = expired), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 200
+        expire(expired)
+        val next = formChange()
+        internal(next, "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 200
+        internal(formChange(), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 409
+        internal(formChange(id = expired), "DELETE").statusCode() shouldBe 204
+        internal(formChange(), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 409
+        internal(next, "DELETE").statusCode() shouldBe 204
+        internal(formChange(), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 200
+    }
+
+    @Test
+    fun `released reservations never block and form version ignores expired unreleased ones`() {
+        val id = UUID.randomUUID().toString()
+        internal(formChange(id = id), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 200
+        forms.version(UUID.fromString(STANDARD_FORM)) shouldBe null
+        forms.blocked(UUID.fromString(STANDARD_FORM)) shouldBe true
+        expire(id)
+        forms.version(UUID.fromString(STANDARD_FORM)) shouldBe 1L
+        forms.blocked(UUID.fromString(STANDARD_FORM)) shouldBe false
+        internal(formChange(id = id), "DELETE").statusCode() shouldBe 204
+        forms.version(UUID.fromString(STANDARD_FORM)) shouldBe 1L
+        forms.blocked(UUID.fromString(STANDARD_FORM)) shouldBe false
+        internal(formChange(), "PUT", """{"kind":"UPDATE"}""").statusCode() shouldBe 200
+    }
+
+    private fun expire(changeId: String) {
         jdbc.update(
             "UPDATE tb_program_form_change SET expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE change_id=?",
-            UUID.fromString(id),
+            UUID.fromString(changeId),
         )
-        internal(path, "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
-        internal(formChange(), "PUT", """{"kind":"DELETE"}""").statusCode() shouldBe 409
-        request("/standard/$EXPO", "POST", body("standard")).statusCode() shouldBe 409
-        internal(path, "DELETE").statusCode() shouldBe 204
-        create("standard")
     }
 
     @Test
