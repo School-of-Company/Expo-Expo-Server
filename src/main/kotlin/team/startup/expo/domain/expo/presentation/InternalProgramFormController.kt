@@ -39,8 +39,9 @@ class InternalProgramFormController(
     @Operation(
         summary = "프로그램 폼 삭제·기간 축소·수정 예약",
         description =
-            "UPDATE는 기간 없이 요청하며 보호자 정책이 참조하면 409입니다. " +
-                "예약은 5분간 유효하며 같은 키·본문은 동일 응답을 반환합니다. 만료 후에도 명시적 해제 전에는 연결을 차단합니다. 충돌은 409입니다.",
+            "UPDATE는 기간 없이 요청하며 보호자 정책이 참조하면 409(code=PROGRAM_FORM_GUARDIAN_POLICY_IN_USE)입니다. " +
+                "예약은 5분간 유효하며 같은 키·본문은 동일 응답을 반환합니다. 해제되지 않은 유효 예약이 있으면 다른 키의 예약·연결은 " +
+                "409(code=PROGRAM_FORM_CHANGE_IN_PROGRESS)이고, 만료된 예약은 해제되지 않았어도 더 이상 차단하지 않습니다. 그 밖의 충돌도 409입니다.",
     )
     @ApiResponse(responseCode = "200", description = "처리 성공")
     @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
