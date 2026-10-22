@@ -157,6 +157,26 @@ class ProgramPoliciesPostgresHttpTests {
     }
 
     @Test
+    fun `standard program internal lookup returns the KST schedule as UTC instants and null when there is none`() {
+        create("standard")
+
+        fun lookup() = mapper.readTree(internal("/internal/expo/$EXPO/standard-programs/1", "GET", "").body())
+
+        lookup().get("startedAt").asString() shouldBe "2026-10-13T00:00:00Z"
+        lookup().get("endedAt").asString() shouldBe "2026-10-13T01:00:00Z"
+
+        jdbc.update("UPDATE tb_standard_program SET started_at = '2026-10-13 09:00', ended_at = '2026-10-14T10:30' WHERE id = 1")
+        lookup().get("startedAt").asString() shouldBe "2026-10-13T00:00:00Z"
+        lookup().get("endedAt").asString() shouldBe "2026-10-14T01:30:00Z"
+
+        jdbc.update("UPDATE tb_standard_program SET started_at = '', ended_at = 'invalid' WHERE id = 1")
+        val empty = lookup()
+        empty.get("id").asLong() shouldBe 1L
+        empty.get("startedAt").isNull shouldBe true
+        empty.get("endedAt").isNull shouldBe true
+    }
+
+    @Test
     fun `auto promotion settings round trip only when customized and require Application support`() {
         val autoEnd = policy().replace("\"closed\":false", "\"closed\":false,\"autoPromotionEndedAt\":\"2026-10-11T12:00:00Z\"")
         val manualOnly = policy().replace("\"closed\":false", "\"closed\":false,\"autoPromotionEnabled\":false")
