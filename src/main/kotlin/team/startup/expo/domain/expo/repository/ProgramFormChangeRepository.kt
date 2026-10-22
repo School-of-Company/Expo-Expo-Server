@@ -89,18 +89,27 @@ class ProgramFormChangeRepository(
                 changeId,
             ).singleOrNull()
 
+    // 해제되지 않았고 만료 전인 예약만 폼을 막는다. 해제 요청이 유실돼 만료된 예약은 막지 않는다(#197).
     fun blocked(formId: UUID): Boolean =
         jdbc.queryForObject(
-            "SELECT EXISTS(SELECT 1 FROM tb_program_form_change WHERE form_id=? AND NOT released)",
+            "SELECT EXISTS(SELECT 1 FROM tb_program_form_change WHERE form_id=? AND NOT released AND expires_at > clock_timestamp())",
             Boolean::class.java,
             formId,
         )!!
 
-    // 해제되지 않은 변경이 있으면 null, 없으면 지금까지의 변경 행 수
+    // blocked와 같은 기준으로, 해제되지 않았고 만료 전인 변경이 있으면 null, 없으면 지금까지의 변경 행 수
     fun version(formId: UUID): Long? =
         jdbc.queryForObject(
-            "SELECT CASE WHEN bool_or(NOT released) THEN NULL ELSE count(*) END FROM tb_program_form_change WHERE form_id=?",
+            "SELECT CASE WHEN bool_or(NOT released AND expires_at > clock_timestamp()) THEN NULL ELSE count(*) END FROM tb_program_form_change WHERE form_id=?",
             Long::class.javaObjectType,
+            formId,
+        )
+
+    // 만료됐지만 해제되지 않은 예약을 해제 처리한다. 폼당 미해제 행은 하나만 허용(ux_program_form_active_change)하므로 새 예약 전에 호출한다.
+    @Transactional(propagation = Propagation.MANDATORY)
+    fun releaseExpired(formId: UUID): Int =
+        jdbc.update(
+            "UPDATE tb_program_form_change SET released=TRUE WHERE form_id=? AND NOT released AND expires_at <= clock_timestamp()",
             formId,
         )
 

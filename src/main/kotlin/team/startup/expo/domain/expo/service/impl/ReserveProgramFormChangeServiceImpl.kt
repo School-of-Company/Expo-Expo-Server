@@ -31,11 +31,12 @@ class ReserveProgramFormChangeServiceImpl(
             if (receipt.released || !forms.now().isBefore(requireNotNull(receipt.expiresAt))) conflict("해제되거나 만료된 폼 변경 예약입니다.")
             return mapper.readValue(requireNotNull(receipt.response), ProgramFormChangeResponse::class.java)
         }
-        if (forms.blocked(formId)) conflict("진행 중이거나 복구가 필요한 폼 변경이 있습니다.")
+        if (forms.blocked(formId)) conflict("진행 중인 폼 변경이 있습니다.", IN_PROGRESS)
+        forms.releaseExpired(formId)
         val usage = forms.usage(formId)
         when (request.kind) {
             ProgramFormChangeKind.UPDATE -> {
-                if (forms.guardianReferenced(formId)) conflict("보호자 동반 정책에서 사용 중인 폼은 수정할 수 없습니다")
+                if (forms.guardianReferenced(formId)) conflict("보호자 동반 정책에서 사용 중인 폼은 수정할 수 없습니다", GUARDIAN_POLICY_IN_USE)
             }
 
             ProgramFormChangeKind.DELETE -> {
@@ -66,5 +67,14 @@ class ReserveProgramFormChangeServiceImpl(
         return response
     }
 
-    private fun conflict(message: String): Nothing = throw ExpectedException(HttpStatus.CONFLICT, message)
+    private fun conflict(
+        message: String,
+        code: String? = null,
+    ): Nothing = throw ExpectedException(HttpStatus.CONFLICT, message, code)
+
+    companion object {
+        // Form 서비스와 맞춘 계약 값이다. 이름을 바꾸지 않는다.
+        const val IN_PROGRESS = "PROGRAM_FORM_CHANGE_IN_PROGRESS"
+        const val GUARDIAN_POLICY_IN_USE = "PROGRAM_FORM_GUARDIAN_POLICY_IN_USE"
+    }
 }
