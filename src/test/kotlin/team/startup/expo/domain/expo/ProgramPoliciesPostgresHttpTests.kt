@@ -159,6 +159,7 @@ class ProgramPoliciesPostgresHttpTests {
     @Test
     fun `standard program internal lookup returns the KST schedule as UTC instants and null when there is none`() {
         create("standard")
+
         fun lookup() = mapper.readTree(internal("/internal/expo/$EXPO/standard-programs/1", "GET", "").body())
 
         lookup().get("startedAt").asString() shouldBe "2026-10-13T00:00:00Z"
