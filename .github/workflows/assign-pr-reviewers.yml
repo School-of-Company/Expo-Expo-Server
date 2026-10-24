@@ -14,9 +14,13 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // GitHub rejects a review request to the PR author, so leave the author out.
+            const author = context.payload.pull_request.user.login;
+            const reviewers = ['suuuuuuminnnnnn', 'jyx-07'].filter((login) => login !== author);
+            if (reviewers.length === 0) return;
             await github.rest.pulls.requestReviewers({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.payload.pull_request.number,
-              reviewers: ['suuuuuuminnnnnn', 'jyx-07'],
+              reviewers,
             });
