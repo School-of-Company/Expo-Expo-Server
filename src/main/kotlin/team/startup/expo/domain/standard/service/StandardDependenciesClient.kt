@@ -4,6 +4,8 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import team.startup.expo.global.attendance.ProgramAttendanceClient
+import team.startup.expo.global.client.Downstream
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -21,6 +23,7 @@ class StandardDependenciesClient(
     @Value("\${APPLICATION_INTERNAL_TOKEN:}") private val applicationToken: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
+    private val breakers: DownstreamCircuitBreakers,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -29,7 +32,13 @@ class StandardDependenciesClient(
         phoneNumber: String,
     ): Long {
         val response =
-            post(userServiceUrl, userToken, "/internal/standard-participants/resolve", ResolveParticipantRequest(expoId, phoneNumber))
+            post(
+                Downstream.USER,
+                userServiceUrl,
+                userToken,
+                "/internal/standard-participants/resolve",
+                ResolveParticipantRequest(expoId, phoneNumber),
+            )
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "행사 참가자를 찾지 못 했습니다.")
         if (response.statusCode() != 200) badResponse("User")
         val participantId = decode(response.body(), ResolveParticipantResponse::class.java).participantId
@@ -42,7 +51,13 @@ class StandardDependenciesClient(
         participantIds: List<Long>,
     ): List<ParticipantName> {
         val response =
-            post(userServiceUrl, userToken, "/internal/standard-participants/names", ParticipantNamesRequest(expoId, participantIds))
+            post(
+                Downstream.USER,
+                userServiceUrl,
+                userToken,
+                "/internal/standard-participants/names",
+                ParticipantNamesRequest(expoId, participantIds),
+            )
         if (response.statusCode() != 200) badResponse("User")
         return decode(response.body(), Array<ParticipantName>::class.java).toList()
     }
@@ -57,7 +72,15 @@ class StandardDependenciesClient(
                 participant = ParticipantReference(participantId, expoId),
                 programs = programIds.map { ProgramReference(it, expoId) },
             )
-        when (post(applicationServiceUrl, applicationToken, "/internal/standard-program-applications", body).statusCode()) {
+        when (
+            post(
+                Downstream.APPLICATION,
+                applicationServiceUrl,
+                applicationToken,
+                "/internal/standard-program-applications",
+                body,
+            ).statusCode()
+        ) {
             201 -> Unit
             400 -> throw ExpectedException(HttpStatus.BAD_REQUEST, "일반 프로그램 신청 정보가 올바르지 않습니다.")
             404 -> throw ExpectedException(HttpStatus.NOT_FOUND, "일반 프로그램을 찾지 못 했습니다.")
@@ -67,14 +90,25 @@ class StandardDependenciesClient(
     }
 
     fun applications(programId: Long): List<ProgramApplication> {
-        val response = get(applicationServiceUrl, applicationToken, "/internal/standard-program-applications/program/$programId")
+        val response =
+            get(
+                Downstream.APPLICATION,
+                applicationServiceUrl,
+                applicationToken,
+                "/internal/standard-program-applications/program/$programId",
+            )
         if (response.statusCode() != 200) badResponse("Application")
         return decode(response.body(), Array<ProgramApplication>::class.java).toList()
     }
 
     fun deleteApplications(programId: Long) {
         attendances.requireConfiguration()
-        if (delete(applicationServiceUrl, applicationToken, "/internal/standard-program-applications/program/$programId").statusCode() !=
+        if (delete(
+                Downstream.APPLICATION,
+                applicationServiceUrl,
+                applicationToken,
+                "/internal/standard-program-applications/program/$programId",
+            ).statusCode() !=
             204
         ) {
             badResponse("Application")
@@ -83,12 +117,14 @@ class StandardDependenciesClient(
     }
 
     private fun post(
+        downstream: Downstream,
         baseUrl: String,
         token: String,
         path: String,
         body: Any,
     ): HttpResponse<String> =
         send(
+            downstream,
             baseUrl,
             token,
             path,
@@ -97,18 +133,21 @@ class StandardDependenciesClient(
         )
 
     private fun get(
+        downstream: Downstream,
         baseUrl: String,
         token: String,
         path: String,
-    ): HttpResponse<String> = send(baseUrl, token, path, "GET", HttpRequest.BodyPublishers.noBody())
+    ): HttpResponse<String> = send(downstream, baseUrl, token, path, "GET", HttpRequest.BodyPublishers.noBody())
 
     private fun delete(
+        downstream: Downstream,
         baseUrl: String,
         token: String,
         path: String,
-    ): HttpResponse<String> = send(baseUrl, token, path, "DELETE", HttpRequest.BodyPublishers.noBody())
+    ): HttpResponse<String> = send(downstream, baseUrl, token, path, "DELETE", HttpRequest.BodyPublishers.noBody())
 
     private fun send(
+        downstream: Downstream,
         baseUrl: String,
         token: String,
         path: String,
@@ -127,7 +166,7 @@ class StandardDependenciesClient(
                     .header("X-Internal-Token", token)
                     .method(method, body)
                     .build()
-            return http.send(request, HttpResponse.BodyHandlers.ofString())
+            return breakers.send(downstream, http, request, HttpResponse.BodyHandlers.ofString(), idempotent = method == "GET")
         } catch (exception: InterruptedException) {
             Thread.currentThread().interrupt()
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "일반 프로그램 내부 연동이 중단됐습니다.")

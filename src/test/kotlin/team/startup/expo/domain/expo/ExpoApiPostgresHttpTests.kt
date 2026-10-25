@@ -136,10 +136,14 @@ class ExpoApiPostgresHttpTests {
     @Autowired
     private lateinit var entityManagerFactory: EntityManagerFactory
 
+    @Autowired
+    private lateinit var breakers: team.startup.expo.global.client.DownstreamCircuitBreakers
+
     private val httpClient = HttpClient.newHttpClient()
 
     @BeforeEach
     fun clearTables() {
+        breakers.resetAll()
         programDeletionCalls.clear()
         attendanceDeletionCalls.clear()
         remoteAttendances.clear()

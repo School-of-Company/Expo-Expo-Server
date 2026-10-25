@@ -5,6 +5,8 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
+import team.startup.expo.global.client.Downstream
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
@@ -24,12 +26,13 @@ class ProgramPolicyClient(
     @Value("\${expo.form-service-url:}") private val formUrl: String,
     @Value("\${FORM_INTERNAL_TOKEN:}") private val formToken: String,
     private val mapper: ObjectMapper,
+    private val breakers: DownstreamCircuitBreakers,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
     fun validateForm(definition: ProgramDefinition) {
         val policy = definition.policy ?: return
-        val response = send(formUrl, formToken, "/internal/forms/by-id/${policy.formId}", "GET", "")
+        val response = send(Downstream.FORM, formUrl, formToken, "/internal/forms/by-id/${policy.formId}", "GET", "")
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "프로그램 폼을 찾지 못 했습니다.")
         if (response.statusCode() != 200) badResponse()
         val form =
@@ -101,7 +104,14 @@ class ProgramPolicyClient(
         }
         if (policy.guardianPolicy != null || policy.customizesPromotion()) {
             val support =
-                send(applicationUrl, applicationToken, "/internal/expos/${definition.expoId}/program-policy-capabilities", "GET", "")
+                send(
+                    Downstream.APPLICATION,
+                    applicationUrl,
+                    applicationToken,
+                    "/internal/expos/${definition.expoId}/program-policy-capabilities",
+                    "GET",
+                    "",
+                )
             policy.guardianPolicy?.let { requireGuardianSupport(support, it.guardianSchoolValue != null) }
             if (policy.customizesPromotion()) requirePromotionSupport(support)
         }
@@ -126,6 +136,7 @@ class ProgramPolicyClient(
             guarded.any { it.previous?.policy?.customizesPromotion() == true || it.definition?.policy?.customizesPromotion() == true }
         val response =
             send(
+                Downstream.APPLICATION,
                 applicationUrl,
                 applicationToken,
                 "/internal/expos/$expoId/program-changes/$changeId${if (guardianChange) "/guardian-policy" else ""}",
@@ -173,6 +184,7 @@ class ProgramPolicyClient(
     }
 
     private fun send(
+        downstream: Downstream,
         base: String,
         token: String,
         path: String,
@@ -191,7 +203,7 @@ class ProgramPolicyClient(
                     .header("X-Internal-Token", token)
                     .method(method, if (body.isEmpty()) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofString(body))
                     .build()
-            return http.send(request, HttpResponse.BodyHandlers.ofString())
+            return breakers.send(downstream, http, request, HttpResponse.BodyHandlers.ofString(), idempotent = method == "GET")
         } catch (exception: InterruptedException) {
             Thread.currentThread().interrupt()
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "프로그램 정책 연동이 중단됐습니다.")

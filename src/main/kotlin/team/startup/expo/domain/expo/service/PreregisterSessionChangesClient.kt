@@ -4,6 +4,8 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import team.startup.expo.domain.expo.presentation.dto.response.PreregisterSessionResponse
+import team.startup.expo.global.client.Downstream
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -18,6 +20,7 @@ class PreregisterSessionChangesClient(
     @Value("\${expo.standard.application-service-url:}") private val applicationUrl: String,
     @Value("\${APPLICATION_INTERNAL_TOKEN:}") private val internalToken: String,
     private val mapper: ObjectMapper,
+    private val breakers: DownstreamCircuitBreakers,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -37,7 +40,7 @@ class PreregisterSessionChangesClient(
                     .header("X-Internal-Token", internalToken)
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
-            val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+            val response = breakers.send(Downstream.APPLICATION, http, request, HttpResponse.BodyHandlers.ofString(), idempotent = false)
             if (response.statusCode() == 409 || (response.statusCode() == 200 && response.body().trim() == "false")) {
                 throw ExpectedException(HttpStatus.CONFLICT, "회차 변경 확인이 완료되지 않았습니다. 변경 재시도를 실행해 주세요.")
             }
@@ -100,7 +103,7 @@ class PreregisterSessionChangesClient(
                     .header("X-Internal-Token", internalToken)
                     .PUT(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                     .build()
-            return http.send(request, HttpResponse.BodyHandlers.ofString())
+            return breakers.send(Downstream.APPLICATION, http, request, HttpResponse.BodyHandlers.ofString(), idempotent = false)
         } catch (exception: InterruptedException) {
             Thread.currentThread().interrupt()
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "회차 변경 요청이 중단됐습니다.")

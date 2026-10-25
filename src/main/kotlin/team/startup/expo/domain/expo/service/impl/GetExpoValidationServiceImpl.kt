@@ -8,6 +8,8 @@ import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationResponse
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.GetExpoValidationService
+import team.startup.expo.global.client.Downstream
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import java.io.IOException
 import java.net.URI
@@ -23,6 +25,7 @@ import java.util.concurrent.Executors
 class GetExpoValidationServiceImpl(
     private val expoRepository: ExpoRepository,
     @Value("\${expo.form-service-url:}") private val formServiceUrl: String,
+    private val breakers: DownstreamCircuitBreakers,
 ) : GetExpoValidationService {
     private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
     private val lookupExecutor = Executors.newFixedThreadPool(8)
@@ -85,7 +88,16 @@ class GetExpoValidationServiceImpl(
                     .timeout(Duration.ofSeconds(5))
                     .GET()
                     .build()
-            return when (client.send(request, HttpResponse.BodyHandlers.discarding()).statusCode()) {
+            return when (
+                breakers
+                    .send(
+                        Downstream.FORM,
+                        client,
+                        request,
+                        HttpResponse.BodyHandlers.discarding(),
+                        idempotent = true,
+                    ).statusCode()
+            ) {
                 200 -> true
                 404 -> false
                 else -> throw ExpectedException(HttpStatus.BAD_GATEWAY, "Form 서비스 응답을 확인할 수 없습니다.")

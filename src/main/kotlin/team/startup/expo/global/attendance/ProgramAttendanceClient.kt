@@ -3,6 +3,8 @@ package team.startup.expo.global.attendance
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
+import team.startup.expo.global.client.Downstream
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -19,6 +21,7 @@ class ProgramAttendanceClient(
     @Value("\${expo.attention.service-url:}") private val serviceUrl: String,
     @Value("\${expo.attention.internal-token:}") private val internalToken: String,
     private val mapper: ObjectMapper,
+    private val breakers: DownstreamCircuitBreakers,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -44,7 +47,16 @@ class ProgramAttendanceClient(
                     .header("X-Internal-Token", internalToken)
                     .DELETE()
                     .build()
-            if (http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() != 204) {
+            if (breakers
+                    .send(
+                        Downstream.ATTENTION,
+                        http,
+                        request,
+                        HttpResponse.BodyHandlers.discarding(),
+                        idempotent = false,
+                    ).statusCode() !=
+                204
+            ) {
                 throw ExpectedException(HttpStatus.BAD_GATEWAY, "출석 서비스 삭제 응답을 확인할 수 없습니다.")
             }
         } catch (exception: InterruptedException) {
@@ -103,7 +115,7 @@ class ProgramAttendanceClient(
                         .header("X-Internal-Token", internalToken)
                         .GET()
                         .build()
-                http.send(request, HttpResponse.BodyHandlers.ofString())
+                breakers.send(Downstream.ATTENTION, http, request, HttpResponse.BodyHandlers.ofString(), idempotent = true)
             } catch (exception: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 내부 연동이 중단됐습니다.")
