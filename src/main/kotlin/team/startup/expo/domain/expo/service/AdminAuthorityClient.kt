@@ -3,6 +3,8 @@ package team.startup.expo.domain.expo.service
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
+import team.startup.expo.global.client.Downstream
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import java.io.IOException
 import java.net.URI
@@ -14,6 +16,7 @@ import java.time.Duration
 @Component
 class AdminAuthorityClient(
     @Value("\${expo.standard.user-service-url:}") private val userServiceUrl: String,
+    private val breakers: DownstreamCircuitBreakers,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -28,7 +31,7 @@ class AdminAuthorityClient(
                     .GET()
                     .build()
             // User checks its current Admin DB before this handler; discard personal information.
-            when (http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode()) {
+            when (breakers.send(Downstream.USER, http, request, HttpResponse.BodyHandlers.discarding(), idempotent = true).statusCode()) {
                 200 -> Unit
                 401 -> throw ExpectedException(HttpStatus.UNAUTHORIZED, "관리자 인증이 유효하지 않습니다.")
                 403 -> throw ExpectedException(HttpStatus.FORBIDDEN, "접근 권한이 없습니다.")
