@@ -108,7 +108,52 @@ class DownstreamCircuitBreakersTests {
 
         assertThrows(ExpectedException::class.java) { AdminAuthorityClient(dead, breakers).requireCurrentAdmin("Bearer t") }
             .status shouldBe HttpStatus.SERVICE_UNAVAILABLE
-        breakers.of(Downstream.USER).metrics.numberOfFailedCalls shouldBe 2
+        breakers.of(Downstream.USER).metrics.numberOfFailedCalls shouldBe 1
+    }
+
+    @Test
+    fun `연결 거부 GET은 사용자 요청 1건이 회로에 1건으로 집계되어 10번째 요청에서 열린다`() {
+        val closedPort = ServerSocket(0).use { it.localPort }
+        val client = AdminAuthorityClient("http://127.0.0.1:$closedPort", breakers)
+
+        repeat(9) { index ->
+            assertThrows(ExpectedException::class.java) { client.requireCurrentAdmin("Bearer t") }
+            breakers.of(Downstream.USER).metrics.numberOfFailedCalls shouldBe index + 1
+            breakers.of(Downstream.USER).state shouldBe CircuitBreaker.State.CLOSED
+        }
+        assertThrows(ExpectedException::class.java) { client.requireCurrentAdmin("Bearer t") }.status shouldBe
+            HttpStatus.SERVICE_UNAVAILABLE
+        breakers.of(Downstream.USER).state shouldBe CircuitBreaker.State.OPEN
+    }
+
+    @Test
+    fun `재시도가 성공하면 첫 시도의 실패는 회로에 남지 않는다`() {
+        val port = ServerSocket(0).use { it.localPort }
+        val flaky = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
+        val request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:$port/")).GET().build()
+        Thread {
+            Thread.sleep(40)
+            flaky.createContext("/") { exchange ->
+                exchange.sendResponseHeaders(200, -1)
+                exchange.close()
+            }
+            flaky.start()
+        }.start()
+        try {
+            val response =
+                breakers.send(
+                    Downstream.FORM,
+                    HttpClient.newHttpClient(),
+                    request,
+                    HttpResponse.BodyHandlers.discarding(),
+                    idempotent = true,
+                )
+            response.statusCode() shouldBe 200
+            breakers.of(Downstream.FORM).metrics.numberOfFailedCalls shouldBe 0
+            breakers.of(Downstream.FORM).metrics.numberOfSuccessfulCalls shouldBe 1
+        } finally {
+            flaky.stop(0)
+        }
     }
 
     @Test

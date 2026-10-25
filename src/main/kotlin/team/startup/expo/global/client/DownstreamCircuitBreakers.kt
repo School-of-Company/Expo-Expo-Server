@@ -35,7 +35,8 @@ private class DownstreamServerError(
  *
  * - 실패로 세는 것은 타임아웃·연결 실패(`IOException`)와 5xx뿐이다. 400/401/403/404/409 같은 4xx는 서비스가 정상적으로
  *   거절한 것이므로 성공으로 센다. 응답 본문 파싱·형식 오류는 이 클래스를 지난 뒤 호출부에서 일어나 세지 않는다.
- * - 재시도는 `idempotent = true`인 호출의 즉시 실패(연결 거부 등)에만 1회 한다. 타임아웃은 이미 5초를 썼으므로 다시
+ * - 재시도는 `idempotent = true`인 호출의 즉시 실패(연결 거부 등)에만 100ms 쉰 뒤 1회 한다. 재시도가 뒤따르는 첫 시도의 실패는
+ *   회로에 세지 않고 마지막 시도만 세므로, 사용자 요청 1건은 회로에 1건으로 집계된다. 타임아웃은 이미 5초를 썼으므로 다시
  *   시도하지 않고, 쓰기(PUT/POST/DELETE)는 중복 실행될 수 있어 `idempotent = false`로 호출해 재시도하지 않는다.
  * - 응답은 상태 코드와 상관없이 호출부에 그대로 돌려줘서 기존 4xx/5xx 처리와 메시지를 바꾸지 않는다.
  *
@@ -67,12 +68,16 @@ class DownstreamCircuitBreakers {
         idempotent: Boolean,
     ): HttpResponse<T> {
         try {
-            return attempt(downstream, http, request, handler)
-        } catch (exception: IOException) {
-            if (!idempotent || !retryable(exception)) throw exception
+            return attempt(downstream, http, request, handler, retryIfImmediateFailure = idempotent)
+        } catch (exception: RetryableFailure) {
+            // 첫 시도의 실패는 회로에 세지 않았다. 잠깐 쉬고 한 번 더 시도하며 그 결과만 센다.
+            Thread.sleep(RETRY_BACKOFF_MILLIS)
         }
-        return attempt(downstream, http, request, handler)
+        return attempt(downstream, http, request, handler, retryIfImmediateFailure = false)
     }
+
+    /** 첫 시도가 즉시 실패해 재시도로 넘어가는 신호다. 호출부에는 전달되지 않는다. */
+    private class RetryableFailure : RuntimeException(null, null, false, false)
 
     private fun retryable(exception: IOException): Boolean =
         exception !is HttpTimeoutException && exception !is DownstreamUnavailableException
@@ -82,6 +87,7 @@ class DownstreamCircuitBreakers {
         http: HttpClient,
         request: HttpRequest,
         handler: HttpResponse.BodyHandler<T>,
+        retryIfImmediateFailure: Boolean,
     ): HttpResponse<T> {
         val breaker = of(downstream)
         if (!breaker.tryAcquirePermission()) throw DownstreamUnavailableException(downstream)
@@ -90,6 +96,11 @@ class DownstreamCircuitBreakers {
             try {
                 http.send(request, handler)
             } catch (exception: IOException) {
+                if (retryIfImmediateFailure && retryable(exception)) {
+                    // 재시도가 뒤따르므로 이 실패는 세지 않는다. 사용자 요청 1건이 회로에 2건으로 잡히는 것을 막는다.
+                    breaker.releasePermission()
+                    throw RetryableFailure()
+                }
                 breaker.onError(System.nanoTime() - start, TimeUnit.NANOSECONDS, exception)
                 throw exception
             } catch (exception: Throwable) {
@@ -112,5 +123,6 @@ class DownstreamCircuitBreakers {
         const val FAILURE_RATE_THRESHOLD = 50f
         const val OPEN_SECONDS = 10L
         const val SERVER_ERROR = 500
+        const val RETRY_BACKOFF_MILLIS = 100L
     }
 }
