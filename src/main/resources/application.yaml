@@ -14,6 +14,9 @@ springdoc:
 spring:
   application:
     name: expo-expo-server
+  main:
+    # stdout은 JSON 로그 줄만 둔다(배너는 여러 줄 평문이라 로그 수집기가 줄마다 깨진 로그로 받는다)
+    banner-mode: "off"
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:}
     consumer:
@@ -44,6 +47,9 @@ spring:
 logging:
   level:
     org.springframework.kafka.listener: "OFF"
+  # 요청마다 접근 로그 한 줄(module=HttpAccess). 끄려면 LOGGING_HTTP_ACCESS_ENABLED=false
+  http-access:
+    enabled: ${LOGGING_HTTP_ACCESS_ENABLED:true}
 
 image:
   public-base-url: ${IMAGE_PUBLIC_BASE_URL:http://localhost:8080}
@@ -70,3 +76,11 @@ expo:
   attention:
     service-url: ${ATTENTION_SERVICE_URL:}
     internal-token: ${ATTENTION_INTERNAL_TOKEN:}
+
+management:
+  metrics:
+    distribution:
+      # GC 일시 정지 p99를 구하려고 jvm_gc_pause_seconds에 고정 경계 10개(+Inf 포함 버킷 11개)를 둔다(Expo-Monitoring #34).
+      # percentiles-histogram은 시리즈당 버킷이 약 69개라 카디널리티가 커서 쓰지 않는다
+      slo:
+        jvm.gc.pause: 1ms,5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s,2s

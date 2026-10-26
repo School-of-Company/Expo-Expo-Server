@@ -642,6 +642,9 @@ class TrainingSmsIntegrationTests {
 
     @Test
     fun `Application 설정 누락은 HTTP 호출과 SMS 준비 기록 전에 실패한다`() {
+        val breakers =
+            team.startup.expo.global.client
+                .DownstreamCircuitBreakers()
         val missing =
             TrainingDependenciesClient(
                 "http://127.0.0.1:${upstream.address.port}",
@@ -651,7 +654,8 @@ class TrainingSmsIntegrationTests {
                 "",
                 mapper,
                 team.startup.expo.global.attendance
-                    .ProgramAttendanceClient("", "", mapper),
+                    .ProgramAttendanceClient("", "", mapper, breakers),
+                breakers,
             )
         val service = ApplyTrainingProgramListServiceImpl(expos, policies, programs, missing, applicationSms, dbTransactions)
         val error = assertThrows(ExpectedException::class.java) { service.execute(ApplyTrainingProgramsRequest("training-1", listOf(1))) }

@@ -216,6 +216,7 @@ class ServiceInternalTokenHttpTests {
                     // Load application.yaml so legacy environment variable names are exercised through the real mapping.
                     .withInitializer(ConfigDataApplicationContextInitializer())
                     .withBean(tools.jackson.databind.ObjectMapper::class.java, { jacksonObjectMapper() })
+                    .withBean(team.startup.expo.global.client.DownstreamCircuitBreakers::class.java)
                     .withUserConfiguration(
                         StandardDependenciesClient::class.java,
                         TrainingDependenciesClient::class.java,

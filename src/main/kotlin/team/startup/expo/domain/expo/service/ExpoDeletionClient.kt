@@ -4,6 +4,8 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import team.startup.expo.global.attendance.ProgramAttendanceClient
+import team.startup.expo.global.client.Downstream
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -23,6 +25,7 @@ class ExpoDeletionClient(
     @Value("\${USER_INTERNAL_TOKEN:}") private val userToken: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
+    private val breakers: DownstreamCircuitBreakers,
 ) {
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
@@ -41,6 +44,7 @@ class ExpoDeletionClient(
         trainingIds: List<Long>,
     ) {
         send(
+            Downstream.APPLICATION,
             applicationUrl,
             applicationToken,
             "/internal/expos/$expoId/purge",
@@ -50,9 +54,9 @@ class ExpoDeletionClient(
         )
     }
 
-    fun deleteForms(expoId: String) = delete(formUrl, formToken, expoId, "Form")
+    fun deleteForms(expoId: String) = delete(Downstream.FORM, formUrl, formToken, expoId, "Form")
 
-    fun deleteUsers(expoId: String) = delete(userUrl, userToken, expoId, "User")
+    fun deleteUsers(expoId: String) = delete(Downstream.USER, userUrl, userToken, expoId, "User")
 
     fun deleteAttendances(
         expoId: String,
@@ -65,15 +69,17 @@ class ExpoDeletionClient(
     }
 
     private fun delete(
+        downstream: Downstream,
         baseUrl: String,
         token: String,
         expoId: String,
         service: String,
     ) {
-        send(baseUrl, token, "/internal/expos/$expoId", "DELETE", HttpRequest.BodyPublishers.noBody(), service)
+        send(downstream, baseUrl, token, "/internal/expos/$expoId", "DELETE", HttpRequest.BodyPublishers.noBody(), service)
     }
 
     private fun send(
+        downstream: Downstream,
         baseUrl: String,
         token: String,
         path: String,
@@ -93,7 +99,7 @@ class ExpoDeletionClient(
                     .header("X-Internal-Token", token)
                     .method(method, body)
                     .build()
-            if (http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode() != 204) {
+            if (breakers.send(downstream, http, request, HttpResponse.BodyHandlers.discarding(), idempotent = false).statusCode() != 204) {
                 throw ExpectedException(HttpStatus.BAD_GATEWAY, "$service 서비스 삭제 응답을 확인할 수 없습니다.")
             }
         } catch (exception: ExpectedException) {

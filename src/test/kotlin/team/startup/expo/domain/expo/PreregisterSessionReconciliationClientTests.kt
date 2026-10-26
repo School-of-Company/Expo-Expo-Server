@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
+import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
@@ -29,7 +30,13 @@ class PreregisterSessionReconciliationClientTests {
         }
         server.start()
         try {
-            val client = PreregisterSessionChangesClient("http://127.0.0.1:${server.address.port}", "application-token", ObjectMapper())
+            val client =
+                PreregisterSessionChangesClient(
+                    "http://127.0.0.1:${server.address.port}",
+                    "application-token",
+                    ObjectMapper(),
+                    DownstreamCircuitBreakers(),
+                )
             repeat(2) { client.reconcile("expo", 5) }
             calls shouldBe 2
             listOf(
@@ -44,10 +51,15 @@ class PreregisterSessionReconciliationClientTests {
                 assertThrows(ExpectedException::class.java) { client.reconcile("expo", 5) }.status shouldBe expected
             }
             assertThrows(ExpectedException::class.java) {
-                PreregisterSessionChangesClient("", "application-token", ObjectMapper()).reconcile("expo", 5)
+                PreregisterSessionChangesClient("", "application-token", ObjectMapper(), DownstreamCircuitBreakers()).reconcile("expo", 5)
             }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
             assertThrows(ExpectedException::class.java) {
-                PreregisterSessionChangesClient("http://127.0.0.1:${server.address.port}", "", ObjectMapper()).reconcile("expo", 5)
+                PreregisterSessionChangesClient(
+                    "http://127.0.0.1:${server.address.port}",
+                    "",
+                    ObjectMapper(),
+                    DownstreamCircuitBreakers(),
+                ).reconcile("expo", 5)
             }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
         } finally {
             server.stop(0)

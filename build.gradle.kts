@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "team.startup"
-version = "0.14.0"
+version = "0.15.0"
 
 java {
     toolchain {
@@ -57,6 +57,7 @@ dependencies {
     // swagger-core는 Jackson 2로 스키마를 만들므로 Kotlin non-null 필드를 required로 표기하려면 Jackson 2 모듈이 필요하다
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
+    implementation("net.logstash.logback:logstash-logback-encoder:9.0")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis-test")
     testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")
