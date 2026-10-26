@@ -47,6 +47,9 @@ spring:
 logging:
   level:
     org.springframework.kafka.listener: "OFF"
+  # 요청마다 접근 로그 한 줄(module=HttpAccess). 끄려면 LOGGING_HTTP_ACCESS_ENABLED=false
+  http-access:
+    enabled: ${LOGGING_HTTP_ACCESS_ENABLED:true}
 
 image:
   public-base-url: ${IMAGE_PUBLIC_BASE_URL:http://localhost:8080}
