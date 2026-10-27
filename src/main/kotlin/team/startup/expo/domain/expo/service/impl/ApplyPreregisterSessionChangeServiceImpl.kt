@@ -12,6 +12,7 @@ import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
+import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
@@ -26,6 +27,7 @@ class ApplyPreregisterSessionChangeServiceImpl(
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
     private val history: AdminChangeHistoryRepository,
+    private val events: ExpoEventSupport,
 ) : ApplyPreregisterSessionChangeService {
     override fun execute(
         expoId: String,
@@ -97,6 +99,7 @@ class ApplyPreregisterSessionChangeServiceImpl(
                     sessions.delete(current)
                 }
             }
+            events.changed(expoId)
         }
         changes.reconcile(expoId, sessionId)
     }

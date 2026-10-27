@@ -11,6 +11,7 @@ import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.service.ApplyProgramChangeService
+import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.ProgramPolicyClient
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.image.service.AttachExpoImageService
@@ -40,6 +41,7 @@ class ApplyProgramChangeServiceImpl(
     private val attachment: ImageAttachmentSupport,
     private val transactions: TransactionTemplate,
     private val history: AdminChangeHistoryRepository,
+    private val events: ExpoEventSupport,
 ) : ApplyProgramChangeService {
     override fun execute(
         expoId: String,
@@ -64,7 +66,10 @@ class ApplyProgramChangeServiceImpl(
         }
         transactions.executeWithoutResult {
             expos.findLockedById(expoId) ?: return@executeWithoutResult
-            changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }?.let(changes::delete)
+            changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }?.let {
+                changes.delete(it)
+                events.changed(expoId)
+            }
         }
     }
 
@@ -83,6 +88,7 @@ class ApplyProgramChangeServiceImpl(
                     changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
                         payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
                         changes.delete(it)
+                        events.changed(expoId)
                     }
                 }
             }
@@ -195,6 +201,7 @@ class ApplyProgramChangeServiceImpl(
                     }
                 }
                 if (deleted.isEmpty()) changes.delete(current) else changes.save(current.apply { applied = true })
+                events.changed(expoId)
             }
         } catch (exception: Exception) {
             if (payload.mutations.none { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }) {
@@ -203,6 +210,7 @@ class ApplyProgramChangeServiceImpl(
                     changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
                         payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
                         changes.delete(it)
+                        events.changed(expoId)
                     }
                 }
             }

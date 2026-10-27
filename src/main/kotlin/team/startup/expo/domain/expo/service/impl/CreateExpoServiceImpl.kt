@@ -14,6 +14,7 @@ import team.startup.expo.domain.expo.repository.AdminApplicationPromoteAccessRep
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.CreateExpoService
+import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.image.service.AttachExpoImageService
 import team.startup.expo.domain.standard.entity.StandardProgram
@@ -34,6 +35,7 @@ class CreateExpoServiceImpl(
     private val history: AdminChangeHistoryRepository,
     private val cancelAccess: AdminApplicationCancelAccessRepository,
     private val promoteAccess: AdminApplicationPromoteAccessRepository,
+    private val events: ExpoEventSupport,
 ) : CreateExpoService {
     override fun execute(request: CreateExpoRequest): CreateExpoResponse {
         // 폼 검증을 트랜잭션 밖에서 먼저 하도록 ID를 미리 만든다.
@@ -62,6 +64,7 @@ class CreateExpoServiceImpl(
                         preregisterNonTeacherCapacity = request.preregisterNonTeacherCapacity,
                     )
                 expoRepository.saveAndFlush(expo)
+                events.changed(expo.id)
                 // 새 행사는 생성자에게만 신청 취소·수동 확정 권한을 준다. 다른 관리자는 명시 부여한다(docs/admin-application-cancel-access.md).
                 val creatorId =
                     history.currentAdminId() ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
