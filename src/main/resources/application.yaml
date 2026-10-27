@@ -61,6 +61,11 @@ image:
 expo:
   standard-created:
     enabled: ${KAFKA_STANDARD_CREATED_ENABLED:false}
+  # 박람회·프로그램 변경 이벤트(expo.expo.changed) 아웃박스와 릴레이. docs/expo-change-events.md
+  events:
+    enabled: ${KAFKA_EXPO_EVENTS_ENABLED:false}
+    relay-delay-ms: ${KAFKA_EXPO_EVENTS_RELAY_DELAY_MS:1000}
+    batch-size: ${KAFKA_EXPO_EVENTS_BATCH_SIZE:100}
   form-service-url: ${FORM_SERVICE_URL:}
   standard:
     user-service-url: ${USER_SERVICE_URL:}
