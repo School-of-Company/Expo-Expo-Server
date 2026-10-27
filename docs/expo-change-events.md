@@ -39,7 +39,8 @@
     "preregisterNonTeacherCapacity": 20,
     "participantPhoneVerificationRequired": true,
     "participantPhoneVerificationRevision": 0,
-    "deleting": false
+    "deleting": false,
+    "programChangePending": false
   },
   "standardPrograms": [
     {
@@ -50,7 +51,8 @@
       "groupId": "00000000-0000-0000-0000-000000000001",
       "policy": null,
       "place": "1관",
-      "revision": 1
+      "revision": 1,
+      "pendingRevision": null
     }
   ],
   "trainingPrograms": [
@@ -63,7 +65,8 @@
       "groupId": "00000000-0000-0000-0000-000000000002",
       "policy": null,
       "place": null,
-      "revision": 1
+      "revision": 1,
+      "pendingRevision": null
     }
   ],
   "preregisterSessions": [
@@ -97,8 +100,10 @@
 | 프로그램 `policy`              | 저장된 모집 정책 JSON 그대로(`ProgramPolicyRequest`와 같은 모양). 없으면 `null`.                                                        |
 | 회차 일시                      | UTC ISO 8601 (`/internal/expo/{id}/preregister-sessions`와 같다).                                                                       |
 | `revision`                     | 프로그램·회차 정의 버전. `/internal/**` 응답의 revision과 같다.                                                                         |
+| `expo.programChangePending`    | 진행 중인 프로그램 변경(`tb_program_change` 행)이 있다. 이 동안 Expo는 프로그램 조회(`GET .../standard-programs/{id}`, `POST .../training-programs/batch`)를 409로 답한다(`ProgramPolicySupport.ensureAvailable`). 박람회 단위라 바뀌는 프로그램이 없는 변경(박람회 수정, 새 프로그램 추가)도 `true`다. 필드가 없는 예전 메시지는 `false`로 읽는다. |
+| 프로그램 `pendingRevision`     | 진행 중 변경이 이 프로그램을 수정·삭제하면 그 다음 revision, 아니면 `null`. 관리자 목록 API의 `pendingRevision`과 같다. 409 판단에는 `expo.programChangePending`을 쓴다. |
 
-배열은 프로그램은 id 순, 회차는 시작 일시·id 순이다. 메시지 하나가 그 박람회의 전부이므로 배열에 없는 프로그램·회차는 지워진 것이다. 신청 인원 집계(`applicationPerson`)와 진행 중 변경(`pendingRevision`)은 싣지 않는다.
+배열은 프로그램은 id 순, 회차는 시작 일시·id 순이다. 메시지 하나가 그 박람회의 전부이므로 배열에 없는 프로그램·회차는 지워진 것이다. 신청 인원 집계(`applicationPerson`)는 싣지 않는다.
 
 ### 삭제(tombstone)
 
@@ -133,6 +138,7 @@
 - 사전등록 회차 생성(`CreatePreregisterSessionServiceImpl`)과 수정·삭제 적용(`ApplyPreregisterSessionChangeServiceImpl`)
 - 참가자 전화번호 인증 설정 변경(값이 실제로 바뀔 때)
 - 박람회 삭제 시작(`deleting: true`)과 삭제 완료(tombstone)
+- 진행 중인 프로그램 변경의 생성과 해제(`programChangePending`): 생성은 `ProgramPolicySupport.stage`, 해제는 `ApplyProgramChangeServiceImpl`의 적용 완료, Application 거절(409)·적용 실패로 인한 해제, 삭제 프로그램의 원격 정리 완료. 그래서 프로그램 수정 한 번은 예약과 적용 두 건을 쌓는다.
 
 일반 참가자 등록 집계(`StandardCreatedConsumer`)는 이벤트에 싣지 않는 인원 수만 바꾸므로 이벤트를 쌓지 않는다. 새 쓰기 경로를 더할 때는 같은 트랜잭션에서 `changed(expoId)`를 부른다.
 
@@ -174,7 +180,7 @@ GROUP BY state;
 
 ## 테스트
 
-- `ExpoChangedEventTests`: 스냅샷 필드·정렬·일시 형식, 메시지 봉투와 tombstone
+- `ExpoChangedEventTests`: 스냅샷 필드·정렬·일시 형식, 진행 중 변경(`programChangePending`, `pendingRevision`), 메시지 봉투와 tombstone
 - `PublishExpoEventsServiceImplTests`: 발행 순서·키, 실패 시 재시도와 주기 중단, batch-size, bootstrap 필수
-- `ExpoEventPostgresKafkaTests`(Testcontainers PostgreSQL + embedded Kafka): 생성·프로그램 수정·회차 생성·전화번호 인증 경로의 아웃박스 기록, 롤백 시 미기록, tombstone, 박람회별 순서, 복구, republish 인증
+- `ExpoEventPostgresKafkaTests`(Testcontainers PostgreSQL + embedded Kafka): 생성·프로그램 수정(변경 예약과 적용)·적용 실패로 인한 변경 해제·회차 생성·전화번호 인증 경로의 아웃박스 기록, 롤백 시 미기록, tombstone, 박람회별 순서, 복구, republish 인증
 - `ExpoEventDisabledPostgresTests`: 꺼져 있을 때 행·릴레이·재발행 없음

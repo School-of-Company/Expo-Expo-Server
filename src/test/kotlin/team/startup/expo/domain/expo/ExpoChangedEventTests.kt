@@ -6,6 +6,10 @@ import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.entity.PreregisterSession
 import team.startup.expo.domain.expo.messaging.ExpoChangedEvent
 import team.startup.expo.domain.expo.messaging.ExpoEventSnapshot
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
@@ -52,6 +56,9 @@ class ExpoChangedEventTests {
         json.path("expo").path("preregisterTeacherCapacity").asInt() shouldBe 10
         json.path("expo").path("participantPhoneVerificationRequired").asBoolean() shouldBe true
         json.path("expo").path("deleting").asBoolean() shouldBe false
+        json.path("expo").path("programChangePending").asBoolean() shouldBe false
+        json.path("standardPrograms")[0].has("pendingRevision") shouldBe true
+        json.path("standardPrograms")[0].path("pendingRevision").isNull shouldBe true
         json.path("expo").has("applicationPerson") shouldBe false
         json.path("standardPrograms").size() shouldBe 2
         json.path("standardPrograms")[0].path("id").asLong() shouldBe 1
@@ -70,6 +77,28 @@ class ExpoChangedEventTests {
         json.path("preregisterSessions")[0].path("startedAt").asString() shouldBe "2030-01-01T01:00:00Z"
         json.path("preregisterSessions")[0].path("capacity").asInt() shouldBe 30
         json.path("preregisterSessions")[0].path("revision").asLong() shouldBe 2
+    }
+
+    @Test
+    fun `진행 중인 프로그램 변경이 있으면 programChangePending과 바뀌는 프로그램의 pendingRevision을 싣는다`() {
+        val standard = StandardProgram(1, "일반", "2030-01-01T09:00", "2030-01-01T10:00", expo, group, null, null, 3)
+        val training = TrainingProgram(5, "연수", "2030-01-02T09:00", "2030-01-02T10:00", Category.CHOICE, expo, group)
+        val previous =
+            ProgramDefinition("expo-1", ProgramType.STANDARD, 1, "일반", "2030-01-01T09:00", "2030-01-01T10:00", null, group, null, 3)
+        val change = ProgramChangePayload(listOf(ProgramMutation(previous, previous.copy(title = "수정", revision = 4))))
+
+        val snapshot = ExpoEventSnapshot.of(expo, listOf(standard), listOf(training), emptyList(), mapper, change)
+
+        snapshot.expo.programChangePending shouldBe true
+        snapshot.standardPrograms[0].pendingRevision shouldBe 4
+        snapshot.trainingPrograms[0].pendingRevision shouldBe null
+    }
+
+    @Test
+    fun `프로그램을 바꾸지 않는 진행 중 변경도 programChangePending은 true다`() {
+        val snapshot = ExpoEventSnapshot.of(expo, emptyList(), emptyList(), emptyList(), mapper, ProgramChangePayload(emptyList()))
+
+        snapshot.expo.programChangePending shouldBe true
     }
 
     @Test

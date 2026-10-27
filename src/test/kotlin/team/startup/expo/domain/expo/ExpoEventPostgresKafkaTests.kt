@@ -97,7 +97,7 @@ class ExpoEventPostgresKafkaTests {
 
     @BeforeEach
     fun setup() {
-        jdbc.execute("TRUNCATE TABLE tb_expo_event_outbox, tb_expo RESTART IDENTITY CASCADE")
+        jdbc.execute("TRUNCATE TABLE tb_expo_event_outbox, tb_program_change, tb_expo RESTART IDENTITY CASCADE")
     }
 
     @Test
@@ -145,31 +145,53 @@ class ExpoEventPostgresKafkaTests {
     }
 
     @Test
-    fun `프로그램 수정은 변경 적용 트랜잭션에서 바뀐 프로그램이 담긴 스냅샷을 쌓는다`() {
+    fun `프로그램 수정은 변경 예약과 적용 트랜잭션에서 각각 스냅샷을 쌓는다`() {
         seedExpo(EXPO)
-        val program =
-            standards.saveAndFlush(
-                StandardProgram(
-                    title = "일반 프로그램",
-                    startedAt = "2030-01-01T09:00",
-                    endedAt = "2030-01-01T10:00",
-                    expo = expos.getReferenceById(EXPO),
-                ),
+        val id = seedProgram()
+
+        updateProgram(id).statusCode() shouldBe 204
+
+        rows(EXPO) shouldBe 2
+        snapshots(EXPO)[0].let { reserved ->
+            reserved.path("expo").path("programChangePending").asBoolean() shouldBe true
+            reserved.path("standardPrograms")[0].path("revision").asLong() shouldBe 1
+            reserved.path("standardPrograms")[0].path("pendingRevision").asLong() shouldBe 2
+        }
+        latestSnapshot(EXPO).let { applied ->
+            applied.path("expo").path("programChangePending").asBoolean() shouldBe false
+            applied.path("standardPrograms")[0].let {
+                it.path("title").asString() shouldBe "수정 프로그램"
+                it.path("endedAt").asString() shouldBe "2030-01-01T11:00"
+                it.path("revision").asLong() shouldBe 2
+                it.path("pendingRevision").isNull shouldBe true
+            }
+        }
+    }
+
+    @Test
+    fun `적용에 실패해 진행 중 변경을 해제하면 해제된 상태의 스냅샷을 쌓는다`() {
+        seedExpo(EXPO)
+        val id = seedProgram()
+        try {
+            jdbc.execute(
+                """CREATE FUNCTION fail_event_program_update() RETURNS trigger AS ${'$'}t${'$'} BEGIN RAISE EXCEPTION 'forced'; END; ${'$'}t${'$'} LANGUAGE plpgsql""",
             )
-        val id = requireNotNull(program.id)
+            jdbc.execute(
+                "CREATE TRIGGER fail_event_program_update BEFORE UPDATE ON tb_standard_program FOR EACH ROW EXECUTE FUNCTION fail_event_program_update()",
+            )
+            updateProgram(id).statusCode() shouldBe 500
+        } finally {
+            jdbc.execute("DROP TRIGGER IF EXISTS fail_event_program_update ON tb_standard_program")
+            jdbc.execute("DROP FUNCTION IF EXISTS fail_event_program_update()")
+        }
 
-        request(
-            "/standard/$id",
-            "PATCH",
-            """{"id":$id,"title":"수정 프로그램","startedAt":"2030-01-01 09:00","endedAt":"2030-01-01 11:00","revision":1}""",
-            authorization = "Bearer ${TestJwt.token("ROLE_ADMIN")}",
-        ).statusCode() shouldBe 204
-
-        rows(EXPO) shouldBe 1
-        latestSnapshot(EXPO).path("standardPrograms")[0].let {
-            it.path("title").asString() shouldBe "수정 프로그램"
-            it.path("endedAt").asString() shouldBe "2030-01-01T11:00"
-            it.path("revision").asLong() shouldBe 2
+        jdbc.queryForObject("SELECT count(*) FROM tb_program_change", Long::class.java) shouldBe 0
+        rows(EXPO) shouldBe 2
+        snapshots(EXPO)[0].path("expo").path("programChangePending").asBoolean() shouldBe true
+        latestSnapshot(EXPO).let { released ->
+            released.path("expo").path("programChangePending").asBoolean() shouldBe false
+            released.path("standardPrograms")[0].path("revision").asLong() shouldBe 1
+            released.path("standardPrograms")[0].path("pendingRevision").isNull shouldBe true
         }
     }
 
@@ -290,6 +312,32 @@ class ExpoEventPostgresKafkaTests {
             Expo(id, "테스트 박람회", "설명", "2030-01-01", "2030-01-02", "광주", null, "127", "37", 0, 0),
         )
     }
+
+    private fun seedProgram(): Long =
+        requireNotNull(
+            standards
+                .saveAndFlush(
+                    StandardProgram(
+                        title = "일반 프로그램",
+                        startedAt = "2030-01-01T09:00",
+                        endedAt = "2030-01-01T10:00",
+                        expo = expos.getReferenceById(EXPO),
+                    ),
+                ).id,
+        )
+
+    private fun updateProgram(id: Long): HttpResponse<String> =
+        request(
+            "/standard/$id",
+            "PATCH",
+            """{"id":$id,"title":"수정 프로그램","startedAt":"2030-01-01 09:00","endedAt":"2030-01-01 11:00","revision":1}""",
+            authorization = "Bearer ${TestJwt.token("ROLE_ADMIN")}",
+        )
+
+    private fun snapshots(expoId: String): List<JsonNode> =
+        jdbc
+            .queryForList("SELECT snapshot FROM tb_expo_event_outbox WHERE expo_id = ? ORDER BY sequence", String::class.java, expoId)
+            .map(mapper::readTree)
 
     private fun createBody(): String {
         val imageId = UUID.randomUUID().toString()

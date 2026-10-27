@@ -2,6 +2,8 @@ package team.startup.expo.domain.expo.messaging
 
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.entity.PreregisterSession
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
@@ -52,8 +54,20 @@ data class ExpoEventSnapshot(
             trainings: List<TrainingProgram>,
             sessions: List<PreregisterSession>,
             mapper: ObjectMapper,
-        ): ExpoEventSnapshot =
-            ExpoEventSnapshot(
+            programChange: ProgramChangePayload? = null,
+        ): ExpoEventSnapshot {
+            // 진행 중인 프로그램 변경(tb_program_change 행)이 있으면 Expo는 프로그램 조회를 409로 답한다(ProgramPolicySupport.ensureAvailable).
+            // 프로그램별 pendingRevision은 관리자 목록 API(ProgramPolicySupport.pendingRevisions)와 같은 값이다.
+            fun pending(type: ProgramType): Map<Long, Long> =
+                programChange
+                    ?.mutations
+                    .orEmpty()
+                    .mapNotNull { it.previous }
+                    .filter { it.programType == type }
+                    .associate { requireNotNull(it.id) to (it.revision + 1) }
+            val pendingStandards = pending(ProgramType.STANDARD)
+            val pendingTrainings = pending(ProgramType.TRAINING)
+            return ExpoEventSnapshot(
                 ExpoState(
                     title = expo.title,
                     description = expo.description,
@@ -68,6 +82,7 @@ data class ExpoEventSnapshot(
                     participantPhoneVerificationRequired = expo.participantPhoneVerificationRequired,
                     participantPhoneVerificationRevision = expo.participantPhoneVerificationRevision,
                     deleting = expo.deletingAt != null,
+                    programChangePending = programChange != null,
                 ),
                 standards.sortedBy { it.id }.map {
                     StandardProgramState(
@@ -79,6 +94,7 @@ data class ExpoEventSnapshot(
                         policy = it.policyJson?.let(mapper::readTree),
                         place = it.place,
                         revision = it.revision,
+                        pendingRevision = pendingStandards[it.id],
                     )
                 },
                 trainings.sortedBy { it.id }.map {
@@ -92,6 +108,7 @@ data class ExpoEventSnapshot(
                         policy = it.policyJson?.let(mapper::readTree),
                         place = it.place,
                         revision = it.revision,
+                        pendingRevision = pendingTrainings[it.id],
                     )
                 },
                 sessions.sortedWith(compareBy<PreregisterSession>({ it.startedAt }, { it.id })).map {
@@ -111,6 +128,7 @@ data class ExpoEventSnapshot(
                     )
                 },
             )
+        }
 
         // 예전 "yyyy-MM-dd HH:mm" 저장값도 "yyyy-MM-ddTHH:mm"(KST 지역 일시)로 맞춘다. 해석하지 못하면 저장값을 그대로 둔다.
         private fun programTime(stored: String): String = runCatching { stored.toProgramLocalDateTime().toString() }.getOrDefault(stored)
@@ -131,6 +149,7 @@ data class ExpoState(
     val participantPhoneVerificationRequired: Boolean,
     val participantPhoneVerificationRevision: Long,
     val deleting: Boolean,
+    val programChangePending: Boolean,
 )
 
 data class StandardProgramState(
@@ -142,6 +161,7 @@ data class StandardProgramState(
     val policy: JsonNode?,
     val place: String?,
     val revision: Long,
+    val pendingRevision: Long?,
 )
 
 data class TrainingProgramState(
@@ -154,6 +174,7 @@ data class TrainingProgramState(
     val policy: JsonNode?,
     val place: String?,
     val revision: Long,
+    val pendingRevision: Long?,
 )
 
 data class PreregisterSessionState(

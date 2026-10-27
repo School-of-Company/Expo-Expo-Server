@@ -8,9 +8,11 @@ import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionSynchronization
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import team.startup.expo.domain.expo.messaging.ExpoEventSnapshot
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.repository.ExpoEventOutboxRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
+import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import tools.jackson.databind.ObjectMapper
@@ -26,6 +28,7 @@ class ExpoEventSupport(
     private val standards: StandardProgramRepository,
     private val trainings: TrainingProgramRepository,
     private val sessions: PreregisterSessionRepository,
+    private val programChanges: ProgramChangeRepository,
     private val outbox: ExpoEventOutboxRepository,
     private val mapper: ObjectMapper,
 ) {
@@ -73,6 +76,7 @@ class ExpoEventSupport(
                 trainings.findByExpoIdOrderByIdAsc(expoId),
                 sessions.findAllByExpoIdOrderByStartedAtAscIdAsc(expoId),
                 mapper,
+                programChanges.findByIdOrNull(expoId)?.let { mapper.readValue(it.payloadJson, ProgramChangePayload::class.java) },
             )
         outbox.insert(expoId, mapper.writeValueAsString(snapshot))
     }

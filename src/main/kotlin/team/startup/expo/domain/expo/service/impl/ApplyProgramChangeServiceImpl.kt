@@ -66,7 +66,10 @@ class ApplyProgramChangeServiceImpl(
         }
         transactions.executeWithoutResult {
             expos.findLockedById(expoId) ?: return@executeWithoutResult
-            changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }?.let(changes::delete)
+            changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId }?.let {
+                changes.delete(it)
+                events.changed(expoId)
+            }
         }
     }
 
@@ -85,6 +88,7 @@ class ApplyProgramChangeServiceImpl(
                     changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
                         payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
                         changes.delete(it)
+                        events.changed(expoId)
                     }
                 }
             }
@@ -206,6 +210,7 @@ class ApplyProgramChangeServiceImpl(
                     changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
                         payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
                         changes.delete(it)
+                        events.changed(expoId)
                     }
                 }
             }
