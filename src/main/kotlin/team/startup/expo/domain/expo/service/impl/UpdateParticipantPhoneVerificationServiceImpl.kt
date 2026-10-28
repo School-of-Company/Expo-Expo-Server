@@ -7,6 +7,7 @@ import team.startup.expo.domain.expo.presentation.dto.request.UpdateParticipantP
 import team.startup.expo.domain.expo.presentation.dto.response.ParticipantPhoneVerificationResponse
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
+import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.UpdateParticipantPhoneVerificationService
 import team.startup.expo.global.exception.ExpectedException
 
@@ -14,6 +15,7 @@ import team.startup.expo.global.exception.ExpectedException
 class UpdateParticipantPhoneVerificationServiceImpl(
     private val expoRepository: ExpoRepository,
     private val programChanges: ProgramChangeRepository,
+    private val events: ExpoEventSupport,
 ) : UpdateParticipantPhoneVerificationService {
     @Transactional
     override fun execute(
@@ -32,6 +34,7 @@ class UpdateParticipantPhoneVerificationServiceImpl(
         if (programChanges.existsById(expoId)) {
             throw ExpectedException(HttpStatus.CONFLICT, "진행 중인 프로그램 변경을 먼저 재시도해 주세요.")
         }
+        if (expo.participantPhoneVerificationRequired != required) events.changed(expoId)
         expo.updateParticipantPhoneVerification(required)
         return ParticipantPhoneVerificationResponse(
             expo.participantPhoneVerificationRequired,

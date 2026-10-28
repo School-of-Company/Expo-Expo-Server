@@ -7,6 +7,7 @@ import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.service.DeleteExpoService
 import team.startup.expo.domain.expo.service.ExpoDeletionClient
+import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.image.repository.ExpoImageRepository
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
@@ -23,6 +24,7 @@ class DeleteExpoServiceImpl(
     private val dependencies: ExpoDeletionClient,
     private val transactions: TransactionTemplate,
     private val operations: TrainingSmsOutboxRepository,
+    private val events: ExpoEventSupport,
 ) : DeleteExpoService {
     override fun execute(expoId: String) {
         val programs =
@@ -36,6 +38,7 @@ class DeleteExpoServiceImpl(
                 if (changes.existsById(expoId)) throw ExpectedException(HttpStatus.CONFLICT, "진행 중인 프로그램 변경을 먼저 재시도해 주세요.")
                 dependencies.requireConfiguration()
                 expo.markDeleting()
+                events.changed(expoId)
                 ProgramIds(
                     standardPrograms.findByExpoIdOrderByIdAsc(expoId).map { it.id!! },
                     trainingPrograms.findByExpoIdOrderByIdAsc(expoId).map { it.id!! },
@@ -51,6 +54,7 @@ class DeleteExpoServiceImpl(
             expos.findLockedById(expoId)?.let { expo ->
                 images.findAllByExpoId(expoId).forEach { it.detach() }
                 expos.delete(expo)
+                events.changed(expoId)
             }
         }
     }

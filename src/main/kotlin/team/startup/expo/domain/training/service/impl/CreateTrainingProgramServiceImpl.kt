@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.presentation.dto.request.AddTrainingProgramRequest
@@ -20,6 +21,7 @@ class CreateTrainingProgramServiceImpl(
     private val programs: TrainingProgramRepository,
     private val validator: Validator,
     private val history: AdminChangeHistoryRepository,
+    private val events: ExpoEventSupport,
 ) : CreateTrainingProgramService {
     override fun execute(
         expoId: String,
@@ -31,6 +33,7 @@ class CreateTrainingProgramServiceImpl(
             }
             val expo = expos.findLockedById(expoId) ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
             if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
+            events.changed(expoId)
             val definition =
                 policies.create(
                     expoId,

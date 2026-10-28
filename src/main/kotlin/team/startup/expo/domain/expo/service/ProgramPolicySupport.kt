@@ -43,6 +43,7 @@ class ProgramPolicySupport(
     private val mapper: ObjectMapper,
     private val forms: ProgramFormChangeRepository,
     private val history: AdminChangeHistoryRepository,
+    private val events: ExpoEventSupport,
 ) {
     private val pendingForms = ThreadLocal<MutableList<ProgramDefinition>>()
     private val checkedForms = ThreadLocal<Map<Any, FormCheck>>()
@@ -209,14 +210,18 @@ class ProgramPolicySupport(
             val payload = build(expo)
             if (payload.mutations.any { it.previous?.revision == Long.MAX_VALUE }) conflict("프로그램 버전을 더 늘릴 수 없습니다.")
             if (payload.mutations.isEmpty() && payload.expoUpdate == null) return@transaction null
-            changes.saveAndFlush(
-                ProgramChange(
-                    expoId,
-                    commandJson = command,
-                    payloadJson = mapper.writeValueAsString(payload),
-                    adminId = history.currentAdminId(),
-                ),
-            )
+            changes
+                .saveAndFlush(
+                    ProgramChange(
+                        expoId,
+                        commandJson = command,
+                        payloadJson = mapper.writeValueAsString(payload),
+                        adminId = history.currentAdminId(),
+                    ),
+                ).also {
+                    // 진행 중인 변경이 생기면 프로그램 조회가 409가 되므로 이벤트로도 알린다(programChangePending).
+                    events.changed(expoId)
+                }
         }
 
     // 프로그램마다 따로 검증하고 통과한 변경만 하나의 ProgramChange로 묶는다. 같은 명령의 재시도는 결과 목록이 비어 있다.
