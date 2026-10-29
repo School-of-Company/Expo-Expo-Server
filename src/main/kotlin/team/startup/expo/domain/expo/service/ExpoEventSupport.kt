@@ -1,6 +1,7 @@
 package team.startup.expo.domain.expo.service
 
 import jakarta.persistence.EntityManager
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.jdbc.core.JdbcTemplate
@@ -31,6 +32,7 @@ class ExpoEventSupport(
     private val programChanges: ProgramChangeRepository,
     private val outbox: ExpoEventOutboxRepository,
     private val mapper: ObjectMapper,
+    private val immediatePublisher: ObjectProvider<PublishCommittedExpoEventService>,
 ) {
     val isEnabled: Boolean get() = enabled
 
@@ -45,9 +47,15 @@ class ExpoEventSupport(
                     TransactionSynchronizationManager.bindResource(RESOURCE_KEY, ids)
                     TransactionSynchronizationManager.registerSynchronization(
                         object : TransactionSynchronization {
+                            private val eventIds = mutableListOf<String>()
+
                             override fun beforeCommit(readOnly: Boolean) {
                                 entityManager.flush()
-                                ids.forEach(::enqueue)
+                                ids.forEach { eventIds += enqueue(it) }
+                            }
+
+                            override fun afterCommit() {
+                                eventIds.forEach { immediatePublisher.ifAvailable?.execute(it) }
                             }
 
                             override fun afterCompletion(status: Int) {
@@ -60,13 +68,12 @@ class ExpoEventSupport(
     }
 
     // 트랜잭션 안에서 부른다. 박람회 행 락을 잡은 뒤 상태를 읽어 같은 박람회의 version이 커밋 순서대로 늘게 한다.
-    fun enqueue(expoId: String) {
+    fun enqueue(expoId: String): String {
         val exists =
             jdbc.query("SELECT id FROM tb_expo WHERE id = ? FOR UPDATE", { row, _ -> row.getString(1) }, expoId).isNotEmpty()
         val expo = if (exists) expos.findByIdOrNull(expoId) else null
         if (expo == null) {
-            outbox.insert(expoId, null)
-            return
+            return outbox.insert(expoId, null)
         }
         entityManager.refresh(expo)
         val snapshot =
@@ -78,7 +85,7 @@ class ExpoEventSupport(
                 mapper,
                 programChanges.findByIdOrNull(expoId)?.let { mapper.readValue(it.payloadJson, ProgramChangePayload::class.java) },
             )
-        outbox.insert(expoId, mapper.writeValueAsString(snapshot))
+        return outbox.insert(expoId, mapper.writeValueAsString(snapshot))
     }
 
     private companion object {

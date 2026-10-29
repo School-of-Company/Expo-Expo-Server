@@ -125,8 +125,11 @@
 ## 발행 시점과 보장
 
 1. 쓰기 경로는 같은 트랜잭션에서 `ExpoEventSupport.changed(expoId)`를 부른다. 커밋 직전에 박람회 행 락을 잡고 그 시점 상태로 스냅샷을 만들어 `tb_expo_event_outbox`에 한 행을 쓴다. 한 트랜잭션에서 여러 번 불러도 박람회마다 한 행이다. 롤백되면 행도 없다.
-2. 릴레이(`PublishExpoEventsServiceImpl`)가 대기 행을 sequence 순으로 선점해 발행하고, broker ACK를 받으면 `PUBLISHED`로 표시한다. 한 박람회의 앞선 행이 남아 있으면 뒤 행은 기다린다.
-3. 실패하면 1초부터 두 배씩 최대 5분 간격으로 다시 시도한다. 복구 작업(`RecoverExpoEventsServiceImpl`, 1분 주기)은 멈춘 선점을 풀고, 발행 7일 지난 행을 지우며, 10분 넘게 남은 대기 행이 있으면 ERROR 로그(`Expo events pending over 10 minutes`)를 남긴다.
+2. `afterCommit`에서 방금 쓴 행 ID를 `PublishCommittedExpoEventServiceImpl`의 전용 비동기 작업에 넘긴다. JPA의 별도 트랜잭션에서 릴레이와 같은 `FOR UPDATE SKIP LOCKED`·30초 lease로 선점하고 broker ACK 뒤 기존 완료 처리로 `PUBLISHED`로 표시한다. 앞선 미발행 행(재시도 대기·선점 중 포함)이 있으면 건너뛴다. 요청 스레드는 DB 선점이나 Kafka ACK를 기다리지 않는다.
+3. 릴레이(`PublishExpoEventsServiceImpl`, 기본 1초 주기)는 그대로 안전망으로 남는다. 즉시 발행은 스레드 1개·대기 큐 100개이며 큐가 차거나 앱이 종료되면 릴레이가 처리한다. 재발행 API가 직접 `enqueue`한 행도 기존대로 릴레이가 처리한다.
+4. 발행 실패는 기존 재시도 처리로 1초부터 두 배씩 최대 5분 간격으로 미룬다. 복구 작업(`RecoverExpoEventsServiceImpl`, 1분 주기)은 멈춘 선점을 풀고, 발행 7일 지난 행을 지우며, 10분 넘게 남은 대기 행이 있으면 ERROR 로그(`Expo events pending over 10 minutes`)를 남긴다.
+
+즉시 발행 지표는 Micrometer `expo.events.immediate` 카운터이며 `result=success|failure` 태그를 쓴다. Prometheus에서는 `expo_events_immediate_total{result="success"}` / `{result="failure"}`로 노출된다. 성공은 ACK와 완료 기록 이후, 실패는 선점·송신·완료 기록 예외 또는 큐 거절 시 증가한다. 선행 행·다른 발행자의 선점으로 건너뛴 경우는 둘 다 증가하지 않는다.
 
 전달은 at-least-once다. ACK 유실·재시작 뒤에는 같은 `eventId`/`version` 메시지가 다시 나갈 수 있다. 메시지 본문은 행에 저장된 값으로만 만들므로 재전송해도 내용이 같다.
 
@@ -182,5 +185,6 @@ GROUP BY state;
 
 - `ExpoChangedEventTests`: 스냅샷 필드·정렬·일시 형식, 진행 중 변경(`programChangePending`, `pendingRevision`), 메시지 봉투와 tombstone
 - `PublishExpoEventsServiceImplTests`: 발행 순서·키, 실패 시 재시도와 주기 중단, batch-size, bootstrap 필수
+- `CommittedExpoEventPostgresTests`(Testcontainers PostgreSQL + Kafka MockProducer): 커밋 후 비동기 발행·롤백, ACK 대기 중 요청 반환, 실패 후 릴레이 재시도, 동일 행 중복 선점 방지, 선행 미발행 행·행 잠금·lease 확인
 - `ExpoEventPostgresKafkaTests`(Testcontainers PostgreSQL + embedded Kafka): 생성·프로그램 수정(변경 예약과 적용)·적용 실패로 인한 변경 해제·회차 생성·전화번호 인증 경로의 아웃박스 기록, 롤백 시 미기록, tombstone, 박람회별 순서, 복구, republish 인증
 - `ExpoEventDisabledPostgresTests`: 꺼져 있을 때 행·릴레이·재발행 없음
