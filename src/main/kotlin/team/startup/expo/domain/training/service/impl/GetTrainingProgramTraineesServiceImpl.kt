@@ -3,7 +3,6 @@ package team.startup.expo.domain.training.service.impl
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramTraineeResponse
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.GetTrainingProgramTraineesService
@@ -17,7 +16,6 @@ class GetTrainingProgramTraineesServiceImpl(
     private val dependencies: TrainingDependenciesClient,
     private val attendances: ProgramAttendanceClient,
 ) : GetTrainingProgramTraineesService {
-    @Transactional(readOnly = true)
     override fun execute(programId: Long): List<TrainingProgramTraineeResponse> {
         val program =
             programs.findByIdOrNull(programId)

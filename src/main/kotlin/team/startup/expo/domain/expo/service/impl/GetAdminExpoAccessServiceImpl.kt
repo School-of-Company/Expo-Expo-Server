@@ -6,7 +6,6 @@ import org.springframework.http.HttpStatus
 import org.springframework.security.oauth2.jwt.JwtDecoder
 import org.springframework.security.oauth2.jwt.JwtException
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.response.AdminExpoAccessResponse
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.AdminAuthorityClient
@@ -19,7 +18,6 @@ class GetAdminExpoAccessServiceImpl(
     private val authority: AdminAuthorityClient,
     private val expos: ExpoRepository,
 ) : GetAdminExpoAccessService {
-    @Transactional(readOnly = true)
     override fun execute(
         expoId: String,
         authorization: String?,
