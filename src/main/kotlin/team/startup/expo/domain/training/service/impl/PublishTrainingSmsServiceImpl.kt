@@ -88,7 +88,7 @@ class PublishTrainingSmsServiceImpl(
                         recording.javaClass.simpleName,
                     )
                 }
-                if (exception is InterruptedException) return
+                return
             }
         }
     }
