@@ -17,6 +17,7 @@ import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.context.annotation.Bean
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
@@ -25,8 +26,12 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
 import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
+import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.image.entity.ExpoImage
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
@@ -92,7 +97,77 @@ class ProgramPoliciesPostgresHttpTests {
     @Autowired
     private lateinit var programChanges: ProgramChangeRepository
 
+    @Autowired
+    private lateinit var policies: ProgramPolicySupport
+
     private val http = HttpClient.newHttpClient()
+
+    @Test
+    fun `form checks fetch a shared form and capabilities once per validation call`() {
+        val definitions =
+            (1..10).map { capacity ->
+                definition(
+                    mapper.readValue(policy(capacity = capacity), ProgramPolicyRequest::class.java).copy(autoPromotionEnabled = false),
+                )
+            }
+
+        repeat(2) { invocation ->
+            val checks = policies.checkForms(definitions)
+            checks.size shouldBe 10
+            checks.values.all { it.version == 0L && it.failure == null } shouldBe true
+            calls.count { it.first == "/internal/forms/by-id/$STANDARD_FORM" } shouldBe invocation + 1
+            calls.count { it.first == "/internal/expos/$EXPO/program-policy-capabilities" } shouldBe invocation + 1
+        }
+    }
+
+    @Test
+    fun `different forms share capabilities for the same expo`() {
+        val definitions =
+            listOf(STANDARD_FORM, TRAINING_FORM).map { form ->
+                definition(
+                    mapper.readValue(policy(form = form), ProgramPolicyRequest::class.java).copy(autoPromotionEnabled = false),
+                ).copy(programType = if (form == STANDARD_FORM) ProgramType.STANDARD else ProgramType.TRAINING)
+            }
+
+        policies.checkForms(definitions).values.all { it.failure == null } shouldBe true
+        calls.count { it.first.startsWith("/internal/forms/by-id/") } shouldBe 2
+        calls.count { it.first == "/internal/expos/$EXPO/program-policy-capabilities" } shouldBe 1
+    }
+
+    @Test
+    fun `shared form results still validate each policy period and guardian version`() {
+        formQuestions = guardianQuestions()
+        val policy = mapper.readValue(guardianPolicy(), ProgramPolicyRequest::class.java)
+        val definitions =
+            listOf(
+                definition(policy.copy(applicationStartedAt = Instant.parse("2026-09-30T00:00:00Z"))),
+                definition(policy.copy(guardianPolicy = requireNotNull(policy.guardianPolicy).copy(formVersion = 2))),
+                definition(policy),
+            )
+
+        val checks = policies.checkForms(definitions).values.toList()
+        checks.map { it.failure?.status } shouldBe listOf(HttpStatus.BAD_REQUEST, HttpStatus.CONFLICT, null)
+        checks[0].failure?.message shouldBe "폼 기간이 프로그램 모집 기간을 포함해야 합니다."
+        checks[1].failure?.message shouldBe "보호자 정책의 폼 버전이 변경됐습니다. 문항을 다시 연결해 주세요."
+        calls.count { it.first == "/internal/forms/by-id/$STANDARD_FORM" } shouldBe 1
+    }
+
+    @Test
+    fun `shared form lookup failure is recorded for every distinct policy without refetching`() {
+        val form = UUID.randomUUID()
+        val definitions =
+            (1..3).map { capacity ->
+                definition(mapper.readValue(policy(capacity = capacity, form = form.toString()), ProgramPolicyRequest::class.java))
+            }
+
+        val checks = policies.checkForms(definitions)
+        checks.size shouldBe 3
+        checks.values.map { it.failure?.status } shouldBe List(3) { HttpStatus.NOT_FOUND }
+        calls.count { it.first == "/internal/forms/by-id/$form" } shouldBe 1
+    }
+
+    private fun definition(policy: ProgramPolicyRequest): ProgramDefinition =
+        ProgramDefinition(EXPO, ProgramType.STANDARD, null, "program", "", "", groupId = UUID.randomUUID(), policy = policy, revision = 0)
 
     @BeforeEach
     fun setUp() {
