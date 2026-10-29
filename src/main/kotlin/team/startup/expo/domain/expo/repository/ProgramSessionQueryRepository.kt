@@ -18,7 +18,7 @@ class ProgramSessionQueryRepository(
     fun version(expoId: String): String =
         requireNotNull(
             jdbc.queryForObject(
-                "SELECT md5(COALESCE(string_agg(program_type || ':' || definition::text, ',' ORDER BY program_type, id), '')) FROM ($SOURCE) programs",
+                "SELECT md5(COALESCE(string_agg(program_type || ':' || id || ':' || revision, ',' ORDER BY program_type, id), '')) FROM ($SOURCE) programs",
                 String::class.java,
                 expoId,
                 expoId,
@@ -42,7 +42,18 @@ class ProgramSessionQueryRepository(
         request: ProgramSessionPageRequest,
     ): List<ProgramDefinition> =
         jdbc.query(
-            "SELECT program_type, definition::text FROM ($SOURCE) programs WHERE $FILTER ORDER BY program_type, id LIMIT ? OFFSET ?",
+            """
+            WITH page AS MATERIALIZED (
+                SELECT program_type, id FROM ($SOURCE) programs
+                WHERE $FILTER ORDER BY program_type, id LIMIT ? OFFSET ?
+            )
+            SELECT page.program_type,
+                CASE WHEN page.program_type = 'STANDARD' THEN to_jsonb(s) ELSE to_jsonb(t) END::text
+            FROM page
+            LEFT JOIN tb_standard_program s ON page.program_type = 'STANDARD' AND s.id = page.id
+            LEFT JOIN tb_training_program t ON page.program_type = 'TRAINING' AND t.id = page.id
+            ORDER BY page.program_type, page.id
+            """.trimIndent(),
             { row, _ ->
                 val node = mapper.readTree(row.getString(2))
                 val policy = node.get("policy_json")?.takeUnless { it.isNull }?.asString()
@@ -87,10 +98,10 @@ class ProgramSessionQueryRepository(
 
     private companion object {
         const val SOURCE =
-            "SELECT 'STANDARD' AS program_type, id, to_jsonb(p) AS definition FROM tb_standard_program p WHERE expo_id = ? " +
-                "UNION ALL SELECT 'TRAINING', id, to_jsonb(p) FROM tb_training_program p WHERE expo_id = ?"
+            "SELECT 'STANDARD' AS program_type, id, group_id, revision FROM tb_standard_program WHERE expo_id = ? " +
+                "UNION ALL SELECT 'TRAINING', id, group_id, revision FROM tb_training_program WHERE expo_id = ?"
         const val FILTER =
             "(?::text IS NULL OR program_type = ?) AND " +
-                "(?::text IS NULL OR definition->>'group_id' = ?) AND (?::bigint IS NULL OR id = ?)"
+                "(?::uuid IS NULL OR group_id = ?::uuid) AND (?::bigint IS NULL OR id = ?)"
     }
 }
