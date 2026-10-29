@@ -692,8 +692,12 @@ class ExpoApiPostgresHttpTests {
         server.start()
         try {
             ReflectionTestUtils.setField(validationService, "formServiceUrl", "http://127.0.0.1:${server.address.port}")
+            val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
+            statistics.clear()
             val response = request("/expo/valid", "GET")
             response.statusCode() shouldBe 200
+            statistics.prepareStatementCount shouldBe 1L
+            statistics.entityLoadCount shouldBe 0L
             objectMapper.readTree(response.body()) shouldBe
                 objectMapper.readTree(
                     """{"expoValid":[{"expoId":"$expoId","preStandardFormCreatedStatus":true,"siteStandardFormCreatedStatus":false,"traineeFormCreatedStatus":true,"standardSurveyCreatedStatus":true,"traineeSurveyCreatedStatus":false}]}""",

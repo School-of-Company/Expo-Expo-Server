@@ -13,6 +13,9 @@ import org.springframework.data.repository.query.Param
 import team.startup.expo.domain.expo.entity.Expo
 
 interface ExpoRepository : JpaRepository<Expo, String> {
+    @Query("select expo.id from Expo expo")
+    fun findAllIds(): List<String>
+
     fun existsByIdAndDeletingAtIsNotNull(id: String): Boolean
 
     fun findAllByDeletingAtIsNullAndFinishedDayGreaterThanEqual(
