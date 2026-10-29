@@ -34,8 +34,11 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       acks: all
+      compression-type: ${KAFKA_PRODUCER_COMPRESSION_TYPE:zstd}
       properties:
         enable.idempotence: true
+        max.request.size: ${KAFKA_PRODUCER_MAX_REQUEST_SIZE:5242880}
+        linger.ms: ${KAFKA_PRODUCER_LINGER_MS:20}
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/expo}
     username: ${DB_USERNAME:expo}

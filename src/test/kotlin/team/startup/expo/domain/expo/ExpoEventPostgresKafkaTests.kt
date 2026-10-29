@@ -148,6 +148,30 @@ class ExpoEventPostgresKafkaTests {
     }
 
     @Test
+    fun `압축 전 1MiB를 넘는 스냅샷도 기본 브로커 크기 제한에서 발행한다`() {
+        seedExpo(EXPO)
+        val description = "snapshot".repeat(160_000)
+        jdbc.update("UPDATE tb_expo SET description = ? WHERE id = ?", description, EXPO)
+        dbTransactions.executeWithoutResult { events.changed(EXPO) }
+        val snapshotBytes = jdbc.queryForObject("SELECT octet_length(snapshot) FROM tb_expo_event_outbox", Int::class.java)!!
+        (snapshotBytes > 1024 * 1024) shouldBe true
+
+        consumer().use { consumer ->
+            relay.execute()
+
+            val record = nextRecord(consumer)
+            record.key() shouldBe EXPO
+            (record.value().toByteArray(Charsets.UTF_8).size > 1024 * 1024) shouldBe true
+            mapper
+                .readTree(record.value())
+                .path("expo")
+                .path("description")
+                .asString() shouldBe description
+            states() shouldBe listOf("PUBLISHED")
+        }
+    }
+
+    @Test
     fun `설정이 실제로 바뀐 요청만 아웃박스에 쌓는다`() {
         seedExpo(EXPO)
         rows(EXPO) shouldBe 0
