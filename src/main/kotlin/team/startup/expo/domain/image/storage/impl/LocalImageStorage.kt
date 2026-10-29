@@ -1,8 +1,11 @@
 package team.startup.expo.domain.image.storage.impl
 
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.core.io.FileSystemResource
+import org.springframework.core.io.Resource
 import org.springframework.stereotype.Component
 import team.startup.expo.domain.image.storage.ImageStorage
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -31,7 +34,10 @@ class LocalImageStorage(
         }
     }
 
-    override fun read(key: String): ByteArray = Files.readAllBytes(pathFor(key))
+    override fun read(key: String): Resource =
+        FileSystemResource(pathFor(key)).also {
+            if (!it.isReadable) throw IOException("Image is not readable")
+        }
 
     override fun delete(key: String) {
         Files.deleteIfExists(pathFor(key))
