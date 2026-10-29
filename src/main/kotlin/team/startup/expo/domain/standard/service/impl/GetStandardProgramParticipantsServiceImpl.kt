@@ -3,7 +3,6 @@ package team.startup.expo.domain.standard.service.impl
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.standard.presentation.dto.response.StandardProgramParticipantResponse
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.standard.service.GetStandardProgramParticipantsService
@@ -17,7 +16,6 @@ class GetStandardProgramParticipantsServiceImpl(
     private val dependencies: StandardDependenciesClient,
     private val attendances: ProgramAttendanceClient,
 ) : GetStandardProgramParticipantsService {
-    @Transactional(readOnly = true)
     override fun execute(programId: Long): List<StandardProgramParticipantResponse> {
         val program =
             programs.findByIdOrNull(programId)
