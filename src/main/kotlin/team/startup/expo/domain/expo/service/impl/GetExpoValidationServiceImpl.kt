@@ -31,7 +31,7 @@ class GetExpoValidationServiceImpl(
     private val lookupExecutor = Executors.newFixedThreadPool(8)
 
     override fun execute(): ExpoValidationResponse {
-        val expoIds = expoRepository.findAll().map { it.id }
+        val expoIds = expoRepository.findAllIds()
         if (expoIds.isNotEmpty() && formServiceUrl.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Form 서비스 연결이 설정되지 않았습니다.")
         }
