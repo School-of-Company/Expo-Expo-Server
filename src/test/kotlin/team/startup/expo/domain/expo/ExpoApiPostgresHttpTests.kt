@@ -217,7 +217,8 @@ class ExpoApiPostgresHttpTests {
 
     @Test
     fun `이미지 업로드 URL은 공개 조회와 Expo 연결 후에도 유지된다`() {
-        val uploaded = uploadImage(pngBytes())
+        val bytes = pngBytes()
+        val uploaded = uploadImage(bytes)
         uploaded.statusCode() shouldBe 201
         val url = objectMapper.readTree(uploaded.body()).get("imageURL").asString()
         val id = url.substringAfterLast('/')
@@ -228,7 +229,38 @@ class ExpoApiPostgresHttpTests {
             )
         imageResponse.statusCode() shouldBe 200
         imageResponse.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow() shouldBe "image/png"
+        imageResponse.headers().firstValue(HttpHeaders.ETAG).orElseThrow() shouldBe "\"$id\""
+        val cacheControl = "max-age=31536000, public, immutable"
+        imageResponse.headers().firstValue(HttpHeaders.CACHE_CONTROL).orElseThrow() shouldBe cacheControl
+        imageResponse.body().toList() shouldBe bytes.toList()
         ImageIO.read(imageResponse.body().inputStream()).width shouldBe 750
+
+        for (validator in listOf("\"$id\"", "W/\"$id\"", "\"other\", \"$id\"", "*")) {
+            val notModified =
+                httpClient.send(
+                    HttpRequest
+                        .newBuilder(URI.create("http://localhost:$port/image/$id"))
+                        .header(HttpHeaders.IF_NONE_MATCH, validator)
+                        .GET()
+                        .build(),
+                    HttpResponse.BodyHandlers.ofByteArray(),
+                )
+            notModified.statusCode() shouldBe 304
+            notModified.headers().firstValue(HttpHeaders.ETAG).orElseThrow() shouldBe "\"$id\""
+            notModified.headers().firstValue(HttpHeaders.CACHE_CONTROL).orElseThrow() shouldBe cacheControl
+            notModified.body().size shouldBe 0
+        }
+        val modified =
+            httpClient.send(
+                HttpRequest
+                    .newBuilder(URI.create("http://localhost:$port/image/$id"))
+                    .header(HttpHeaders.IF_NONE_MATCH, "\"other\"")
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofByteArray(),
+            )
+        modified.statusCode() shouldBe 200
+        modified.body().toList() shouldBe bytes.toList()
 
         val created = postExpo(VALID_REQUEST_JSON.replace("https://example.com/cover.png", url), "ROLE_ADMIN")
         created.statusCode() shouldBe 201
