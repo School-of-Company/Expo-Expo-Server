@@ -15,14 +15,16 @@ class ExpoEventOutboxRepository(
     fun insert(
         expoId: String,
         snapshot: String?,
-    ) {
+    ): String {
+        val eventId = UUID.randomUUID().toString()
         jdbc.update(
             "INSERT INTO tb_expo_event_outbox (event_id, expo_id, deleted, snapshot) VALUES (?, ?, ?, ?)",
-            UUID.randomUUID().toString(),
+            eventId,
             expoId,
             snapshot == null,
             snapshot,
         )
+        return eventId
     }
 
     // 박람회마다 가장 앞선 대기 행만 선점해 한 박람회의 이벤트가 sequence 순서대로 나가게 한다.

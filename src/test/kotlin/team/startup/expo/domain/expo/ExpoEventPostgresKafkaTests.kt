@@ -1,12 +1,16 @@
 package team.startup.expo.domain.expo
 
 import io.kotest.matchers.shouldBe
+import jakarta.persistence.EntityManager
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.KafkaConsumer
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.ArgumentMatchers.anyString
+import org.mockito.Mockito.doCallRealMethod
+import org.mockito.Mockito.doNothing
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.persistence.autoconfigure.EntityScan
 import org.springframework.boot.test.context.SpringBootTest
@@ -17,6 +21,7 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker
 import org.springframework.kafka.test.context.EmbeddedKafka
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -26,6 +31,7 @@ import team.startup.expo.domain.expo.presentation.dto.request.PreregisterSession
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.CreatePreregisterSessionService
 import team.startup.expo.domain.expo.service.ExpoEventSupport
+import team.startup.expo.domain.expo.service.PublishCommittedExpoEventService
 import team.startup.expo.domain.expo.service.PublishExpoEventsService
 import team.startup.expo.domain.expo.service.RecoverExpoEventsService
 import team.startup.expo.domain.image.entity.ExpoImage
@@ -59,6 +65,12 @@ import java.util.concurrent.TimeUnit
 @EntityScan("team.startup.expo.domain")
 @Testcontainers
 class ExpoEventPostgresKafkaTests {
+    @MockitoSpyBean
+    private lateinit var immediate: PublishCommittedExpoEventService
+
+    @Autowired
+    private lateinit var entityManager: EntityManager
+
     @LocalServerPort
     private var port = 0
 
@@ -97,11 +109,13 @@ class ExpoEventPostgresKafkaTests {
 
     @BeforeEach
     fun setup() {
+        doNothing().`when`(immediate).execute(anyString())
         jdbc.execute("TRUNCATE TABLE tb_expo_event_outbox, tb_program_change, tb_expo RESTART IDENTITY CASCADE")
     }
 
     @Test
-    fun `박람회 생성은 같은 트랜잭션에서 전체 상태 한 건을 쌓고 릴레이가 expoId 키로 발행한다`() {
+    fun `박람회 생성은 같은 트랜잭션에서 전체 상태 한 건을 쌓고 커밋 후 즉시 expoId 키로 발행한다`() {
+        doCallRealMethod().`when`(immediate).execute(anyString())
         consumer().use { consumer ->
             val response = request("/expo", "POST", createBody(), authorization = "Bearer ${TestJwt.token("ROLE_ADMIN")}")
             response.statusCode() shouldBe 201
@@ -113,8 +127,6 @@ class ExpoEventPostgresKafkaTests {
             snapshot.path("standardPrograms")[0].path("startedAt").asString() shouldBe "2026-09-24T09:00"
             snapshot.path("trainingPrograms")[0].path("category").asString() shouldBe "ESSENTIAL"
 
-            relay.execute()
-
             val record = nextRecord(consumer)
             record.key() shouldBe expoId
             val message = mapper.readTree(record.value())
@@ -123,7 +135,15 @@ class ExpoEventPostgresKafkaTests {
             message.path("eventId").asString() shouldBe jdbc.queryForObject("SELECT event_id FROM tb_expo_event_outbox", String::class.java)
             message.path("deleted").asBoolean() shouldBe false
             message.path("standardPrograms").size() shouldBe 1
-            jdbc.queryForObject("SELECT state FROM tb_expo_event_outbox", String::class.java) shouldBe "PUBLISHED"
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (dbTransactions.execute { entityManager.createNativeQuery("SELECT state FROM tb_expo_event_outbox").singleResult } !=
+                "PUBLISHED"
+            ) {
+                check(System.nanoTime() < deadline) { "Immediate publication was not recorded" }
+                Thread.sleep(10)
+            }
+            relay.execute()
+            consumer.poll(Duration.ofMillis(500)).isEmpty shouldBe true
         }
     }
 
