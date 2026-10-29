@@ -40,6 +40,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.security.MessageDigest
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -1659,6 +1660,86 @@ class ProgramPoliciesPostgresHttpTests {
         val page = request("/internal/expo/$EXPO/program-sessions", role = null, token = "expo-test-token")
         page.statusCode() shouldBe 200
         mapper.readTree(page.body()).get("items").count { !it.get("place").isNull && it.get("place").asString() == "Room B" } shouldBe 2
+    }
+
+    @Test
+    fun `program session pages preserve type and id order and combine column filters`() {
+        create("standard")
+        val group = list("standard")[0].get("groupId").asString()
+        request("/standard/$EXPO", "POST", body("standard", policy(group = group))).statusCode() shouldBe 201
+        create("standard")
+        create("training")
+        request("/training/$OTHER", "POST", body("training", policy = null)).statusCode() shouldBe 201
+
+        val all = sessionPage()
+        all.get("totalElements").asLong() shouldBe 4L
+        all.get("items").toList().map { it.get("programType").asString() to it.get("id").asLong() } shouldBe
+            listOf("STANDARD" to 1L, "STANDARD" to 2L, "STANDARD" to 3L, "TRAINING" to 1L)
+        val version = all.get("definitionVersion").asString()
+        val first = sessionPage("size=2")
+        first.get("items").toList() shouldBe all.get("items").take(2)
+        val second = sessionPage("size=2&page=1&definitionVersion=$version")
+        second.get("page").asInt() shouldBe 1
+        second.get("size").asInt() shouldBe 2
+        second.get("totalElements").asLong() shouldBe 4L
+        second.get("items").toList() shouldBe all.get("items").drop(2)
+        sessionPage("size=2&page=2&definitionVersion=$version").get("items").size() shouldBe 0
+
+        val grouped = sessionPage("groupId=$group&size=1")
+        grouped.get("totalElements").asLong() shouldBe 2L
+        grouped.get("items")[0] shouldBe all.get("items")[0]
+        sessionPage("groupId=$group&size=1&page=1&definitionVersion=$version").get("items")[0] shouldBe all.get("items")[1]
+        sessionPage("programType=TRAINING").get("items").toList() shouldBe listOf(all.get("items")[3])
+        sessionPage("programType=STANDARD&groupId=$group&programId=2").get("items").toList() shouldBe listOf(all.get("items")[1])
+        sessionPage("programType=TRAINING&programId=1").get("totalElements").asLong() shouldBe 1L
+        internal("/internal/expo/$EXPO/program-sessions?programType=TRAINING&groupId=$group").statusCode() shouldBe 404
+        internal("/internal/expo/$EXPO/program-sessions?programType=STANDARD&programId=99").statusCode() shouldBe 404
+    }
+
+    @Test
+    fun `program session version tracks revisions additions and deletions for both types`() {
+        val empty = sessionPage()
+        empty.get("totalElements").asLong() shouldBe 0L
+        empty.get("items").size() shouldBe 0
+        var version = empty.get("definitionVersion").asString()
+        listOf("standard", "training").forEach { type ->
+            request("/$type/$EXPO", "POST", body(type, policy = null)).statusCode() shouldBe 201
+            val created = sessionPage().get("definitionVersion").asString()
+            (created != version) shouldBe true
+            request("/$type/1", "PATCH", withPlace(body(type, policy = null, id = 1), "Room A")).statusCode() shouldBe 204
+            val updated = sessionPage()
+            updated
+                .get("items")
+                .first { it.get("programType").asString() == type.uppercase() }
+                .get("revision")
+                .asLong() shouldBe 2L
+            version = updated.get("definitionVersion").asString()
+            (version != created) shouldBe true
+            internal("/internal/expo/$EXPO/program-sessions?page=1&size=1&definitionVersion=$created").statusCode() shouldBe 409
+            request("/$type/1", "PATCH", body(type, policy = null, id = 1)).statusCode() shouldBe 204
+            sessionPage().get("definitionVersion").asString() shouldBe version
+        }
+        val expected =
+            MessageDigest
+                .getInstance("MD5")
+                .digest("STANDARD:1:2,TRAINING:1:2".toByteArray())
+                .joinToString("") { "%02x".format(it) }
+        version shouldBe expected
+        request("/training/$OTHER", "POST", body("training", policy = null)).statusCode() shouldBe 201
+        sessionPage().get("definitionVersion").asString() shouldBe version
+        listOf("standard", "training").forEach { type ->
+            request("/$type/1", "DELETE").statusCode() shouldBe 204
+            val deleted = sessionPage().get("definitionVersion").asString()
+            (deleted != version) shouldBe true
+            version = deleted
+        }
+        version shouldBe empty.get("definitionVersion").asString()
+    }
+
+    private fun sessionPage(query: String = ""): JsonNode {
+        val response = internal("/internal/expo/$EXPO/program-sessions?$query")
+        response.statusCode() shouldBe 200
+        return mapper.readTree(response.body())
     }
 
     @Test
