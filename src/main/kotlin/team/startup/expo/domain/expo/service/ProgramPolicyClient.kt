@@ -31,16 +31,51 @@ class ProgramPolicyClient(
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
     fun validateForm(definition: ProgramDefinition) {
-        val policy = definition.policy ?: return
-        val response = send(Downstream.FORM, formUrl, formToken, "/internal/forms/by-id/${policy.formId}", "GET", "")
+        formValidator()(definition)
+    }
+
+    fun formValidator(): (ProgramDefinition) -> Unit {
+        val forms = mutableMapOf<UUID, Result<ProgramForm>>()
+        val capabilities = mutableMapOf<String, Result<HttpResponse<String>>>()
+        return { definition ->
+            definition.policy?.let { policy ->
+                val form = forms.getOrPut(policy.formId) { runCatching { fetchForm(policy.formId) } }.getOrThrow()
+                validateForm(definition, form) {
+                    capabilities
+                        .getOrPut(definition.expoId) {
+                            runCatching {
+                                send(
+                                    Downstream.APPLICATION,
+                                    applicationUrl,
+                                    applicationToken,
+                                    "/internal/expos/${definition.expoId}/program-policy-capabilities",
+                                    "GET",
+                                    "",
+                                )
+                            }
+                        }.getOrThrow()
+                }
+            }
+        }
+    }
+
+    private fun fetchForm(formId: UUID): ProgramForm {
+        val response = send(Downstream.FORM, formUrl, formToken, "/internal/forms/by-id/$formId", "GET", "")
         if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "프로그램 폼을 찾지 못 했습니다.")
         if (response.statusCode() != 200) badResponse()
-        val form =
-            try {
-                mapper.readValue(response.body(), ProgramForm::class.java)
-            } catch (exception: Exception) {
-                badResponse()
-            }
+        return try {
+            mapper.readValue(response.body(), ProgramForm::class.java)
+        } catch (exception: Exception) {
+            badResponse()
+        }
+    }
+
+    private fun validateForm(
+        definition: ProgramDefinition,
+        form: ProgramForm,
+        capabilities: () -> HttpResponse<String>,
+    ) {
+        val policy = requireNotNull(definition.policy)
         if (form.id != policy.formId || form.expoId != definition.expoId || form.purpose != "PROGRAM" ||
             (
                 form.participantType != null &&
@@ -103,15 +138,7 @@ class ProgramPolicyClient(
             }
         }
         if (policy.guardianPolicy != null || policy.customizesPromotion()) {
-            val support =
-                send(
-                    Downstream.APPLICATION,
-                    applicationUrl,
-                    applicationToken,
-                    "/internal/expos/${definition.expoId}/program-policy-capabilities",
-                    "GET",
-                    "",
-                )
+            val support = capabilities()
             policy.guardianPolicy?.let { requireGuardianSupport(support, it.guardianSchoolValue != null) }
             if (policy.customizesPromotion()) requirePromotionSupport(support)
         }

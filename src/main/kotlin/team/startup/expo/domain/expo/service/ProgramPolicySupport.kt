@@ -368,19 +368,23 @@ class ProgramPolicySupport(
     }
 
     // 트랜잭션 밖에서 호출한다. 폼 변경 행은 지우지 않으므로 조회 전 행 수가 락 안에서도 같으면 그사이 새 폼 변경이 없었다.
-    fun checkForms(definitions: List<ProgramDefinition>): Map<Any, FormCheck> =
-        definitions.filter { it.policy != null }.associateBy(::formKey).mapValues { (_, definition) ->
-            val version = forms.version(requireNotNull(definition.policy).formId)
+    fun checkForms(definitions: List<ProgramDefinition>): Map<Any, FormCheck> {
+        val versions = mutableMapOf<UUID, Long?>()
+        val validateForm = client.formValidator()
+        return definitions.filter { it.policy != null }.associateBy(::formKey).mapValues { (_, definition) ->
+            val formId = requireNotNull(definition.policy).formId
+            val version = if (formId in versions) versions[formId] else forms.version(formId).also { versions[formId] = it }
             val failure =
                 try {
                     definition.policy.validate()
-                    if (version != null) client.validateForm(definition)
+                    if (version != null) validateForm(definition)
                     null
                 } catch (exception: ExpectedException) {
                     exception
                 }
             FormCheck(version, failure)
         }
+    }
 
     private fun checkForm(
         definition: ProgramDefinition,
