@@ -29,7 +29,7 @@ tree and ignore the other — they cover the same ground in two languages.
 
 ### Service
 - Role: Business logic, transaction management
-- Pattern: one interface + one implementation per API endpoint, declaring `execute(...)`
+- Pattern: interface + implementation
 - Transaction:
   - Read: `@Transactional(readOnly = true)`
   - Write: `@Transactional`
