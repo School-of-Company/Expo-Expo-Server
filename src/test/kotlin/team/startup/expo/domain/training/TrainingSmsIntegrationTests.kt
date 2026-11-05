@@ -660,7 +660,22 @@ class TrainingSmsIntegrationTests {
                 "",
                 mapper,
                 team.startup.expo.global.attendance
-                    .ProgramAttendanceClient("", "", mapper, breakers),
+                    .ProgramAttendanceClient(
+                        "",
+                        "",
+                        mapper,
+                        team.startup.expo.support
+                            .feignClient<team.startup.expo.global.client.AttentionClient>(""),
+                        breakers,
+                    ),
+                team.startup.expo.support.feignClient<team.startup.expo.global.client.TrainingUserClient>(
+                    "http://127.0.0.1:${upstream.address.port}",
+                    "test-user-token",
+                ),
+                team.startup.expo.support
+                    .feignClient<team.startup.expo.global.client.TrainingApplicationClient>(""),
+                team.startup.expo.support
+                    .feignClient<team.startup.expo.global.client.PublicFormClient>(""),
                 breakers,
             )
         val service = ApplyTrainingProgramListServiceImpl(expos, policies, programs, missing, applicationSms, dbTransactions)

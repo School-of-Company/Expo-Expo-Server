@@ -1,21 +1,23 @@
 package team.startup.expo.domain.expo.service
 
+import feign.Response
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.context.annotation.Lazy
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.global.client.ApplicationClient
 import team.startup.expo.global.client.Downstream
 import team.startup.expo.global.client.DownstreamCircuitBreakers
+import team.startup.expo.global.client.FormClient
+import team.startup.expo.global.client.bodyText
+import team.startup.expo.global.client.header
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 
@@ -26,17 +28,13 @@ class ProgramPolicyClient(
     @Value("\${expo.form-service-url:}") private val formUrl: String,
     @Value("\${FORM_INTERNAL_TOKEN:}") private val formToken: String,
     private val mapper: ObjectMapper,
+    @Lazy private val applications: ApplicationClient,
+    @Lazy private val forms: FormClient,
     private val breakers: DownstreamCircuitBreakers,
 ) {
-    private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
-
-    fun validateForm(definition: ProgramDefinition) {
-        formValidator()(definition)
-    }
-
     fun formValidator(): (ProgramDefinition) -> Unit {
         val forms = mutableMapOf<UUID, Result<ProgramForm>>()
-        val capabilities = mutableMapOf<String, Result<HttpResponse<String>>>()
+        val capabilities = mutableMapOf<String, Result<Response>>()
         return { definition ->
             definition.policy?.let { policy ->
                 val form = forms.getOrPut(policy.formId) { runCatching { fetchForm(policy.formId) } }.getOrThrow()
@@ -44,14 +42,9 @@ class ProgramPolicyClient(
                     capabilities
                         .getOrPut(definition.expoId) {
                             runCatching {
-                                send(
-                                    Downstream.APPLICATION,
-                                    applicationUrl,
-                                    applicationToken,
-                                    "/internal/expos/${definition.expoId}/program-policy-capabilities",
-                                    "GET",
-                                    "",
-                                )
+                                call(Downstream.APPLICATION, applicationUrl, applicationToken, idempotent = true) {
+                                    applications.capabilities(definition.expoId)
+                                }
                             }
                         }.getOrThrow()
                 }
@@ -60,11 +53,11 @@ class ProgramPolicyClient(
     }
 
     private fun fetchForm(formId: UUID): ProgramForm {
-        val response = send(Downstream.FORM, formUrl, formToken, "/internal/forms/by-id/$formId", "GET", "")
-        if (response.statusCode() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "프로그램 폼을 찾지 못 했습니다.")
-        if (response.statusCode() != 200) badResponse()
+        val response = call(Downstream.FORM, formUrl, formToken, idempotent = true) { forms.byId(formId.toString()) }
+        if (response.status() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "프로그램 폼을 찾지 못 했습니다.")
+        if (response.status() != 200) badResponse()
         return try {
-            mapper.readValue(response.body(), ProgramForm::class.java)
+            mapper.readValue(response.bodyText(), ProgramForm::class.java)
         } catch (exception: Exception) {
             badResponse()
         }
@@ -73,13 +66,14 @@ class ProgramPolicyClient(
     private fun validateForm(
         definition: ProgramDefinition,
         form: ProgramForm,
-        capabilities: () -> HttpResponse<String>,
+        capabilities: () -> Response,
     ) {
         val policy = requireNotNull(definition.policy)
-        if (form.id != policy.formId || form.expoId != definition.expoId || form.purpose != "PROGRAM" ||
+        if (form.id != policy.formId || form.expoId != definition.expoId || form.purpose != PROGRAM_PURPOSE ||
             (
                 form.participantType != null &&
-                    form.participantType != if (definition.programType.name == "STANDARD") "STANDARD" else "TRAINEE"
+                    form.participantType !=
+                    if (definition.programType == ProgramType.STANDARD) STANDARD_PARTICIPANT else TRAINEE_PARTICIPANT
             )
         ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 폼의 행사 또는 참여 유형이 일치하지 않습니다.")
@@ -125,11 +119,11 @@ class ProgramPolicyClient(
                 conditional?.path("triggerValues")?.takeIf { it.isArray }?.map { it.asString() }
                     ?: conditional?.path("triggerValue")?.takeIf { it.isString }?.let { listOf(it.asString()) }
             if (school == null || grade == null || parent != school || questions.indexOf(school) >= questions.indexOf(grade) ||
-                school.path("formType").asString() != "DROPDOWN" || !school.path("requiredStatus").asBoolean() ||
+                school.path("formType").asString() != DROPDOWN || !school.path("requiredStatus").asBoolean() ||
                 (schoolConditional != null && !schoolConditional.isMissingNode && !schoolConditional.isNull) ||
                 !school.path("jsonData").has(guardian.elementarySchoolValue) ||
                 (guardian.guardianSchoolValue != null && !school.path("jsonData").has(guardian.guardianSchoolValue)) ||
-                grade.path("formType").asString() != "DROPDOWN" || !grade.path("requiredStatus").asBoolean() ||
+                grade.path("formType").asString() != DROPDOWN || !grade.path("requiredStatus").asBoolean() ||
                 gradeKeys != guardian.gradeValues.keys ||
                 (conditional.hasNonNull("triggerValue") && conditional.hasNonNull("triggerValues")) ||
                 triggers != listOf(guardian.elementarySchoolValue)
@@ -162,26 +156,33 @@ class ProgramPolicyClient(
         val promotionChange =
             guarded.any { it.previous?.policy?.customizesPromotion() == true || it.definition?.policy?.customizesPromotion() == true }
         val response =
-            send(
-                Downstream.APPLICATION,
-                applicationUrl,
-                applicationToken,
-                "/internal/expos/$expoId/program-changes/$changeId${if (guardianChange) "/guardian-policy" else ""}",
-                "PUT",
-                mapper.writeValueAsString(ProgramChangePayload(guarded)),
-            )
-        when (response.statusCode()) {
+            call(Downstream.APPLICATION, applicationUrl, applicationToken) {
+                if (guardianChange) {
+                    applications.prepareGuardian(
+                        expoId,
+                        changeId.toString(),
+                        mapper.writeValueAsString(ProgramChangePayload(guarded)),
+                    )
+                } else {
+                    applications.prepareProgram(
+                        expoId,
+                        changeId.toString(),
+                        mapper.writeValueAsString(ProgramChangePayload(guarded)),
+                    )
+                }
+            }
+        when (response.status()) {
             204 -> {
                 if (guardianChange) requireGuardianSupport(response, schoolValueChange)
                 if (promotionChange) requirePromotionSupport(response)
             }
 
             409 -> {
-                throw applicationConflict(mapper, response.body(), "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다.")
+                throw applicationConflict(mapper, response.bodyText(), "신청 이력, 활성 인원 또는 진행 중인 변경으로 프로그램을 변경할 수 없습니다.")
             }
 
             else -> {
-                if (guardianChange && response.statusCode() in listOf(404, 405)) requireGuardianSupport(response, schoolValueChange)
+                if (guardianChange && response.status() in UNSUPPORTED_STATUSES) requireGuardianSupport(response, schoolValueChange)
                 badResponse()
             }
         }
@@ -189,48 +190,38 @@ class ProgramPolicyClient(
 
     // 구버전 Application이 새 정책을 무시한 채 승인하는 것을 막는다. guardianSchoolValue도 모르는 필드로 무시되므로 별도 헤더로 확인한다.
     private fun requireGuardianSupport(
-        response: HttpResponse<String>,
+        response: Response,
         schoolValue: Boolean,
     ) {
-        val headers = response.headers()
-        if (response.statusCode() !in listOf(200, 204) ||
-            headers.firstValue("X-Program-Guardian-Policy-Version").orElse("") != "1" ||
-            (schoolValue && headers.firstValue("X-Program-Guardian-School-Value-Version").orElse("") != "1")
+        if (response.status() !in SUPPORTED_STATUSES ||
+            response.header(GUARDIAN_POLICY_HEADER) != POLICY_VERSION ||
+            (schoolValue && response.header(GUARDIAN_SCHOOL_HEADER) != POLICY_VERSION)
         ) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Application의 보호자 동반 정책 지원 확인이 필요합니다.")
         }
     }
 
     // 구버전 Application은 자동 승급 설정을 무시하고 promotionEndedAt까지 자동 승급하므로 지원 확인 전에는 저장하지 않는다.
-    private fun requirePromotionSupport(response: HttpResponse<String>) {
-        if (response.statusCode() !in listOf(200, 204) ||
-            response.headers().firstValue("X-Program-Promotion-Policy-Version").orElse("") != "1"
+    private fun requirePromotionSupport(response: Response) {
+        if (response.status() !in SUPPORTED_STATUSES ||
+            response.header(PROMOTION_POLICY_HEADER) != POLICY_VERSION
         ) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "Application의 자동 승급 정책 지원 확인이 필요합니다.")
         }
     }
 
-    private fun send(
+    private fun call(
         downstream: Downstream,
         base: String,
         token: String,
-        path: String,
-        method: String,
-        body: String,
-    ): HttpResponse<String> {
+        idempotent: Boolean = false,
+        block: () -> Response,
+    ): Response {
         if (base.isBlank() || token.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "프로그램 정책 내부 연동이 설정되지 않았습니다.")
         }
         try {
-            val request =
-                HttpRequest
-                    .newBuilder(URI.create("${base.trimEnd('/')}$path"))
-                    .timeout(Duration.ofSeconds(5))
-                    .header("Content-Type", "application/json")
-                    .header("X-Internal-Token", token)
-                    .method(method, if (body.isEmpty()) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofString(body))
-                    .build()
-            return breakers.send(downstream, http, request, HttpResponse.BodyHandlers.ofString(), idempotent = method == "GET")
+            return breakers.call(downstream, idempotent, block)
         } catch (exception: InterruptedException) {
             Thread.currentThread().interrupt()
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "프로그램 정책 연동이 중단됐습니다.")
@@ -251,4 +242,17 @@ class ProgramPolicyClient(
         val version: Long? = null,
         val dynamicForm: JsonNode? = null,
     )
+
+    private companion object {
+        const val DROPDOWN = "DROPDOWN"
+        const val PROGRAM_PURPOSE = "PROGRAM"
+        const val STANDARD_PARTICIPANT = "STANDARD"
+        const val TRAINEE_PARTICIPANT = "TRAINEE"
+        const val GUARDIAN_POLICY_HEADER = "X-Program-Guardian-Policy-Version"
+        const val GUARDIAN_SCHOOL_HEADER = "X-Program-Guardian-School-Value-Version"
+        const val PROMOTION_POLICY_HEADER = "X-Program-Promotion-Policy-Version"
+        const val POLICY_VERSION = "1"
+        val SUPPORTED_STATUSES = setOf(200, 204)
+        val UNSUPPORTED_STATUSES = setOf(404, 405)
+    }
 }

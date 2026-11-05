@@ -30,8 +30,10 @@ import team.startup.expo.domain.expo.repository.PreregisterSessionChangeReposito
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
+import team.startup.expo.global.client.ApplicationClient
 import team.startup.expo.global.exception.ExpectedException
 import team.startup.expo.support.TestJwt
+import team.startup.expo.support.feignClient
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
@@ -97,6 +99,7 @@ class PreregisterSessionPostgresHttpTests {
         reconciliationHook = { true }
         loseReconciliationResponse = false
         ReflectionTestUtils.setField(changes, "applicationUrl", applicationUrl)
+        ReflectionTestUtils.setField(changes, "applications", feignClient<ApplicationClient>(applicationUrl, "test-application-token"))
         ReflectionTestUtils.setField(changes, "internalToken", "test-application-token")
         jdbc.execute("TRUNCATE TABLE tb_expo RESTART IDENTITY CASCADE")
         expos.saveAllAndFlush(
@@ -590,6 +593,7 @@ class PreregisterSessionPostgresHttpTests {
             val url = "http://127.0.0.1:${unavailable.address.port}"
             unavailable.stop(0)
             ReflectionTestUtils.setField(changes, "applicationUrl", url)
+            ReflectionTestUtils.setField(changes, "applications", feignClient<ApplicationClient>(url, "test-application-token"))
             request(path(deleteId) + "?revision=1", "DELETE").statusCode() shouldBe 503
         }
         read(id) shouldBe original

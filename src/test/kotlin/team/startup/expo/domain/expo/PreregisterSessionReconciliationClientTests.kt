@@ -6,8 +6,10 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
+import team.startup.expo.global.client.ApplicationClient
 import team.startup.expo.global.client.DownstreamCircuitBreakers
 import team.startup.expo.global.exception.ExpectedException
+import team.startup.expo.support.feignClient
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
 
@@ -20,6 +22,7 @@ class PreregisterSessionReconciliationClientTests {
         var calls = 0
         server.createContext("/internal/expos/expo/preregister-sessions/5/reconciliation") { exchange ->
             exchange.requestMethod shouldBe "POST"
+            exchange.requestHeaders.getFirst("Content-Type") shouldBe null
             exchange.requestHeaders.getFirst("X-Internal-Token") shouldBe "application-token"
             exchange.requestBody.readAllBytes().size shouldBe 0
             calls++
@@ -35,6 +38,7 @@ class PreregisterSessionReconciliationClientTests {
                     "http://127.0.0.1:${server.address.port}",
                     "application-token",
                     ObjectMapper(),
+                    feignClient<ApplicationClient>("http://127.0.0.1:${server.address.port}", "application-token"),
                     DownstreamCircuitBreakers(),
                 )
             repeat(2) { client.reconcile("expo", 5) }
@@ -51,13 +55,20 @@ class PreregisterSessionReconciliationClientTests {
                 assertThrows(ExpectedException::class.java) { client.reconcile("expo", 5) }.status shouldBe expected
             }
             assertThrows(ExpectedException::class.java) {
-                PreregisterSessionChangesClient("", "application-token", ObjectMapper(), DownstreamCircuitBreakers()).reconcile("expo", 5)
+                PreregisterSessionChangesClient(
+                    "",
+                    "application-token",
+                    ObjectMapper(),
+                    feignClient<ApplicationClient>("http://127.0.0.1:${server.address.port}", "application-token"),
+                    DownstreamCircuitBreakers(),
+                ).reconcile("expo", 5)
             }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
             assertThrows(ExpectedException::class.java) {
                 PreregisterSessionChangesClient(
                     "http://127.0.0.1:${server.address.port}",
                     "",
                     ObjectMapper(),
+                    feignClient<ApplicationClient>("http://127.0.0.1:${server.address.port}", "application-token"),
                     DownstreamCircuitBreakers(),
                 ).reconcile("expo", 5)
             }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE

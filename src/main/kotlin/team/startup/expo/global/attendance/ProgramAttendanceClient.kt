@@ -1,18 +1,17 @@
 package team.startup.expo.global.attendance
 
+import feign.Response
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.context.annotation.Lazy
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
+import team.startup.expo.global.client.AttentionClient
 import team.startup.expo.global.client.Downstream
 import team.startup.expo.global.client.DownstreamCircuitBreakers
+import team.startup.expo.global.client.bodyText
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 import java.time.LocalTime
 import java.time.format.DateTimeParseException
 
@@ -21,42 +20,25 @@ class ProgramAttendanceClient(
     @Value("\${expo.attention.service-url:}") private val serviceUrl: String,
     @Value("\${expo.attention.internal-token:}") private val internalToken: String,
     private val mapper: ObjectMapper,
+    @Lazy private val attention: AttentionClient,
     private val breakers: DownstreamCircuitBreakers,
 ) {
-    private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
-
     fun requireConfiguration() {
         if (serviceUrl.isBlank() || internalToken.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 내부 연동이 설정되지 않았습니다.")
         }
     }
 
-    fun deleteStandard(programId: Long) = delete("/internal/program-attendances/standard/$programId")
+    fun deleteStandard(programId: Long) = delete { attention.deleteStandard(programId) }
 
-    fun deleteTraining(programId: Long) = delete("/internal/program-attendances/training/$programId")
+    fun deleteTraining(programId: Long) = delete { attention.deleteTraining(programId) }
 
-    fun deleteExpo(expoId: String) = delete("/internal/expos/$expoId")
+    fun deleteExpo(expoId: String) = delete { attention.deleteExpo(expoId) }
 
-    private fun delete(path: String) {
+    private fun delete(block: () -> Response) {
         requireConfiguration()
         try {
-            val request =
-                HttpRequest
-                    .newBuilder(URI.create("${serviceUrl.trimEnd('/')}$path"))
-                    .timeout(Duration.ofSeconds(5))
-                    .header("X-Internal-Token", internalToken)
-                    .DELETE()
-                    .build()
-            if (breakers
-                    .send(
-                        Downstream.ATTENTION,
-                        http,
-                        request,
-                        HttpResponse.BodyHandlers.discarding(),
-                        idempotent = false,
-                    ).statusCode() !=
-                204
-            ) {
+            if (breakers.call(Downstream.ATTENTION, block = block).status() != 204) {
                 throw ExpectedException(HttpStatus.BAD_GATEWAY, "출석 서비스 삭제 응답을 확인할 수 없습니다.")
             }
         } catch (exception: InterruptedException) {
@@ -69,13 +51,13 @@ class ProgramAttendanceClient(
 
     fun standard(programId: Long): Map<Long, Attendance> =
         byPerson(
-            fetch("/internal/program-attendances/standard/$programId", Array<StandardAttendance>::class.java)
+            fetch(Array<StandardAttendance>::class.java) { attention.standard(programId) }
                 .map { Record(it.participantId, it.entryTime, it.leaveTime) },
         )
 
     fun training(programId: Long): Map<Long, Attendance> =
         byPerson(
-            fetch("/internal/program-attendances/training/$programId", Array<TrainingAttendance>::class.java)
+            fetch(Array<TrainingAttendance>::class.java) { attention.training(programId) }
                 .map { Record(it.traineeId, it.entryTime, it.leaveTime) },
         )
 
@@ -102,29 +84,22 @@ class ProgramAttendanceClient(
     }
 
     private fun <T> fetch(
-        path: String,
         type: Class<Array<T>>,
+        block: () -> Response,
     ): List<T> {
         requireConfiguration()
         val response =
             try {
-                val request =
-                    HttpRequest
-                        .newBuilder(URI.create("${serviceUrl.trimEnd('/')}$path"))
-                        .timeout(Duration.ofSeconds(5))
-                        .header("X-Internal-Token", internalToken)
-                        .GET()
-                        .build()
-                breakers.send(Downstream.ATTENTION, http, request, HttpResponse.BodyHandlers.ofString(), idempotent = true)
+                breakers.call(Downstream.ATTENTION, idempotent = true, block)
             } catch (exception: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 내부 연동이 중단됐습니다.")
             } catch (exception: IOException) {
                 throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "출석 서비스에 연결할 수 없습니다.")
             }
-        if (response.statusCode() != 200) throw ExpectedException(HttpStatus.BAD_GATEWAY, "Attention 서비스 응답을 확인할 수 없습니다.")
+        if (response.status() != 200) throw ExpectedException(HttpStatus.BAD_GATEWAY, "Attention 서비스 응답을 확인할 수 없습니다.")
         return try {
-            mapper.readValue(response.body(), type)?.toList()?.takeIf { values -> values.none { (it as Any?) == null } } ?: invalid()
+            mapper.readValue(response.bodyText(), type)?.toList()?.takeIf { values -> values.none { (it as Any?) == null } } ?: invalid()
         } catch (exception: ExpectedException) {
             throw exception
         } catch (exception: Exception) {

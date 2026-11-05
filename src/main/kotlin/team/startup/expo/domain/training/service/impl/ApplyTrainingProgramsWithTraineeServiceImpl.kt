@@ -59,7 +59,17 @@ class ApplyTrainingProgramsWithTraineeServiceImpl(
             throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
         }
         dependencies.requireApplicationConfiguration()
-        val traineeId = dependencies.resolveOrCreateTrainee(expoId, request)
+        val traineeId =
+            dependencies.resolveOrCreateTrainee(
+                TrainingDependenciesClient.ResolveOrCreateTraineeRequest(
+                    expoId,
+                    request.trainingId,
+                    request.name,
+                    request.phoneNumber,
+                    request.informationJson,
+                    request.personalInformationStatus,
+                ),
+            )
         sms.execute(expo, traineeId, found, TrainingOperationType.REPLACE)
     }
 }

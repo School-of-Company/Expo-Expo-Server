@@ -12,6 +12,14 @@ springdoc:
     disable-swagger-default-url: true
 
 spring:
+  cloud:
+    openfeign:
+      client:
+        config:
+          default:
+            connectTimeout: 3000
+            readTimeout: 5000
+            followRedirects: false
   application:
     name: expo-expo-server
   main:
