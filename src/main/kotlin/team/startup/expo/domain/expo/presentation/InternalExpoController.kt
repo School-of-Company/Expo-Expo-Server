@@ -22,7 +22,8 @@ import team.startup.expo.domain.standard.service.GetStandardProgramService
 import team.startup.expo.domain.training.presentation.dto.request.TrainingProgramBatchRequest
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramResponse
 import team.startup.expo.domain.training.service.GetTrainingProgramBatchService
-import team.startup.expo.global.swagger.ApiError
+import team.startup.expo.global.swagger.ApiInputError
+import team.startup.expo.global.swagger.ApiNotFoundError
 
 @RestController
 @RequestMapping("/internal/expo")
@@ -38,7 +39,7 @@ class InternalExpoController(
         description = "삭제 중이 아니고 종료일이 오늘(KST) 이후인 박람회를 시작일순으로 반환합니다. 최대 100개.",
     )
     @ApiResponse(responseCode = "200", description = "처리 성공")
-    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
+    @ApiInputError
     fun getExpoList(
         @ParameterObject @Valid @ModelAttribute request: InternalExpoPageRequest,
     ): ResponseEntity<InternalExpoPageResponse> = ResponseEntity.ok(getInternalExpoListService.execute(request))
@@ -49,7 +50,7 @@ class InternalExpoController(
         description = "Expo에 저장된 전화번호 인증 설정과 revision을 반환합니다. 조회 실패를 false로 처리하지 않습니다.",
     )
     @ApiResponse(responseCode = "200", description = "현재 설정과 revision. 기존 박람회 기본값은 false, 0입니다.")
-    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiNotFoundError
     fun getExpoPeriod(
         @PathVariable("expo_id") expoId: String,
     ): ResponseEntity<ExpoPeriodResponse> = ResponseEntity.ok(getExpoPeriodService.execute(expoId))
@@ -57,8 +58,8 @@ class InternalExpoController(
     @PostMapping("/{expo_id}/training-programs/batch")
     @Operation(summary = "내부 연수 프로그램 일괄 조회")
     @ApiResponse(responseCode = "200", description = "처리 성공")
-    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
-    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiInputError
+    @ApiNotFoundError
     fun getTrainingPrograms(
         @PathVariable("expo_id") expoId: String,
         @Valid @RequestBody request: TrainingProgramBatchRequest,
@@ -67,8 +68,8 @@ class InternalExpoController(
     @GetMapping("/{expo_id}/standard-programs/{program_id}")
     @Operation(summary = "내부 일반 프로그램 조회")
     @ApiResponse(responseCode = "200", description = "처리 성공")
-    @ApiError(status = 400, description = "입력 값·요청 형식·기간·식별자가 올바르지 않습니다.")
-    @ApiError(status = 404, description = "요청한 박람회·프로그램·회차·이미지 또는 연동 대상이 없습니다.")
+    @ApiInputError
+    @ApiNotFoundError
     fun getStandardProgram(
         @PathVariable("expo_id") expoId: String,
         @PathVariable("program_id") programId: Long,

@@ -38,7 +38,9 @@ data class ProgramMutation(
     val previous: ProgramDefinition?,
     @field:Schema(description = "회차 전체 정의")
     val definition: ProgramDefinition?,
-)
+) {
+    fun requiresApplicationGuard(): Boolean = previous != null && (previous.policy != null || definition?.policy != null)
+}
 
 data class ProgramChangePayload(
     @field:Schema(description = "프로그램 변경 목록", example = "[]")
@@ -47,4 +49,10 @@ data class ProgramChangePayload(
     val expoUpdate: UpdateExpoRequest? = null,
     @field:Schema(description = "이미지 업로드 관리자 식별자", example = "1")
     val uploadedBy: String? = null,
-)
+) {
+    fun pendingRevisions(type: ProgramType): Map<Long, Long> =
+        mutations
+            .mapNotNull { it.previous }
+            .filter { it.programType == type }
+            .associate { requireNotNull(it.id) to (it.revision + 1) }
+}

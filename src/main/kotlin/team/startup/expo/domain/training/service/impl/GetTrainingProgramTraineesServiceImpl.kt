@@ -20,9 +20,10 @@ class GetTrainingProgramTraineesServiceImpl(
         val program =
             programs.findByIdOrNull(programId)
                 ?: throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
+        val expoId = programs.findExpoIdById(programId)
         val applications = dependencies.applications(programId)
         if (applications.isEmpty()) return emptyList()
-        val expoId = program.expo?.id ?: throw ExpectedException(HttpStatus.BAD_GATEWAY, "프로그램의 박람회 정보가 없습니다.")
+        if (expoId == null) throw ExpectedException(HttpStatus.BAD_GATEWAY, "프로그램의 박람회 정보가 없습니다.")
         val traineeIds = applications.map { it.traineeId }.distinct()
         val names = dependencies.traineeNames(expoId, traineeIds)
         val namesById = names.associateBy { it.traineeId }

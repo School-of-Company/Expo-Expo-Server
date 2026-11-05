@@ -1,14 +1,13 @@
 package team.startup.expo.domain.expo.service
 
-import jakarta.persistence.EntityManager
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.repository.findByIdOrNull
-import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionSynchronization
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import team.startup.expo.domain.expo.messaging.ExpoEventSnapshot
+import team.startup.expo.domain.expo.messaging.ExpoState
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.repository.ExpoEventOutboxRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
@@ -22,9 +21,7 @@ import tools.jackson.databind.ObjectMapper
 // 꺼져 있으면(KAFKA_EXPO_EVENTS_ENABLED=false) 아무것도 쓰지 않는다.
 @Component
 class ExpoEventSupport(
-    @Value("\${expo.events.enabled:false}") private val enabled: Boolean,
-    private val entityManager: EntityManager,
-    private val jdbc: JdbcTemplate,
+    @Value("\${expo.events.enabled}") private val enabled: Boolean,
     private val expos: ExpoRepository,
     private val standards: StandardProgramRepository,
     private val trainings: TrainingProgramRepository,
@@ -50,7 +47,7 @@ class ExpoEventSupport(
                             private val eventIds = mutableListOf<String>()
 
                             override fun beforeCommit(readOnly: Boolean) {
-                                entityManager.flush()
+                                expos.flush()
                                 ids.forEach { eventIds += enqueue(it) }
                             }
 
@@ -69,22 +66,22 @@ class ExpoEventSupport(
 
     // 트랜잭션 안에서 부른다. 박람회 행 락을 잡은 뒤 상태를 읽어 같은 박람회의 version이 커밋 순서대로 늘게 한다.
     fun enqueue(expoId: String): String {
-        val exists =
-            jdbc.query("SELECT id FROM tb_expo WHERE id = ? FOR UPDATE", { row, _ -> row.getString(1) }, expoId).isNotEmpty()
-        val expo = if (exists) expos.findByIdOrNull(expoId) else null
+        expos.flush()
+        val state = expos.lockEventId(expoId)?.let { expos.eventState(it) }
+        val expo = if (state != null) expos.findByIdOrNull(expoId) else null
         if (expo == null) {
             return outbox.insert(expoId, null)
         }
-        entityManager.refresh(expo)
         val snapshot =
-            ExpoEventSnapshot.of(
-                expo,
-                standards.findByExpoIdOrderByIdAsc(expoId),
-                trainings.findByExpoIdOrderByIdAsc(expoId),
-                sessions.findAllByExpoIdOrderByStartedAtAscIdAsc(expoId),
-                mapper,
-                programChanges.findByIdOrNull(expoId)?.let { mapper.readValue(it.payloadJson, ProgramChangePayload::class.java) },
-            )
+            ExpoEventSnapshot
+                .of(
+                    expo,
+                    standards.findByExpoIdOrderByIdAsc(expoId),
+                    trainings.findByExpoIdOrderByIdAsc(expoId),
+                    sessions.findAllByExpoIdOrderByStartedAtAscIdAsc(expoId),
+                    mapper,
+                    programChanges.findByIdOrNull(expoId)?.let { mapper.readValue(it.payloadJson, ProgramChangePayload::class.java) },
+                ).copy(expo = mapper.readValue(requireNotNull(state), ExpoState::class.java))
         return outbox.insert(expoId, mapper.writeValueAsString(snapshot))
     }
 

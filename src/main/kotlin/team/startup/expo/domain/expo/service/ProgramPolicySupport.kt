@@ -15,7 +15,6 @@ import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramPolicyBulkResult
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramPolicyBulkStatus
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
-import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.repository.ProgramFormChangeRepository
@@ -28,11 +27,11 @@ import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
 import team.startup.expo.global.common.time.toProgramLocalDateTime
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
-import java.time.LocalDateTime
 import java.util.UUID
 
 @Component
 class ProgramPolicySupport(
+    private val admins: AdminAccessSupport,
     private val expos: ExpoRepository,
     private val operations: TrainingSmsOutboxRepository,
     private val changes: ProgramChangeRepository,
@@ -42,7 +41,6 @@ class ProgramPolicySupport(
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
     private val forms: ProgramFormChangeRepository,
-    private val history: AdminChangeHistoryRepository,
     private val events: ExpoEventSupport,
 ) {
     private val pendingForms = ThreadLocal<MutableList<ProgramDefinition>>()
@@ -83,8 +81,11 @@ class ProgramPolicySupport(
             place = program.place,
         )
 
-    fun ensureAvailable(expoId: String) {
-        if (expos.existsByIdAndDeletingAtIsNotNull(expoId)) conflict("삭제 중인 박람회입니다.")
+    fun ensureAvailable(
+        expoId: String,
+        allowDeleting: Boolean = false,
+    ) {
+        if (!allowDeleting && expos.existsByIdAndDeletingAtIsNotNull(expoId)) conflict("삭제 중인 박람회입니다.")
         if (changes.existsById(expoId)) conflict("진행 중인 프로그램 변경을 먼저 재시도해 주세요.")
     }
 
@@ -101,11 +102,7 @@ class ProgramPolicySupport(
         type: ProgramType,
     ): Map<Long, Long> {
         val pending = changes.findByIdOrNull(expoId) ?: return emptyMap()
-        return payload(pending)
-            .mutations
-            .mapNotNull { it.previous }
-            .filter { it.programType == type }
-            .associate { requireNotNull(it.id) to (it.revision + 1) }
+        return payload(pending).pendingRevisions(type)
     }
 
     fun payload(change: ProgramChange): ProgramChangePayload = mapper.readValue(change.payloadJson, ProgramChangePayload::class.java)
@@ -216,7 +213,7 @@ class ProgramPolicySupport(
                         expoId,
                         commandJson = command,
                         payloadJson = mapper.writeValueAsString(payload),
-                        adminId = history.currentAdminId(),
+                        adminId = admins.currentAdminId(),
                     ),
                 ).also {
                     // 진행 중인 변경이 생기면 프로그램 조회가 409가 되므로 이벤트로도 알린다(programChangePending).
@@ -259,9 +256,7 @@ class ProgramPolicySupport(
                                 current.revision,
                             ).also {
                                 result(
-                                    if (it ==
-                                        null
-                                    ) {
+                                    if (it == null) {
                                         ProgramPolicyBulkStatus.UNCHANGED
                                     } else {
                                         ProgramPolicyBulkStatus.UPDATED
@@ -294,8 +289,8 @@ class ProgramPolicySupport(
         linkedGroup: UUID?,
         validateForm: Boolean = true,
     ) {
-        val start = LocalDateTime.parse(definition.startedAt.replace(' ', 'T'))
-        val end = LocalDateTime.parse(definition.endedAt.replace(' ', 'T'))
+        val start = definition.startedAt.toProgramLocalDateTime()
+        val end = definition.endedAt.toProgramLocalDateTime()
         if (!start.isBefore(end)) throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 시작은 종료보다 빨라야 합니다.")
         definition.policy?.validate()
         if (linkedGroup != null) {

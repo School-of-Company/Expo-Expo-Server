@@ -2,6 +2,8 @@ package team.startup.expo.domain.expo.entity
 
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
+import jakarta.persistence.GeneratedValue
+import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import org.hibernate.annotations.Immutable
@@ -12,6 +14,7 @@ import java.time.Instant
 @Table(name = "tb_expo_event_outbox")
 class ExpoEventOutbox(
     @field:Id
+    @field:GeneratedValue(strategy = GenerationType.IDENTITY)
     val sequence: Long,
     @field:Column(name = "event_id", length = 36, nullable = false)
     val eventId: String,
@@ -19,6 +22,6 @@ class ExpoEventOutbox(
     val expoId: String,
     @field:Column(columnDefinition = "TEXT")
     val snapshot: String?,
-    @field:Column(name = "created_at", nullable = false)
+    @field:Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     val createdAt: Instant,
 )

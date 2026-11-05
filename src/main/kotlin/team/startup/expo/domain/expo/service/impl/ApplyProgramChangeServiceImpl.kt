@@ -4,6 +4,8 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
@@ -83,14 +85,7 @@ class ApplyProgramChangeServiceImpl(
             client.prepare(expoId, changeId, payload)
         } catch (exception: ExpectedException) {
             if (exception.status == HttpStatus.CONFLICT) {
-                transactions.executeWithoutResult {
-                    expos.findLockedById(expoId) ?: return@executeWithoutResult
-                    changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
-                        payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
-                        changes.delete(it)
-                        events.changed(expoId)
-                    }
-                }
+                discard(expoId, changeId, payload)
             }
             throw exception
         }
@@ -131,66 +126,61 @@ class ApplyProgramChangeServiceImpl(
                 }
                 val updatedExpo = expos.getReferenceById(expoId)
                 payload.mutations.mapNotNull { it.definition }.forEach { definition ->
-                    when (definition.programType) {
-                        ProgramType.STANDARD -> {
-                            val saved =
-                                standards.save(
-                                    StandardProgram(
-                                        id = definition.id,
-                                        title = definition.title,
-                                        startedAt = definition.startedAt,
-                                        endedAt = definition.endedAt,
-                                        expo = updatedExpo,
-                                        groupId = definition.groupId,
-                                        policyJson = support.json(definition.policy),
-                                        place = definition.place,
-                                        revision = definition.revision,
-                                    ),
-                                )
-                            history.record(
-                                expoId,
-                                if (definition.id == null) "PROGRAM_CREATE" else "PROGRAM_UPDATE",
-                                definition.programType.name,
-                                requireNotNull(saved.id),
-                                definition.title,
-                                current.adminId,
-                            )
-                        }
+                    val savedId =
+                        when (definition.programType) {
+                            ProgramType.STANDARD -> {
+                                val saved =
+                                    standards.save(
+                                        StandardProgram(
+                                            id = definition.id,
+                                            title = definition.title,
+                                            startedAt = definition.startedAt,
+                                            endedAt = definition.endedAt,
+                                            expo = updatedExpo,
+                                            groupId = definition.groupId,
+                                            policyJson = support.json(definition.policy),
+                                            place = definition.place,
+                                            revision = definition.revision,
+                                        ),
+                                    )
+                                requireNotNull(saved.id)
+                            }
 
-                        ProgramType.TRAINING -> {
-                            val saved =
-                                trainings.save(
-                                    TrainingProgram(
-                                        id = definition.id,
-                                        title = definition.title,
-                                        startedAt = definition.startedAt,
-                                        endedAt = definition.endedAt,
-                                        category = requireNotNull(definition.category),
-                                        expo = updatedExpo,
-                                        groupId = definition.groupId,
-                                        policyJson = support.json(definition.policy),
-                                        place = definition.place,
-                                        revision = definition.revision,
-                                    ),
-                                )
-                            history.record(
-                                expoId,
-                                if (definition.id == null) "PROGRAM_CREATE" else "PROGRAM_UPDATE",
-                                definition.programType.name,
-                                requireNotNull(saved.id),
-                                definition.title,
-                                current.adminId,
-                            )
+                            ProgramType.TRAINING -> {
+                                val saved =
+                                    trainings.save(
+                                        TrainingProgram(
+                                            id = definition.id,
+                                            title = definition.title,
+                                            startedAt = definition.startedAt,
+                                            endedAt = definition.endedAt,
+                                            category = requireNotNull(definition.category),
+                                            expo = updatedExpo,
+                                            groupId = definition.groupId,
+                                            policyJson = support.json(definition.policy),
+                                            place = definition.place,
+                                            revision = definition.revision,
+                                        ),
+                                    )
+                                requireNotNull(saved.id)
+                            }
                         }
-                    }
+                    history.record(
+                        expoId,
+                        if (definition.id == null) AdminChangeType.PROGRAM_CREATE else AdminChangeType.PROGRAM_UPDATE,
+                        AdminChangeTargetType.valueOf(definition.programType.name),
+                        savedId,
+                        definition.title,
+                        current.adminId,
+                    )
                 }
                 standards.flush()
                 trainings.flush()
                 deleted.forEach { previous ->
                     history.record(
                         expoId,
-                        "PROGRAM_DELETE",
-                        previous.programType.name,
+                        AdminChangeType.PROGRAM_DELETE,
+                        AdminChangeTargetType.valueOf(previous.programType.name),
                         requireNotNull(previous.id),
                         previous.title,
                         current.adminId,
@@ -204,17 +194,25 @@ class ApplyProgramChangeServiceImpl(
                 events.changed(expoId)
             }
         } catch (exception: Exception) {
-            if (payload.mutations.none { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }) {
-                transactions.executeWithoutResult {
-                    expos.findLockedById(expoId) ?: return@executeWithoutResult
-                    changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
-                        payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
-                        changes.delete(it)
-                        events.changed(expoId)
-                    }
-                }
+            if (payload.mutations.none { it.requiresApplicationGuard() }) {
+                discard(expoId, changeId, payload)
             }
             throw exception
+        }
+    }
+
+    private fun discard(
+        expoId: String,
+        changeId: UUID,
+        payload: ProgramChangePayload,
+    ) {
+        transactions.executeWithoutResult {
+            expos.findLockedById(expoId) ?: return@executeWithoutResult
+            changes.findByIdOrNull(expoId)?.takeIf { it.changeId == changeId && !it.applied }?.let {
+                payload.expoUpdate?.let { request -> attachment.release(request.coverImage, expoId) }
+                changes.delete(it)
+                events.changed(expoId)
+            }
         }
     }
 

@@ -9,6 +9,7 @@ import team.startup.expo.domain.expo.presentation.dto.response.InternalExpoPageR
 import team.startup.expo.domain.expo.presentation.dto.response.InternalExpoSummaryResponse
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.GetInternalExpoListService
+import team.startup.expo.global.common.time.EXPO_TIME_ZONE
 import java.time.Clock
 import java.time.LocalDate
 import java.time.ZoneId
@@ -17,7 +18,7 @@ import java.time.ZoneId
 class GetInternalExpoListServiceImpl(
     private val expoRepository: ExpoRepository,
     // 박람회 날짜는 한국 시간 기준이다
-    private val clock: Clock = Clock.system(ZoneId.of("Asia/Seoul")),
+    private val clock: Clock = Clock.system(ZoneId.of(EXPO_TIME_ZONE)),
 ) : GetInternalExpoListService {
     @Transactional(readOnly = true)
     override fun execute(request: InternalExpoPageRequest): InternalExpoPageResponse {

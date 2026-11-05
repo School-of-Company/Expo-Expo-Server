@@ -39,7 +39,7 @@ import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
-import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
+import team.startup.expo.domain.training.service.HoldReason
 import team.startup.expo.domain.training.service.PublishTrainingSmsService
 import team.startup.expo.domain.training.service.RecoverTrainingOperationsService
 import team.startup.expo.domain.training.service.TrainingApplicationCommand
@@ -47,11 +47,13 @@ import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
 import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.domain.training.service.TrainingProgramReference
+import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import team.startup.expo.domain.training.service.TrainingTraineeReference
 import team.startup.expo.domain.training.service.impl.ApplyTrainingProgramListServiceImpl
 import team.startup.expo.domain.training.service.impl.PublishTrainingSmsServiceImpl
 import team.startup.expo.domain.training.service.impl.RecoverTrainingOperationsServiceImpl
 import team.startup.expo.global.exception.ExpectedException
+import team.startup.expo.global.kafka.OutboxKafkaConfig
 import team.startup.expo.support.TestJwt
 import team.startup.expo.support.TrainingApplicationStub
 import tools.jackson.databind.ObjectMapper
@@ -107,7 +109,7 @@ class TrainingSmsIntegrationTests {
     private lateinit var recovery: RecoverTrainingOperationsService
 
     @Autowired
-    private lateinit var outbox: TrainingSmsOutboxRepository
+    private lateinit var outbox: TrainingSmsOutboxSupport
 
     @Autowired
     private lateinit var dependencies: TrainingDependenciesClient
@@ -408,7 +410,7 @@ class TrainingSmsIntegrationTests {
         jdbc.update(
             "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
         )
-        RecoverTrainingOperationsServiceImpl(outbox, dependencies).execute()
+        RecoverTrainingOperationsServiceImpl(outbox, dependencies, 20).execute()
         state() shouldBe "READY"
         count() shouldBe 1L
         eventId() shouldBe original.eventId
@@ -475,11 +477,12 @@ class TrainingSmsIntegrationTests {
         }
         consumer().use { consumer ->
             jdbc.update("UPDATE tb_training_sms_outbox SET next_attempt_at = CURRENT_TIMESTAMP")
-            val restarted = PublishTrainingSmsServiceImpl(outbox, producers, dependencies, mapper, contractVerified = true)
+            val kafka = OutboxKafkaConfig().outboxKafkaTemplate(producers)
+            val restarted = PublishTrainingSmsServiceImpl(outbox, kafka, dependencies, mapper, 20, contractVerified = true)
             try {
                 restarted.execute()
             } finally {
-                restarted.shutdown()
+                kafka.destroy()
             }
             nextRecord(consumer).key() shouldBe id
             state() shouldBe "SENT"
@@ -626,13 +629,18 @@ class TrainingSmsIntegrationTests {
 
     @Test
     fun `만료된 신청 시도의 늦은 확정은 새 시도의 상태를 덮어쓰지 않는다`() {
-        val first = prepare(TrainingOperationType.REPLACE)
+        val (first, second) =
+            requireNotNull(
+                dbTransactions.execute {
+                    val initial = prepare(TrainingOperationType.REPLACE)
+                    jdbc.update(
+                        "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
+                    )
+                    initial to requireNotNull(outbox.claimRecovery())
+                },
+            )
         dependencies.executeOperation(first)
         val receipt = requireNotNull(dependencies.operationReceipt(first))
-        jdbc.update(
-            "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
-        )
-        val second = requireNotNull(outbox.claimRecovery())
         first.eventId shouldBe second.eventId
         outbox.confirmed(first, receipt)
         state() shouldBe "PREPARED"
@@ -654,7 +662,22 @@ class TrainingSmsIntegrationTests {
                 "",
                 mapper,
                 team.startup.expo.global.attendance
-                    .ProgramAttendanceClient("", "", mapper, breakers),
+                    .ProgramAttendanceClient(
+                        "",
+                        "",
+                        mapper,
+                        team.startup.expo.support
+                            .feignClient<team.startup.expo.global.client.AttentionClient>(""),
+                        breakers,
+                    ),
+                team.startup.expo.support.feignClient<team.startup.expo.global.client.TrainingUserClient>(
+                    "http://127.0.0.1:${upstream.address.port}",
+                    "test-user-token",
+                ),
+                team.startup.expo.support
+                    .feignClient<team.startup.expo.global.client.TrainingApplicationClient>(""),
+                team.startup.expo.support
+                    .feignClient<team.startup.expo.global.client.PublicFormClient>(""),
                 breakers,
             )
         val service = ApplyTrainingProgramListServiceImpl(expos, policies, programs, missing, applicationSms, dbTransactions)
@@ -711,7 +734,7 @@ class TrainingSmsIntegrationTests {
     fun `미확정 신청과 수동 확인 보류는 박람회 삭제 표시와 원격 삭제 전에 충돌한다`() {
         val operation = prepare(TrainingOperationType.ADD)
         assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
-        outbox.hold(operation, "RECOVERY_LIMIT")
+        outbox.hold(operation, HoldReason.RECOVERY_LIMIT)
         assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
         expos.findById(EXPO).orElseThrow().deletingAt shouldBe null
         outbox.hasUnresolvedApplications(EXPO) shouldBe true
@@ -849,7 +872,7 @@ class TrainingSmsIntegrationTests {
     fun `복수 복구자도 동일 작업의 신청 버전과 발행 기록을 한 번만 만든다`() {
         val operation = prepare(TrainingOperationType.ADD)
         jdbc.update("UPDATE tb_training_sms_outbox SET lease_until = NULL, recover_after = CURRENT_TIMESTAMP")
-        val workers = (1..8).map { CompletableFuture.runAsync { RecoverTrainingOperationsServiceImpl(outbox, dependencies).execute() } }
+        val workers = (1..8).map { CompletableFuture.runAsync { RecoverTrainingOperationsServiceImpl(outbox, dependencies, 20).execute() } }
         workers.forEach { it.get(20, TimeUnit.SECONDS) }
         applicationStub.version shouldBe 1L
         applicationCalls.get() shouldBe 1
@@ -956,7 +979,14 @@ class TrainingSmsIntegrationTests {
 
     @Test
     fun `Notification 계약 검증 없는 SMS 활성화는 시작 단계에서 거절한다`() {
-        assertThrows(IllegalArgumentException::class.java) { PublishTrainingSmsServiceImpl(outbox, producers, dependencies, mapper) }
+        val kafka = OutboxKafkaConfig().outboxKafkaTemplate(producers)
+        try {
+            assertThrows(IllegalArgumentException::class.java) {
+                PublishTrainingSmsServiceImpl(outbox, kafka, dependencies, mapper, 20, contractVerified = false)
+            }
+        } finally {
+            kafka.destroy()
+        }
     }
 
     private fun applyReplace(ids: String) =

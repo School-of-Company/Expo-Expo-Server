@@ -9,7 +9,7 @@ data class InternalExpoPageRequest(
     @field:Schema(description = "0부터 시작하는 페이지 번호", example = "0")
     val page: Int = 0,
     @field:Min(1)
-    @field:Max(100)
+    @field:Max(MAX_PAGE_SIZE.toLong())
     @field:Schema(description = "페이지 크기. 1~100, 기본 100", example = "100")
-    val size: Int = 100,
+    val size: Int = MAX_PAGE_SIZE,
 )

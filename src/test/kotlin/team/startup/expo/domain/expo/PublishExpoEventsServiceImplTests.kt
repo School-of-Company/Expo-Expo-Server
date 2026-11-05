@@ -16,6 +16,7 @@ import org.springframework.kafka.mock.MockProducerFactory
 import team.startup.expo.domain.expo.repository.ExpoEventOutboxRepository
 import team.startup.expo.domain.expo.repository.ExpoEventOutboxRepository.Publication
 import team.startup.expo.domain.expo.service.impl.PublishExpoEventsServiceImpl
+import team.startup.expo.global.kafka.OutboxKafkaConfig
 import tools.jackson.databind.json.JsonMapper
 import java.time.Duration
 import java.time.Instant
@@ -38,7 +39,8 @@ class PublishExpoEventsServiceImplTests {
             `when`(it.copyWithConfigurationOverride(anyMap())).thenReturn(MockProducerFactory { producer })
         }
 
-    private fun relay(batchSize: Int = 10) = PublishExpoEventsServiceImpl(outbox, producers, mapper, "localhost:9092", batchSize)
+    private fun relay(batchSize: Int = 10) =
+        PublishExpoEventsServiceImpl(outbox, OutboxKafkaConfig().outboxKafkaTemplate(producers), mapper, "localhost:9092", batchSize)
 
     private fun publication(
         sequence: Long,
@@ -90,7 +92,10 @@ class PublishExpoEventsServiceImplTests {
 
     @Test
     fun `켰는데 KAFKA_BOOTSTRAP_SERVERS가 없으면 시작을 거절한다`() {
-        val failure = assertThrows(IllegalArgumentException::class.java) { PublishExpoEventsServiceImpl(outbox, producers, mapper, "") }
+        val failure =
+            assertThrows(IllegalArgumentException::class.java) {
+                PublishExpoEventsServiceImpl(outbox, OutboxKafkaConfig().outboxKafkaTemplate(producers), mapper, "", 100)
+            }
 
         failure.message shouldBe "KAFKA_BOOTSTRAP_SERVERS is required when expo events are enabled"
     }

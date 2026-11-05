@@ -1,19 +1,19 @@
 package team.startup.expo.domain.expo.service
 
+import feign.Response
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.context.annotation.Lazy
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import team.startup.expo.global.attendance.ProgramAttendanceClient
+import team.startup.expo.global.client.ApplicationClient
 import team.startup.expo.global.client.Downstream
 import team.startup.expo.global.client.DownstreamCircuitBreakers
+import team.startup.expo.global.client.FormClient
+import team.startup.expo.global.client.StandardUserClient
 import team.startup.expo.global.exception.ExpectedException
 import tools.jackson.databind.ObjectMapper
 import java.io.IOException
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 
 @Component
 class ExpoDeletionClient(
@@ -25,10 +25,11 @@ class ExpoDeletionClient(
     @Value("\${USER_INTERNAL_TOKEN:}") private val userToken: String,
     private val mapper: ObjectMapper,
     private val attendances: ProgramAttendanceClient,
+    @Lazy private val applications: ApplicationClient,
+    @Lazy private val forms: FormClient,
+    @Lazy private val users: StandardUserClient,
     private val breakers: DownstreamCircuitBreakers,
 ) {
-    private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
-
     fun requireConfiguration() {
         if (applicationUrl.isBlank() || formUrl.isBlank() || userUrl.isBlank() ||
             applicationToken.isBlank() || formToken.isBlank() || userToken.isBlank()
@@ -43,20 +44,14 @@ class ExpoDeletionClient(
         standardIds: List<Long>,
         trainingIds: List<Long>,
     ) {
-        send(
-            Downstream.APPLICATION,
-            applicationUrl,
-            applicationToken,
-            "/internal/expos/$expoId/purge",
-            "POST",
-            HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(ProgramIds(standardIds, trainingIds))),
-            "Application",
-        )
+        call(Downstream.APPLICATION, applicationUrl, applicationToken, "Application") {
+            applications.purge(expoId, mapper.writeValueAsString(ProgramIds(standardIds, trainingIds)))
+        }
     }
 
-    fun deleteForms(expoId: String) = delete(Downstream.FORM, formUrl, formToken, expoId, "Form")
+    fun deleteForms(expoId: String) = call(Downstream.FORM, formUrl, formToken, "Form") { forms.deleteExpo(expoId) }
 
-    fun deleteUsers(expoId: String) = delete(Downstream.USER, userUrl, userToken, expoId, "User")
+    fun deleteUsers(expoId: String) = call(Downstream.USER, userUrl, userToken, "User") { users.deleteExpo(expoId) }
 
     fun deleteAttendances(
         expoId: String,
@@ -68,38 +63,18 @@ class ExpoDeletionClient(
         attendances.deleteExpo(expoId)
     }
 
-    private fun delete(
+    private fun call(
         downstream: Downstream,
         baseUrl: String,
         token: String,
-        expoId: String,
         service: String,
-    ) {
-        send(downstream, baseUrl, token, "/internal/expos/$expoId", "DELETE", HttpRequest.BodyPublishers.noBody(), service)
-    }
-
-    private fun send(
-        downstream: Downstream,
-        baseUrl: String,
-        token: String,
-        path: String,
-        method: String,
-        body: HttpRequest.BodyPublisher,
-        service: String,
+        block: () -> Response,
     ) {
         if (baseUrl.isBlank() || token.isBlank()) {
             throw ExpectedException(HttpStatus.SERVICE_UNAVAILABLE, "박람회 삭제 내부 연동이 설정되지 않았습니다.")
         }
         try {
-            val request =
-                HttpRequest
-                    .newBuilder(URI.create("${baseUrl.trimEnd('/')}$path"))
-                    .timeout(Duration.ofSeconds(5))
-                    .header("Content-Type", "application/json")
-                    .header("X-Internal-Token", token)
-                    .method(method, body)
-                    .build()
-            if (breakers.send(downstream, http, request, HttpResponse.BodyHandlers.discarding(), idempotent = false).statusCode() != 204) {
+            if (breakers.call(downstream, block = block).status() != 204) {
                 throw ExpectedException(HttpStatus.BAD_GATEWAY, "$service 서비스 삭제 응답을 확인할 수 없습니다.")
             }
         } catch (exception: ExpectedException) {

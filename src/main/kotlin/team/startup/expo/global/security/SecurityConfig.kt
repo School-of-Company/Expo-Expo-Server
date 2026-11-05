@@ -6,7 +6,6 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
-import org.springframework.http.MediaType
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
@@ -23,7 +22,6 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
-import team.startup.expo.global.exception.ErrorResponse
 import tools.jackson.databind.ObjectMapper
 import java.security.KeyFactory
 import java.security.interfaces.RSAPublicKey
@@ -73,7 +71,7 @@ class SecurityConfig {
         http: HttpSecurity,
         objectMapper: ObjectMapper,
         @Value("\${EXPO_INTERNAL_TOKEN:}") internalToken: String,
-        @Value("\${swagger.enabled:false}") swaggerEnabled: Boolean,
+        @Value("\${swagger.enabled}") swaggerEnabled: Boolean,
     ): SecurityFilterChain {
         if (internalToken.isBlank()) {
             logger.warn("EXPO_INTERNAL_TOKEN is not configured; internal expo requests will be rejected")
@@ -88,22 +86,22 @@ class SecurityConfig {
             .exceptionHandling { exceptions ->
                 exceptions
                     .authenticationEntryPoint { _, response, _ ->
-                        writeError(objectMapper, response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
+                        SecurityErrorSupport.write(objectMapper, response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
                     }.accessDeniedHandler { _, response, _ ->
-                        writeError(objectMapper, response, HttpServletResponse.SC_FORBIDDEN, "접근 권한이 없습니다.")
+                        SecurityErrorSupport.write(objectMapper, response, HttpServletResponse.SC_FORBIDDEN, "접근 권한이 없습니다.")
                     }
             }.authorizeHttpRequests { requests ->
                 if (swaggerEnabled) {
                     requests
-                        .requestMatchers(HttpMethod.GET, *SWAGGER_PATHS)
+                        .requestMatchers(HttpMethod.GET, *ApiPaths.swaggerPaths)
                         .permitAll()
                 }
                 requests
-                    .requestMatchers(*SWAGGER_PATHS)
+                    .requestMatchers(*ApiPaths.swaggerPaths)
                     .denyAll()
-                    .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/prometheus")
+                    .requestMatchers(HttpMethod.GET, *ApiPaths.healthGetPaths)
                     .permitAll()
-                    .requestMatchers(HttpMethod.GET, "/image/{id}")
+                    .requestMatchers(HttpMethod.GET, *ApiPaths.publicGetPaths)
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/image")
                     .hasAuthority(ADMIN_AUTHORITY)
@@ -136,7 +134,7 @@ class SecurityConfig {
                         "/internal/expo/{expo_id}/preregister-sessions",
                         "/internal/expo/{expo_id}/preregister-sessions/{session_id}",
                     ).hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
-                    .requestMatchers(HttpMethod.GET, "/expo/{expo_id}/preregister-sessions/public", "/expo/{expo_id}/public")
+                    .requestMatchers(HttpMethod.GET, *ApiPaths.publicExpoGetPaths)
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.POST,
@@ -164,9 +162,7 @@ class SecurityConfig {
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.PATCH, "/expo/{expo_id}/programs/application-period")
                     .hasAuthority(ADMIN_AUTHORITY)
-                    .requestMatchers(HttpMethod.GET, "/standard/program/{expo_id}", "/training/program/{expo_id}")
-                    .permitAll()
-                    .requestMatchers(HttpMethod.POST, "/standard/application/{expo_id}")
+                    .requestMatchers(HttpMethod.POST, *ApiPaths.publicPostPaths)
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/standard/{expo_id}", "/standard/list/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
@@ -184,10 +180,6 @@ class SecurityConfig {
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.DELETE, "/training/{trainingPro_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
-                    .requestMatchers(HttpMethod.POST, "/training/application/{trainingPro_id}", "/training/application/list")
-                    .permitAll()
-                    .requestMatchers(HttpMethod.POST, "/training/application/list/trainee/{expo_id}")
-                    .permitAll()
                     .requestMatchers(HttpMethod.PATCH, "/expo/{expo_id}")
                     .hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(HttpMethod.PATCH, "/expo/{expo_id}/participant-phone-verification")
@@ -207,7 +199,7 @@ class SecurityConfig {
         http.oauth2ResourceServer { resource ->
             resource.jwt { it.jwtAuthenticationConverter(jwtConverter) }
             resource.authenticationEntryPoint { _, response, _ ->
-                writeError(objectMapper, response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
+                SecurityErrorSupport.write(objectMapper, response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
             }
         }
 
@@ -216,22 +208,8 @@ class SecurityConfig {
         return http.build()
     }
 
-    private fun writeError(
-        objectMapper: ObjectMapper,
-        response: HttpServletResponse,
-        status: Int,
-        message: String,
-    ) {
-        response.status = status
-        response.characterEncoding = Charsets.UTF_8.name()
-        response.contentType = MediaType.APPLICATION_JSON_VALUE
-        objectMapper.writeValue(response.writer, ErrorResponse(status = status, message = message))
-    }
-
-    private companion object {
-        val SWAGGER_PATHS =
-            arrayOf("/expo/v3/api-docs", "/expo/v3/api-docs/**", "/expo/swagger-ui.html", "/expo/swagger-ui/**")
+    companion object {
         const val ADMIN_AUTHORITY = "ROLE_ADMIN"
-        val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
+        private val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
     }
 }

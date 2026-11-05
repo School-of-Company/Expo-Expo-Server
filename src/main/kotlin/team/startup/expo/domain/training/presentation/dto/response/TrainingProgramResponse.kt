@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.training.entity.Category
+import team.startup.expo.domain.training.entity.TrainingProgram
 import java.util.UUID
 
 data class TrainingProgramResponse(
@@ -31,4 +32,26 @@ data class TrainingProgramResponse(
     val pendingRevision: Long? = null,
     @field:Schema(description = "Session place; null means location to be announced")
     val place: String? = null,
-)
+) {
+    companion object {
+        fun from(
+            program: TrainingProgram,
+            expoId: String,
+            policy: ProgramPolicyRequest?,
+            pendingRevision: Long? = null,
+        ): TrainingProgramResponse =
+            TrainingProgramResponse(
+                id = requireNotNull(program.id),
+                title = program.title,
+                place = program.place,
+                expoId = expoId,
+                groupId = program.groupId,
+                policy = policy,
+                revision = program.revision,
+                pendingRevision = pendingRevision,
+                startedAt = program.startedAt,
+                endedAt = program.endedAt,
+                category = program.category,
+            )
+    }
+}

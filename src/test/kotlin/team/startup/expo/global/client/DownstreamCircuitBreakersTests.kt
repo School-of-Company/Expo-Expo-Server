@@ -11,14 +11,11 @@ import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.service.AdminAuthorityClient
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.global.exception.ExpectedException
+import team.startup.expo.support.feignClient
 import tools.jackson.databind.ObjectMapper
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 import java.util.concurrent.atomic.AtomicInteger
 
 /** 서비스 간 호출의 회로 차단과 재시도 규칙을 실제 HTTP 서버로 확인한다. */
@@ -53,9 +50,10 @@ class DownstreamCircuitBreakersTests {
         server.stop(0)
     }
 
-    private fun admin() = AdminAuthorityClient(url, breakers)
+    private fun admin() = AdminAuthorityClient(url, feignClient<AdminUserClient>(url), breakers)
 
-    private fun preregister() = PreregisterSessionChangesClient(url, "token", ObjectMapper(), breakers)
+    private fun preregister() =
+        PreregisterSessionChangesClient(url, "token", ObjectMapper(), feignClient<ApplicationClient>(url, "token"), breakers)
 
     @Test
     fun `서비스가 계속 5xx면 회로가 열려 호출 없이 503으로 바로 실패한다`() {
@@ -65,6 +63,10 @@ class DownstreamCircuitBreakersTests {
                 HttpStatus.SERVICE_UNAVAILABLE
         }
         breakers.of(Downstream.USER).state shouldBe CircuitBreaker.State.OPEN
+        breakers
+            .of(Downstream.USER)
+            .circuitBreakerConfig.waitIntervalFunctionInOpenState
+            .apply(1) shouldBe 10_000L
 
         val before = calls.get()
         val error = assertThrows(ExpectedException::class.java) { admin().requireCurrentAdmin("Bearer t") }
@@ -85,14 +87,15 @@ class DownstreamCircuitBreakersTests {
 
     @Test
     fun `정상 거절인 4xx는 아무리 반복해도 회로를 열지 않는다`() {
-        listOf(401, 403).forEach { code ->
+        (400..499).forEach { code ->
             status = code
-            repeat(30) { assertThrows(ExpectedException::class.java) { admin().requireCurrentAdmin("Bearer t") } }
+            assertThrows(ExpectedException::class.java) { admin().requireCurrentAdmin("Bearer t") }
         }
         status = 409
         repeat(30) { assertThrows(ExpectedException::class.java) { preregister().reconcile("expo", 5) } }
 
         breakers.of(Downstream.USER).state shouldBe CircuitBreaker.State.CLOSED
+        breakers.of(Downstream.USER).metrics.numberOfSuccessfulCalls shouldBe 20
         breakers.of(Downstream.APPLICATION).state shouldBe CircuitBreaker.State.CLOSED
     }
 
@@ -102,19 +105,27 @@ class DownstreamCircuitBreakersTests {
         val dead = "http://127.0.0.1:$closedPort"
 
         assertThrows(ExpectedException::class.java) {
-            PreregisterSessionChangesClient(dead, "token", ObjectMapper(), breakers).reconcile("expo", 5)
+            PreregisterSessionChangesClient(
+                dead,
+                "token",
+                ObjectMapper(),
+                feignClient<ApplicationClient>(dead, "token"),
+                breakers,
+            ).reconcile("expo", 5)
         }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
         breakers.of(Downstream.APPLICATION).metrics.numberOfFailedCalls shouldBe 1
 
-        assertThrows(ExpectedException::class.java) { AdminAuthorityClient(dead, breakers).requireCurrentAdmin("Bearer t") }
-            .status shouldBe HttpStatus.SERVICE_UNAVAILABLE
+        assertThrows(ExpectedException::class.java) {
+            AdminAuthorityClient(dead, feignClient<AdminUserClient>(dead), breakers).requireCurrentAdmin("Bearer t")
+        }.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
         breakers.of(Downstream.USER).metrics.numberOfFailedCalls shouldBe 1
     }
 
     @Test
     fun `연결 거부 GET은 사용자 요청 1건이 회로에 1건으로 집계되어 10번째 요청에서 열린다`() {
         val closedPort = ServerSocket(0).use { it.localPort }
-        val client = AdminAuthorityClient("http://127.0.0.1:$closedPort", breakers)
+        val dead = "http://127.0.0.1:$closedPort"
+        val client = AdminAuthorityClient(dead, feignClient<AdminUserClient>(dead), breakers)
 
         repeat(9) { index ->
             assertThrows(ExpectedException::class.java) { client.requireCurrentAdmin("Bearer t") }
@@ -128,32 +139,16 @@ class DownstreamCircuitBreakersTests {
 
     @Test
     fun `재시도가 성공하면 첫 시도의 실패는 회로에 남지 않는다`() {
-        val port = ServerSocket(0).use { it.localPort }
-        val flaky = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
-        val request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:$port/")).GET().build()
-        Thread {
-            Thread.sleep(40)
-            flaky.createContext("/") { exchange ->
-                exchange.sendResponseHeaders(200, -1)
-                exchange.close()
+        var attempts = 0
+        val response =
+            breakers.call(Downstream.FORM, idempotent = true) {
+                if (attempts++ == 0) throw IOException("connection refused")
+                feignClient<AdminUserClient>(url).current("Bearer t")
             }
-            flaky.start()
-        }.start()
-        try {
-            val response =
-                breakers.send(
-                    Downstream.FORM,
-                    HttpClient.newHttpClient(),
-                    request,
-                    HttpResponse.BodyHandlers.discarding(),
-                    idempotent = true,
-                )
-            response.statusCode() shouldBe 200
-            breakers.of(Downstream.FORM).metrics.numberOfFailedCalls shouldBe 0
-            breakers.of(Downstream.FORM).metrics.numberOfSuccessfulCalls shouldBe 1
-        } finally {
-            flaky.stop(0)
-        }
+        response.status() shouldBe 200
+        attempts shouldBe 2
+        breakers.of(Downstream.FORM).metrics.numberOfFailedCalls shouldBe 0
+        breakers.of(Downstream.FORM).metrics.numberOfSuccessfulCalls shouldBe 1
     }
 
     @Test
@@ -179,25 +174,54 @@ class DownstreamCircuitBreakersTests {
         }
         slow.start()
         try {
-            val request =
-                HttpRequest
-                    .newBuilder(URI.create("http://127.0.0.1:${slow.address.port}/"))
-                    .timeout(Duration.ofMillis(100))
-                    .GET()
-                    .build()
-            assertThrows(java.net.http.HttpTimeoutException::class.java) {
-                breakers.send(
-                    Downstream.FORM,
-                    HttpClient.newHttpClient(),
-                    request,
-                    HttpResponse.BodyHandlers.discarding(),
-                    idempotent = true,
-                )
+            val client = feignClient<AdminUserClient>("http://127.0.0.1:${slow.address.port}", readTimeoutMillis = 100)
+            assertThrows(IOException::class.java) {
+                breakers.call(Downstream.FORM, idempotent = true) { client.current("Bearer t") }
             }
             hits.get() shouldBe 1
             breakers.of(Downstream.FORM).metrics.numberOfFailedCalls shouldBe 1
         } finally {
             slow.stop(0)
         }
+    }
+
+    @Test
+    fun `쓰기와 열린 회로는 재시도하지 않는다`() {
+        var attempts = 0
+        assertThrows(IOException::class.java) {
+            breakers.call(Downstream.FORM) {
+                attempts++
+                throw IOException("connection refused")
+            }
+        }
+        attempts shouldBe 1
+        breakers.of(Downstream.FORM).metrics.numberOfFailedCalls shouldBe 1
+        breakers.of(Downstream.FORM).transitionToOpenState()
+        assertThrows(DownstreamUnavailableException::class.java) {
+            breakers.call(Downstream.FORM, idempotent = true) {
+                attempts++
+                feignClient<AdminUserClient>(url).current("Bearer t")
+            }
+        }
+        attempts shouldBe 1
+        breakers.of(Downstream.FORM).metrics.numberOfFailedCalls shouldBe 1
+    }
+
+    @Test
+    fun `요청 구성 오류는 실패로 집계하지 않는다`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            breakers.call(Downstream.FORM) { throw IllegalArgumentException("invalid request") }
+        }
+        breakers.of(Downstream.FORM).metrics.numberOfBufferedCalls shouldBe 0
+    }
+
+    @Test
+    fun `최근 20건의 절반이 실패할 때 회로가 열린다`() {
+        repeat(20) { admin().requireCurrentAdmin("Bearer t") }
+        status = 500
+        repeat(9) { assertThrows(ExpectedException::class.java) { admin().requireCurrentAdmin("Bearer t") } }
+        breakers.of(Downstream.USER).state shouldBe CircuitBreaker.State.CLOSED
+        assertThrows(ExpectedException::class.java) { admin().requireCurrentAdmin("Bearer t") }
+        breakers.of(Downstream.USER).state shouldBe CircuitBreaker.State.OPEN
     }
 }

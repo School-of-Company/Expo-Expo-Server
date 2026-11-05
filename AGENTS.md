@@ -36,6 +36,12 @@ The Expo log standard, shared by every Expo service (Spring and Nest alike) so t
 - Before a code PR, run the CI command `./gradlew build --no-daemon`. Follow `.editorconfig` and the configured ktlint/Spotless checks. For documentation changes, verify referenced paths/commands and run `git diff --check`.
 - Put schema changes in versioned `src/main/resources/db/migration` scripts; JPA uses `ddl-auto: validate`.
 
+## Database queries
+
+- Access the database through Spring Data JPA repositories. Use QueryDSL for dynamic filters, sorting and pagination on mapped entities; fixed queries and single-row saves use JPQL, derived queries or repository saves.
+- Keep PostgreSQL atomic operations (`FOR UPDATE SKIP LOCKED`, `RETURNING`, `ON CONFLICT`, CTE, `UNION`, jsonb functions and DB-time decisions with `clock_timestamp()`/`INTERVAL`) in repository `@Query(nativeQuery = true)` methods.
+- Flush pending JPA writes before native operations, including event snapshots in `beforeCommit`. Bulk mutations must account for stale managed entities; clear only after flushing, and avoid detaching objects that callers still need to mutate. DB-default timestamps are mapped with `insertable = false, updatable = false`.
+
 ## Git and PRs
 
 - Check the worktree and current GitHub base/head before work or PR creation. Identify actual predecessor PRs and service-contract dependencies; record dependency PRs and intended merge order in the PR body. PR numbers do not define dependency order.

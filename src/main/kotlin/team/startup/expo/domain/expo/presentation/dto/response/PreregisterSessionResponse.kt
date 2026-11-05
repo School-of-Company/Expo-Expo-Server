@@ -1,6 +1,7 @@
 package team.startup.expo.domain.expo.presentation.dto.response
 
 import io.swagger.v3.oas.annotations.media.Schema
+import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.entity.PreregisterSession
 import java.time.Instant
 
@@ -31,7 +32,24 @@ data class PreregisterSessionResponse(
     val teacherCapacity: Int? = null,
     @field:Schema(description = "교사·예비교사 외 대상 정원. teacherCapacity와 함께 null이거나 함께 있으며 합은 capacity", example = "20")
     val nonTeacherCapacity: Int? = null,
-)
+) {
+    fun toEntity(expo: Expo): PreregisterSession =
+        PreregisterSession(
+            id = id,
+            expo = expo,
+            title = title,
+            startedAt = startedAt,
+            endedAt = endedAt,
+            place = place,
+            capacity = capacity,
+            waitingCapacity = waitingCapacity,
+            closed = closed,
+            revision = revision,
+            cancelEndedAt = cancelEndedAt,
+            teacherCapacity = teacherCapacity,
+            nonTeacherCapacity = nonTeacherCapacity,
+        )
+}
 
 fun PreregisterSession.toResponse(): PreregisterSessionResponse =
     PreregisterSessionResponse(

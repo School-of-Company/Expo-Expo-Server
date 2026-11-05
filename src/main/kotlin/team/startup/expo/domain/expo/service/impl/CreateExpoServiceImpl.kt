@@ -1,11 +1,12 @@
 package team.startup.expo.domain.expo.service.impl
 
 import org.springframework.http.HttpStatus
-import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.entity.AdminApplicationCancelAccess
 import team.startup.expo.domain.expo.entity.AdminApplicationPromoteAccess
 import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
@@ -13,23 +14,27 @@ import team.startup.expo.domain.expo.repository.AdminApplicationCancelAccessRepo
 import team.startup.expo.domain.expo.repository.AdminApplicationPromoteAccessRepository
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.expo.service.CreateExpoService
 import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.image.service.AttachExpoImageService
-import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
-import team.startup.expo.domain.training.entity.TrainingProgram
+import team.startup.expo.domain.standard.service.StandardProgramCreationSupport
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.domain.training.service.TrainingProgramCreationSupport
 import team.startup.expo.global.common.id.ExpoIdGenerator
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class CreateExpoServiceImpl(
+    private val admins: AdminAccessSupport,
     private val expoRepository: ExpoRepository,
     private val policies: ProgramPolicySupport,
     private val standardProgramRepository: StandardProgramRepository,
+    private val standardCreation: StandardProgramCreationSupport,
     private val trainingProgramRepository: TrainingProgramRepository,
+    private val trainingCreation: TrainingProgramCreationSupport,
     private val expoIdGenerator: ExpoIdGenerator,
     private val attachExpoImageService: AttachExpoImageService,
     private val history: AdminChangeHistoryRepository,
@@ -67,7 +72,7 @@ class CreateExpoServiceImpl(
                 events.changed(expo.id)
                 // 새 행사는 생성자에게만 신청 취소·수동 확정 권한을 준다. 다른 관리자는 명시 부여한다(docs/admin-application-cancel-access.md).
                 val creatorId =
-                    history.currentAdminId() ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+                    admins.currentAdminId() ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
                 cancelAccess.saveAndFlush(AdminApplicationCancelAccess(expo.id, creatorId))
                 promoteAccess.saveAndFlush(AdminApplicationPromoteAccess(expo.id, creatorId))
 
@@ -85,18 +90,17 @@ class CreateExpoServiceImpl(
                                     program.policy,
                                     place = program.place,
                                 )
-                            StandardProgram(
-                                title = program.title,
-                                startedAt = program.startedAt.toString(),
-                                endedAt = program.endedAt.toString(),
-                                expo = expo,
-                                groupId = definition.groupId,
-                                policyJson = policies.json(definition.policy),
-                                place = definition.place,
-                            )
+                            standardCreation.toEntity(expo, definition)
                         },
                     ).forEach {
-                        history.record(expo.id, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())
+                        history.record(
+                            expo.id,
+                            AdminChangeType.PROGRAM_CREATE,
+                            AdminChangeTargetType.STANDARD,
+                            requireNotNull(it.id),
+                            it.title,
+                            creatorId,
+                        )
                     }
                 trainingProgramRepository
                     .saveAllAndFlush(
@@ -112,24 +116,21 @@ class CreateExpoServiceImpl(
                                     program.policy,
                                     place = program.place,
                                 )
-                            TrainingProgram(
-                                title = program.title,
-                                startedAt = program.startedAt.toString(),
-                                endedAt = program.endedAt.toString(),
-                                category = program.category,
-                                expo = expo,
-                                groupId = definition.groupId,
-                                policyJson = policies.json(definition.policy),
-                                place = definition.place,
-                            )
+                            trainingCreation.toEntity(expo, definition)
                         },
                     ).forEach {
-                        history.record(expo.id, "PROGRAM_CREATE", "TRAINING", requireNotNull(it.id), it.title, history.currentAdminId())
+                        history.record(
+                            expo.id,
+                            AdminChangeType.PROGRAM_CREATE,
+                            AdminChangeTargetType.TRAINING,
+                            requireNotNull(it.id),
+                            it.title,
+                            creatorId,
+                        )
                     }
 
                 val uploadedBy =
-                    SecurityContextHolder.getContext().authentication?.name
-                        ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+                    admins.currentName() ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
                 attachExpoImageService.execute(request.coverImage, uploadedBy, expo.id)
 
                 CreateExpoResponse(expoId = expo.id)

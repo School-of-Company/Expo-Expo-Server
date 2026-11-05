@@ -12,6 +12,19 @@ springdoc:
     disable-swagger-default-url: true
 
 spring:
+  cloud:
+    openfeign:
+      http2client:
+        enabled: true
+      httpclient:
+        connection-timeout: 3000
+        follow-redirects: false
+      client:
+        config:
+          default:
+            connectTimeout: 3000
+            readTimeout: 5000
+            followRedirects: false
   application:
     name: expo-expo-server
   main:
@@ -60,6 +73,9 @@ logging:
 
 image:
   public-base-url: ${IMAGE_PUBLIC_BASE_URL:http://localhost:8080}
+  cleanup:
+    delay-ms: ${IMAGE_CLEANUP_DELAY_MS:3600000}
+    batch-size: ${IMAGE_CLEANUP_BATCH_SIZE:100}
   storage:
     active: ${IMAGE_STORAGE_PROVIDER:local}
     local:
@@ -71,6 +87,7 @@ expo:
   # 박람회·프로그램 변경 이벤트(expo.expo.changed) 아웃박스와 릴레이. docs/expo-change-events.md
   events:
     enabled: ${KAFKA_EXPO_EVENTS_ENABLED:false}
+    recovery-delay-ms: ${KAFKA_EXPO_EVENTS_RECOVERY_DELAY_MS:60000}
     relay-delay-ms: ${KAFKA_EXPO_EVENTS_RELAY_DELAY_MS:1000}
     batch-size: ${KAFKA_EXPO_EVENTS_BATCH_SIZE:100}
   form-service-url: ${FORM_SERVICE_URL:}
@@ -78,6 +95,9 @@ expo:
     user-service-url: ${USER_SERVICE_URL:}
     application-service-url: ${APPLICATION_SERVICE_URL:}
   training:
+    operations:
+      recovery-delay-ms: ${TRAINING_OPERATIONS_RECOVERY_DELAY_MS:30000}
+      batch-size: ${TRAINING_OPERATIONS_BATCH_SIZE:20}
     sms:
       enabled: ${KAFKA_TRAINING_SMS_ENABLED:false}
       contract-verified: ${KAFKA_TRAINING_SMS_CONTRACT_VERIFIED:false}

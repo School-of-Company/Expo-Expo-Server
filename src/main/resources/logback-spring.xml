@@ -36,6 +36,8 @@
         </appender>
     </springProfile>
 
+    <logger name="org.hibernate.orm.jdbc.error" level="OFF"/>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>

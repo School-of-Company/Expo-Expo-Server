@@ -25,19 +25,7 @@ class GetTrainingProgramListServiceImpl(
 
         val pending = policies.pendingRevisions(expoId, ProgramType.TRAINING)
         return trainingProgramRepository.findByExpoIdOrderByIdAsc(expoId).map { program ->
-            TrainingProgramResponse(
-                id = requireNotNull(program.id),
-                title = program.title,
-                place = program.place,
-                expoId = expoId,
-                groupId = program.groupId,
-                policy = policies.policy(program.policyJson),
-                revision = program.revision,
-                pendingRevision = pending[program.id],
-                startedAt = program.startedAt,
-                endedAt = program.endedAt,
-                category = program.category,
-            )
+            TrainingProgramResponse.from(program, expoId, policies.policy(program.policyJson), pending[program.id])
         }
     }
 }

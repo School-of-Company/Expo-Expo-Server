@@ -34,7 +34,7 @@ import team.startup.expo.domain.expo.repository.PreregisterSessionChangeReposito
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.service.ExpoDeletionClient
-import team.startup.expo.domain.expo.service.impl.GetExpoValidationServiceImpl
+import team.startup.expo.domain.expo.service.FormLookupClient
 import team.startup.expo.domain.image.entity.ExpoImage
 import team.startup.expo.domain.image.repository.ExpoImageRepository
 import team.startup.expo.domain.image.service.ImageCleanupService
@@ -44,7 +44,13 @@ import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.global.client.ApplicationClient
+import team.startup.expo.global.client.AttentionClient
+import team.startup.expo.global.client.FormClient
+import team.startup.expo.global.client.PublicFormClient
+import team.startup.expo.global.client.StandardUserClient
 import team.startup.expo.support.TestJwt
+import team.startup.expo.support.feignClient
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ObjectNode
 import java.awt.image.BufferedImage
@@ -101,7 +107,7 @@ class ExpoApiPostgresHttpTests {
     private lateinit var localImageStorage: LocalImageStorage
 
     @Autowired
-    private lateinit var validationService: GetExpoValidationServiceImpl
+    private lateinit var validationService: FormLookupClient
 
     @Autowired
     private lateinit var deletionClient: ExpoDeletionClient
@@ -587,6 +593,11 @@ class ExpoApiPostgresHttpTests {
             val closedPort = closed.localPort
             closed.close()
             ReflectionTestUtils.setField(attendances, "serviceUrl", "http://127.0.0.1:$closedPort")
+            ReflectionTestUtils.setField(
+                attendances,
+                "attention",
+                feignClient<AttentionClient>("http://127.0.0.1:$closedPort", "test-attention-token"),
+            )
             request("/expo/$expoId", "DELETE").statusCode() shouldBe 503
             (expoRepository.findById(expoId).orElseThrow().deletingAt != null) shouldBe true
             standardProgramRepository.count() shouldBe 1L
@@ -681,6 +692,15 @@ class ExpoApiPostgresHttpTests {
         }
         server.start()
         val url = "http://127.0.0.1:${server.address.port}"
+        val attention = ReflectionTestUtils.getField(attendances, "attention")
+        ReflectionTestUtils.setField(
+            deletionClient,
+            "applications",
+            feignClient<ApplicationClient>("$url/application", "test-application-token"),
+        )
+        ReflectionTestUtils.setField(deletionClient, "forms", feignClient<FormClient>("$url/form", "test-form-token"))
+        ReflectionTestUtils.setField(deletionClient, "users", feignClient<StandardUserClient>("$url/user", "test-user-token"))
+        ReflectionTestUtils.setField(attendances, "attention", feignClient<AttentionClient>("$url/attendance", "test-attention-token"))
         ReflectionTestUtils.setField(deletionClient, "applicationUrl", "$url/application")
         ReflectionTestUtils.setField(deletionClient, "formUrl", "$url/form")
         ReflectionTestUtils.setField(deletionClient, "userUrl", "$url/user")
@@ -691,6 +711,7 @@ class ExpoApiPostgresHttpTests {
         ReflectionTestUtils.setField(attendances, "internalToken", "test-attention-token")
         return AutoCloseable {
             server.stop(0)
+            ReflectionTestUtils.setField(attendances, "attention", attention)
             ReflectionTestUtils.setField(attendances, "serviceUrl", "http://127.0.0.1:${applicationServer.address.port}")
             ReflectionTestUtils.setField(attendances, "internalToken", "test-program-token")
             listOf("applicationUrl", "formUrl", "userUrl", "applicationToken", "formToken", "userToken").forEach {
@@ -708,6 +729,7 @@ class ExpoApiPostgresHttpTests {
         val maxActiveRequests = AtomicInteger()
         server.executor = serverExecutor
         server.createContext("/") { exchange ->
+            exchange.requestHeaders.getFirst("Content-Type") shouldBe null
             val active = activeRequests.incrementAndGet()
             maxActiveRequests.updateAndGet { maxOf(it, active) }
             Thread.sleep(100)
@@ -723,6 +745,11 @@ class ExpoApiPostgresHttpTests {
         }
         server.start()
         try {
+            ReflectionTestUtils.setField(
+                validationService,
+                "forms",
+                feignClient<PublicFormClient>("http://127.0.0.1:${server.address.port}"),
+            )
             ReflectionTestUtils.setField(validationService, "formServiceUrl", "http://127.0.0.1:${server.address.port}")
             val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
             statistics.clear()
@@ -753,6 +780,7 @@ class ExpoApiPostgresHttpTests {
         server.start()
         val url = "http://127.0.0.1:${server.address.port}"
         try {
+            ReflectionTestUtils.setField(validationService, "forms", feignClient<PublicFormClient>(url))
             ReflectionTestUtils.setField(validationService, "formServiceUrl", url)
             assertError(request("/expo/valid", "GET"), 502, "Form 서비스 응답을 확인할 수 없습니다.")
             server.stop(0)

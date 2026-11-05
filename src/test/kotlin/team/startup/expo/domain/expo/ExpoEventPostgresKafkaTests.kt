@@ -271,10 +271,24 @@ class ExpoEventPostgresKafkaTests {
         rows(EXPO) shouldBe 0
 
         dbTransactions.executeWithoutResult {
+            expos.findById(EXPO).orElseThrow().updateParticipantPhoneVerification(false)
             events.changed(EXPO)
             events.changed(EXPO)
         }
         rows(EXPO) shouldBe 1
+        latestSnapshot(EXPO).path("expo").path("participantPhoneVerificationRequired").asBoolean() shouldBe false
+        latestSnapshot(EXPO).path("expo").path("participantPhoneVerificationRevision").asLong() shouldBe 1
+    }
+
+    @Test
+    fun `스냅샷은 영속성 컨텍스트에 남은 값 대신 잠금 후 DB의 박람회 상태를 담는다`() {
+        seedExpo(EXPO)
+        dbTransactions.executeWithoutResult {
+            expos.findById(EXPO).orElseThrow().title
+            jdbc.update("UPDATE tb_expo SET title=? WHERE id=?", "최신 제목", EXPO)
+            events.changed(EXPO)
+        }
+        latestSnapshot(EXPO).path("expo").path("title").asString() shouldBe "최신 제목"
     }
 
     @Test

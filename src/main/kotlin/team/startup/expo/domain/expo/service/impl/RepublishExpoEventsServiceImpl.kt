@@ -1,10 +1,11 @@
 package team.startup.expo.domain.expo.service.impl
 
+import org.springframework.data.domain.PageRequest
 import org.springframework.http.HttpStatus
-import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.presentation.dto.response.RepublishExpoEventsResponse
+import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.RepublishExpoEventsService
 import team.startup.expo.global.exception.ExpectedException
@@ -13,7 +14,7 @@ import team.startup.expo.global.exception.ExpectedException
 @Service
 class RepublishExpoEventsServiceImpl(
     private val events: ExpoEventSupport,
-    private val jdbc: JdbcTemplate,
+    private val expos: ExpoRepository,
     private val transactions: TransactionTemplate,
 ) : RepublishExpoEventsService {
     override fun execute(): RepublishExpoEventsResponse {
@@ -22,12 +23,7 @@ class RepublishExpoEventsServiceImpl(
         var enqueued = 0
         while (true) {
             val ids =
-                jdbc.query(
-                    "SELECT id FROM tb_expo WHERE id > ? ORDER BY id LIMIT ?",
-                    { row, _ -> row.getString(1) },
-                    after,
-                    PAGE_SIZE,
-                )
+                expos.findIdsAfter(after, PageRequest.of(0, PAGE_SIZE))
             if (ids.isEmpty()) break
             // 페이지마다 따로 커밋해 락을 오래 잡지 않는다.
             transactions.executeWithoutResult { ids.forEach(events::enqueue) }

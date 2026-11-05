@@ -9,9 +9,10 @@ import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.standard.presentation.dto.response.StandardProgramTitleResponse
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.standard.service.GetStandardProgramService
+import team.startup.expo.global.common.time.EXPO_TIME_ZONE
+import team.startup.expo.global.common.time.toProgramLocalDateTime
 import team.startup.expo.global.exception.ExpectedException
 import java.time.Instant
-import java.time.LocalDateTime
 import java.time.ZoneId
 
 @Service
@@ -49,9 +50,17 @@ class GetStandardProgramServiceImpl(
     private fun toInstant(value: String?): Instant? =
         value
             ?.takeIf { it.isNotBlank() }
-            ?.let { runCatching { LocalDateTime.parse(it.trim().replace(' ', 'T')).atZone(SEOUL).toInstant() }.getOrNull() }
+            ?.let {
+                runCatching {
+                    it
+                        .trim()
+                        .toProgramLocalDateTime()
+                        .atZone(SEOUL)
+                        .toInstant()
+                }.getOrNull()
+            }
 
     private companion object {
-        val SEOUL: ZoneId = ZoneId.of("Asia/Seoul")
+        val SEOUL: ZoneId = ZoneId.of(EXPO_TIME_ZONE)
     }
 }

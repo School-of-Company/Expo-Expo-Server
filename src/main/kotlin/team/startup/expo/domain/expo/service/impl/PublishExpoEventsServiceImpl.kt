@@ -1,11 +1,10 @@
 package team.startup.expo.domain.expo.service.impl
 
-import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.kafka.core.KafkaTemplate
-import org.springframework.kafka.core.ProducerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.messaging.ExpoChangedEvent
@@ -18,27 +17,21 @@ import java.util.concurrent.TimeUnit
 @ConditionalOnProperty(prefix = "expo.events", name = ["enabled"], havingValue = "true")
 class PublishExpoEventsServiceImpl(
     private val outbox: ExpoEventOutboxRepository,
-    producers: ProducerFactory<String, String>,
+    @Qualifier("outboxKafkaTemplate") private val kafka: KafkaTemplate<String, String>,
     private val mapper: ObjectMapper,
-    @Value("\${spring.kafka.bootstrap-servers:}") bootstrapServers: String,
-    @Value("\${expo.events.batch-size:100}") private val batchSize: Int = 100,
+    @Value("\${spring.kafka.bootstrap-servers}") bootstrapServers: String,
+    @Value("\${expo.events.batch-size}") private val batchSize: Int,
 ) : PublishExpoEventsService {
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val kafka = KafkaTemplate(producers, mapOf("max.block.ms" to 5000)).apply { setProducerListener(null) }
 
     init {
         require(bootstrapServers.isNotBlank()) { "KAFKA_BOOTSTRAP_SERVERS is required when expo events are enabled" }
         require(batchSize in 1..500) { "Expo event batch size must be between 1 and 500" }
     }
 
-    @PreDestroy
-    fun shutdown() {
-        kafka.destroy()
-    }
-
     @Scheduled(
-        fixedDelayString = "\${expo.events.relay-delay-ms:1000}",
-        initialDelayString = "\${expo.events.relay-delay-ms:1000}",
+        fixedDelayString = "\${expo.events.relay-delay-ms}",
+        initialDelayString = "\${expo.events.relay-delay-ms}",
     )
     override fun execute() {
         repeat(batchSize) {
@@ -59,7 +52,7 @@ class PublishExpoEventsServiceImpl(
                         publication.expoId,
                         publication.snapshot,
                     )
-                kafka.send(ExpoChangedEvent.TOPIC, publication.expoId, message).get(10, TimeUnit.SECONDS)
+                kafka.send(ExpoChangedEvent.TOPIC, publication.expoId, message).get(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 outbox.published(publication)
             } catch (exception: Exception) {
                 if (exception is InterruptedException) Thread.currentThread().interrupt()
@@ -82,5 +75,9 @@ class PublishExpoEventsServiceImpl(
                 return
             }
         }
+    }
+
+    private companion object {
+        const val PUBLISH_TIMEOUT_SECONDS = 10L
     }
 }

@@ -22,13 +22,15 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.annotation.AnnotatedElementUtils
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoPageResponse
 import team.startup.expo.global.exception.ErrorResponse
+import team.startup.expo.global.security.ApiPaths
 
 @Configuration
 @ConditionalOnProperty(prefix = "swagger", name = ["enabled"], havingValue = "true")
 class OpenApiConfig(
-    @Value("\${swagger.include-internal:false}") private val includeInternal: Boolean,
+    @Value("\${swagger.include-internal}") private val includeInternal: Boolean,
 ) {
     @Bean
     fun expoOpenApi(): OpenAPI =
@@ -56,9 +58,12 @@ class OpenApiConfig(
     @Bean
     fun apiErrors(): OperationCustomizer =
         OperationCustomizer { operation, handler ->
-            handler.method.getAnnotationsByType(ApiError::class.java).groupBy { it.status }.forEach { (status, errors) ->
-                operation.responses.addApiResponse(status.toString(), errorResponse(errors.joinToString(" / ") { it.description }))
-            }
+            AnnotatedElementUtils
+                .findMergedRepeatableAnnotations(handler.method, ApiError::class.java)
+                .groupBy { it.status }
+                .forEach { (status, errors) ->
+                    operation.responses.addApiResponse(status.toString(), errorResponse(errors.joinToString(" / ") { it.description }))
+                }
             operation.responses.addApiResponse("500", errorResponse("예상하지 못한 서버 오류"))
             operation
         }
@@ -110,20 +115,12 @@ class OpenApiConfig(
                         .description("내부 서비스 호출 인증. 실제 토큰은 문서에 기록하지 않습니다."),
                 )
             } else {
-                api.paths.keys.removeIf { it.startsWith("/internal/") }
+                api.paths.keys.removeIf { it.startsWith(ApiPaths.INTERNAL_PREFIX) }
             }
             api.paths.forEach { (path, item) ->
                 item.readOperationsMap().forEach { (method, operation) ->
-                    val internal = path.startsWith("/internal/")
-                    val public =
-                        (
-                            method.name == "GET" &&
-                                (path == "/image/{id}" || path.startsWith("/standard/program/") || path.startsWith("/training/program/"))
-                        ) ||
-                            (
-                                method.name == "POST" &&
-                                    (path.startsWith("/standard/application/") || path.startsWith("/training/application/"))
-                            )
+                    val internal = path.startsWith(ApiPaths.INTERNAL_PREFIX)
+                    val public = ApiPaths.isPublicInDocumentation(method.name, path)
                     if (internal || !public) {
                         operation.addSecurityItem(SecurityRequirement().addList(if (internal) "internalToken" else "bearerAuth"))
                         operation.responses.addApiResponse(

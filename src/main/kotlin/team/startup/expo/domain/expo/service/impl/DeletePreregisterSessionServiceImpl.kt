@@ -6,10 +6,10 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.entity.PreregisterSessionChange
 import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
-import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
+import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.DeletePreregisterSessionService
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
@@ -17,13 +17,13 @@ import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class DeletePreregisterSessionServiceImpl(
+    private val admins: AdminAccessSupport,
     private val expos: ExpoRepository,
     private val sessions: PreregisterSessionRepository,
     private val pendingChanges: PreregisterSessionChangeRepository,
     private val applyChange: ApplyPreregisterSessionChangeService,
     private val changes: PreregisterSessionChangesClient,
     private val transactions: TransactionTemplate,
-    private val history: AdminChangeHistoryRepository,
 ) : DeletePreregisterSessionService {
     override fun execute(
         expoId: String,
@@ -57,7 +57,7 @@ class DeletePreregisterSessionServiceImpl(
                         PreregisterSessionChangeOperation.DELETE,
                         true,
                         null,
-                        adminId = history.currentAdminId(),
+                        adminId = admins.currentAdminId(),
                     ),
                 )
             }

@@ -4,8 +4,9 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
-import team.startup.expo.domain.expo.entity.PreregisterSession
 import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
 import team.startup.expo.domain.expo.presentation.dto.response.PreregisterSessionResponse
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
@@ -67,32 +68,15 @@ class ApplyPreregisterSessionChangeServiceImpl(
             pendingChanges.flush()
             history.record(
                 expoId,
-                "SESSION_${pending.operation.name}",
-                "PREREGISTER_SESSION",
+                AdminChangeType.valueOf("SESSION_${pending.operation.name}"),
+                AdminChangeTargetType.PREREGISTER_SESSION,
                 sessionId,
                 definition?.title ?: current.title,
                 currentPending.adminId,
             )
             when (pending.operation) {
                 PreregisterSessionChangeOperation.UPDATE -> {
-                    val updated = requireNotNull(definition)
-                    sessions.save(
-                        PreregisterSession(
-                            id = sessionId,
-                            expo = expo,
-                            title = updated.title,
-                            startedAt = updated.startedAt,
-                            endedAt = updated.endedAt,
-                            place = updated.place,
-                            capacity = updated.capacity,
-                            waitingCapacity = updated.waitingCapacity,
-                            closed = updated.closed,
-                            revision = updated.revision,
-                            cancelEndedAt = updated.cancelEndedAt,
-                            teacherCapacity = updated.teacherCapacity,
-                            nonTeacherCapacity = updated.nonTeacherCapacity,
-                        ),
-                    )
+                    sessions.save(requireNotNull(definition).toEntity(expo))
                 }
 
                 PreregisterSessionChangeOperation.DELETE -> {

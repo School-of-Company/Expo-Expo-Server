@@ -15,7 +15,7 @@ data class UpdateProgramApplicationPeriodRequest(
         if (!applicationStartedAt.isBefore(applicationEndedAt)) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "신청 시작은 종료보다 빨라야 합니다.")
         }
-        if (listOf(applicationStartedAt, applicationEndedAt).any { it.nano % 1000 != 0 }) {
+        if (listOf(applicationStartedAt, applicationEndedAt).hasMicrosecondPrecision() == false) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 시각은 마이크로초 정밀도까지 지원합니다.")
         }
     }

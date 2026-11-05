@@ -8,10 +8,10 @@ import team.startup.expo.domain.expo.entity.PreregisterSessionChange
 import team.startup.expo.domain.expo.entity.PreregisterSessionChangeOperation
 import team.startup.expo.domain.expo.presentation.dto.request.UpdatePreregisterSessionRequest
 import team.startup.expo.domain.expo.presentation.dto.response.toResponse
-import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionChangeRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
+import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.expo.service.ApplyPreregisterSessionChangeService
 import team.startup.expo.domain.expo.service.PreregisterSessionChangesClient
 import team.startup.expo.domain.expo.service.UpdatePreregisterSessionService
@@ -21,6 +21,7 @@ import java.time.temporal.ChronoUnit
 
 @Service
 class UpdatePreregisterSessionServiceImpl(
+    private val admins: AdminAccessSupport,
     private val expos: ExpoRepository,
     private val sessions: PreregisterSessionRepository,
     private val pendingChanges: PreregisterSessionChangeRepository,
@@ -28,7 +29,6 @@ class UpdatePreregisterSessionServiceImpl(
     private val changes: PreregisterSessionChangesClient,
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
-    private val history: AdminChangeHistoryRepository,
 ) : UpdatePreregisterSessionService {
     override fun execute(
         expoId: String,
@@ -85,7 +85,7 @@ class UpdatePreregisterSessionServiceImpl(
                         PreregisterSessionChangeOperation.UPDATE,
                         original.copy(closed = desired.closed) != desired,
                         definitionJson,
-                        adminId = history.currentAdminId(),
+                        adminId = admins.currentAdminId(),
                     ),
                 )
             }

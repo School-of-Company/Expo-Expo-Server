@@ -34,7 +34,9 @@ import team.startup.expo.domain.expo.repository.ProgramSessionQueryRepository
 import team.startup.expo.domain.expo.service.AdminAuthorityClient
 import team.startup.expo.domain.expo.service.GetProgramSessionPageService
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.global.client.AdminUserClient
 import team.startup.expo.support.TestJwt
+import team.startup.expo.support.feignClient
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
 import java.net.URI
@@ -225,13 +227,16 @@ class AdminExpoAccessPostgresHttpTests {
     @Test
     fun `unconfigured and disconnected authority never grants access`() {
         val url = "http://127.0.0.1:${user.address.port}"
+        val users = ReflectionTestUtils.getField(authority, "users")
         try {
             ReflectionTestUtils.setField(authority, "userServiceUrl", "")
             access().statusCode() shouldBe 503
             ReflectionTestUtils.setField(authority, "userServiceUrl", "http://127.0.0.1:1")
+            ReflectionTestUtils.setField(authority, "users", feignClient<AdminUserClient>("http://127.0.0.1:1"))
             access().statusCode() shouldBe 503
         } finally {
             ReflectionTestUtils.setField(authority, "userServiceUrl", url)
+            ReflectionTestUtils.setField(authority, "users", users)
         }
     }
 

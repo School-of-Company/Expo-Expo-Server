@@ -53,6 +53,8 @@ dependencies {
     implementation("org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j")
     implementation("org.springframework.cloud:spring-cloud-starter-netflix-eureka-client")
     implementation("org.springframework.cloud:spring-cloud-starter-openfeign")
+    // 기존 java.net.http.HttpClient 전송을 유지한다(기본 HttpURLConnection은 본문 없는 쓰기를 JDK 안에서 재전송한다)
+    implementation("io.github.openfeign:feign-java11")
     implementation("tools.jackson.module:jackson-module-kotlin")
     // swagger-core는 Jackson 2로 스키마를 만들므로 Kotlin non-null 필드를 required로 표기하려면 Jackson 2 모듈이 필요하다
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")

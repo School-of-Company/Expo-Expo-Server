@@ -36,7 +36,7 @@ class TrainingProgram(
     @field:Column(nullable = false, length = 255)
     val category: Category,
 
-    @field:ManyToOne(fetch = FetchType.EAGER)
+    @field:ManyToOne(fetch = FetchType.LAZY)
     @field:JoinColumn(name = "expo_id")
     @field:OnDelete(action = OnDeleteAction.CASCADE)
     val expo: Expo?,

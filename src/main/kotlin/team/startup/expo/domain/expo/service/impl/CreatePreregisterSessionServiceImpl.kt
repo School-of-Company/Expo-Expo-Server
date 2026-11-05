@@ -4,12 +4,15 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.entity.PreregisterSession
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
 import team.startup.expo.domain.expo.presentation.dto.request.PreregisterSessionRequest
 import team.startup.expo.domain.expo.presentation.dto.response.PreregisterSessionResponse
 import team.startup.expo.domain.expo.presentation.dto.response.toResponse
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.PreregisterSessionRepository
+import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.expo.service.CreatePreregisterSessionService
 import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.global.exception.ExpectedException
@@ -17,6 +20,7 @@ import java.time.temporal.ChronoUnit
 
 @Service
 class CreatePreregisterSessionServiceImpl(
+    private val admins: AdminAccessSupport,
     private val expos: ExpoRepository,
     private val sessions: PreregisterSessionRepository,
     private val history: AdminChangeHistoryRepository,
@@ -50,7 +54,14 @@ class CreatePreregisterSessionServiceImpl(
                 ),
             ).toResponse()
             .also {
-                history.record(expoId, "SESSION_CREATE", "PREREGISTER_SESSION", it.id, it.title, history.currentAdminId())
+                history.record(
+                    expoId,
+                    AdminChangeType.SESSION_CREATE,
+                    AdminChangeTargetType.PREREGISTER_SESSION,
+                    it.id,
+                    it.title,
+                    admins.currentAdminId(),
+                )
             }
     }
 }

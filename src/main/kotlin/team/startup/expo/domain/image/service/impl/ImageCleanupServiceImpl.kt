@@ -1,6 +1,7 @@
 package team.startup.expo.domain.image.service.impl
 
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.scheduling.annotation.Scheduled
@@ -15,14 +16,15 @@ import java.time.temporal.ChronoUnit
 class ImageCleanupServiceImpl(
     private val imageRepository: ExpoImageRepository,
     storages: List<ImageStorage>,
+    @Value("\${image.cleanup.batch-size}") private val batchSize: Int,
 ) : ImageCleanupService {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val storageByProvider = storages.associateBy { it.provider }
 
-    @Scheduled(fixedDelayString = "\${image.cleanup.delay-ms:3600000}")
+    @Scheduled(fixedDelayString = "\${image.cleanup.delay-ms}")
     override fun execute() {
-        val cutoff = Instant.now().minus(24, ChronoUnit.HOURS)
-        imageRepository.findCleanupIds(cutoff, PageRequest.of(0, 100)).forEach { id ->
+        val cutoff = Instant.now().minus(RETENTION_HOURS, ChronoUnit.HOURS)
+        imageRepository.findCleanupIds(cutoff, PageRequest.of(0, batchSize)).forEach { id ->
             if (imageRepository.markDeleting(id, cutoff) != 1) return@forEach
             val image = imageRepository.findByIdOrNull(id) ?: return@forEach
             try {
@@ -32,5 +34,9 @@ class ImageCleanupServiceImpl(
                 logger.error("Image cleanup failed: {}", id, exception)
             }
         }
+    }
+
+    private companion object {
+        const val RETENTION_HOURS = 24L
     }
 }

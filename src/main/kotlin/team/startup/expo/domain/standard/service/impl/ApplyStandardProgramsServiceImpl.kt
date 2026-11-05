@@ -31,8 +31,8 @@ class ApplyStandardProgramsServiceImpl(
                 expos.findLockedById(expoId)
                     ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
             if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
-            val found = programs.findAllById(programIds)
-            if (found.size != programIds.size || found.any { it.expo?.id != expoId }) {
+            val found = programs.findAllByIdInAndExpoId(programIds, expoId)
+            if (found.size != programIds.size) {
                 throw ExpectedException(HttpStatus.NOT_FOUND, "일반 프로그램을 찾지 못 했습니다.")
             }
             found.forEach { policies.ensureAdmission(expoId, it.policyJson) }

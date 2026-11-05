@@ -4,9 +4,14 @@ import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration
+import org.springframework.boot.http.converter.autoconfigure.HttpMessageConvertersAutoConfiguration
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer
+import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.context.assertj.AssertableApplicationContext
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import org.springframework.cloud.openfeign.EnableFeignClients
+import org.springframework.cloud.openfeign.FeignAutoConfiguration
 import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramOccupation
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
@@ -27,6 +32,14 @@ import java.time.Instant
 import java.util.UUID
 
 class ServiceInternalTokenHttpTests {
+    @TestConfiguration(proxyBeanMethods = false)
+    @EnableFeignClients(basePackages = ["team.startup.expo.global.client"])
+    @ImportAutoConfiguration(
+        FeignAutoConfiguration::class,
+        HttpMessageConvertersAutoConfiguration::class,
+    )
+    class FeignConfiguration
+
     @Test
     fun `each receiver gets only its own token even when legacy tokens are configured`() {
         withServers { runner, calls ->
@@ -147,7 +160,7 @@ class ServiceInternalTokenHttpTests {
             "application" to { training.applications(1) },
             "application" to { preregister.prepare("expo", 1, 2, "UPDATE", true, null) },
             "application" to { preregister.adoptWaitingCapacity("expo", 1, 0) },
-            "form" to { policy.validateForm(definition()) },
+            "form" to { policy.formValidator()(definition()) },
             "application" to { policy.prepare("expo", UUID.randomUUID(), payload()) },
             "application" to { deletion.deleteApplications("expo", listOf(1), listOf(2)) },
             "form" to { deletion.deleteForms("expo") },
@@ -163,6 +176,7 @@ class ServiceInternalTokenHttpTests {
             expected.mapValues { (service, token) ->
                 HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
                     createContext("/") { exchange ->
+                        exchange.requestHeaders.getFirst("Content-Type") shouldBe if (service == "attention") null else "application/json"
                         val supplied = exchange.requestHeaders.getFirst("X-Internal-Token")
                         synchronized(calls) { calls.add(service to supplied) }
                         exchange.requestBody.use { it.readAllBytes() }
@@ -218,6 +232,7 @@ class ServiceInternalTokenHttpTests {
                     .withBean(tools.jackson.databind.ObjectMapper::class.java, { jacksonObjectMapper() })
                     .withBean(team.startup.expo.global.client.DownstreamCircuitBreakers::class.java)
                     .withUserConfiguration(
+                        FeignConfiguration::class.java,
                         StandardDependenciesClient::class.java,
                         TrainingDependenciesClient::class.java,
                         ExpoDeletionClient::class.java,

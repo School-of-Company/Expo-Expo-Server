@@ -15,8 +15,8 @@ class RecoverExpoEventsServiceImpl(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     @Scheduled(
-        fixedDelayString = "\${expo.events.recovery-delay-ms:60000}",
-        initialDelayString = "\${expo.events.recovery-delay-ms:60000}",
+        fixedDelayString = "\${expo.events.recovery-delay-ms}",
+        initialDelayString = "\${expo.events.recovery-delay-ms}",
     )
     override fun execute() {
         val stuck =

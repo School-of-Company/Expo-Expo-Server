@@ -18,7 +18,7 @@ class DeleteTrainingProgramServiceImpl(
     private val applyChange: ApplyProgramChangeService,
 ) : DeleteTrainingProgramService {
     override fun execute(programId: Long) {
-        val expoId = programs.findByIdOrNull(programId)?.expo?.id ?: missing()
+        val expoId = programs.findExpoIdById(programId) ?: missing()
         val pending =
             policies.stage(expoId, policies.command("DELETE_TRAINING", programId)) {
                 val current = programs.findByIdOrNull(programId) ?: missing()
