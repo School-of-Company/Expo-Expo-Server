@@ -117,7 +117,7 @@ data class ProgramPolicyRequest(
                 onsiteStartedAt,
                 onsiteEndedAt,
                 autoPromotionEndedAt,
-            ).any { it.nano % 1000 != 0 }
+            ).hasMicrosecondPrecision() == false
         ) {
             throw ExpectedException(HttpStatus.BAD_REQUEST, "프로그램 정책 시각은 마이크로초 정밀도까지 지원합니다.")
         }

@@ -11,6 +11,7 @@ import team.startup.expo.domain.training.service.ApplyTrainingProgramsWithTraine
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
 import team.startup.expo.domain.training.service.TrainingOperationType
+import team.startup.expo.global.common.time.EXPO_TIME_ZONE
 import team.startup.expo.global.exception.ExpectedException
 import java.time.Clock
 import java.time.LocalDate
@@ -27,7 +28,7 @@ class ApplyTrainingProgramsWithTraineeServiceImpl(
     private val sms: TrainingApplicationSmsService,
     private val transactions: TransactionTemplate,
     // 박람회 날짜는 한국 시간 기준이다. 테스트는 Clock 빈으로 바꾼다.
-    private val clock: Clock = Clock.system(ZoneId.of("Asia/Seoul")),
+    private val clock: Clock = Clock.system(ZoneId.of(EXPO_TIME_ZONE)),
 ) : ApplyTrainingProgramsWithTraineeService {
     override fun execute(
         expoId: String,
@@ -48,13 +49,13 @@ class ApplyTrainingProgramsWithTraineeServiceImpl(
                     if (programs.existsByExpoIdAndPolicyJsonIsNotNull(expoId)) {
                         throw ExpectedException(HttpStatus.CONFLICT, "정책이 설정된 프로그램은 기존 일괄 교체 신청을 사용할 수 없습니다.")
                     }
-                    expo to programs.findAllByIdIn(ids)
+                    expo to programs.findAllByIdInAndExpoId(ids, expoId)
                 },
             )
         val form = dependencies.traineePreFormPeriod(expoId)
         val now = clock.instant()
         if (now < form.startDate || now > form.endDate) throw ExpectedException(HttpStatus.BAD_REQUEST, "사전 등록 기간이 아닙니다.")
-        if (found.size != ids.size || found.any { it.expo?.id != expoId }) {
+        if (found.size != ids.size) {
             throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
         }
         dependencies.requireApplicationConfiguration()

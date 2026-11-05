@@ -1,79 +1,18 @@
 package team.startup.expo.domain.standard.service.impl
 
-import jakarta.validation.Validator
-import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
-import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
-import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
-import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
-import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
-import team.startup.expo.domain.expo.repository.ExpoRepository
-import team.startup.expo.domain.expo.service.AdminAccessSupport
-import team.startup.expo.domain.expo.service.ExpoEventSupport
-import team.startup.expo.domain.expo.service.ProgramPolicySupport
-import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.presentation.dto.request.AddStandardProgramRequest
-import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.standard.service.CreateStandardProgramListService
-import team.startup.expo.global.exception.ExpectedException
+import team.startup.expo.domain.standard.service.StandardProgramCreationSupport
 
 @Service
 class CreateStandardProgramListServiceImpl(
-    private val admins: AdminAccessSupport,
-    private val expos: ExpoRepository,
-    private val policies: ProgramPolicySupport,
-    private val programs: StandardProgramRepository,
-    private val validator: Validator,
-    private val history: AdminChangeHistoryRepository,
-    private val events: ExpoEventSupport,
+    private val creation: StandardProgramCreationSupport,
 ) : CreateStandardProgramListService {
     override fun execute(
         expoId: String,
         requests: List<AddStandardProgramRequest>,
     ) {
-        policies.creating(expoId, requests.map { ProgramType.STANDARD to it.policy }) {
-            if (requests.any { validator.validate(it).isNotEmpty() }) {
-                throw ExpectedException(HttpStatus.BAD_REQUEST, "잘못된 요청입니다.")
-            }
-            val expo =
-                expos.findLockedById(expoId)
-                    ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
-            if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
-            events.changed(expoId)
-            programs
-                .saveAll(
-                    requests.map { request ->
-                        val definition =
-                            policies.create(
-                                expoId,
-                                ProgramType.STANDARD,
-                                request.title,
-                                request.startedAt.toString(),
-                                request.endedAt.toString(),
-                                null,
-                                request.policy,
-                                place = request.place,
-                            )
-                        StandardProgram(
-                            title = request.title,
-                            startedAt = request.startedAt.toString(),
-                            endedAt = request.endedAt.toString(),
-                            expo = expo,
-                            groupId = definition.groupId,
-                            policyJson = policies.json(definition.policy),
-                            place = definition.place,
-                        )
-                    },
-                ).forEach {
-                    history.record(
-                        expoId,
-                        AdminChangeType.PROGRAM_CREATE,
-                        AdminChangeTargetType.STANDARD,
-                        requireNotNull(it.id),
-                        it.title,
-                        admins.currentAdminId(),
-                    )
-                }
-        }
+        creation.create(expoId, requests)
     }
 }

@@ -122,14 +122,6 @@ class ExpoPersistenceTests {
         expoRepository.findById(EXPO_ID).orElseThrow().let {
             it.applicationPerson shouldBe 101L
             it.yesterdayApplicationPerson shouldBe 90L
-            it.saveYesterdayApplicationPerson(101L)
-        }
-        entityManager.flush()
-        entityManager.clear()
-
-        expoRepository.findById(EXPO_ID).orElseThrow().let {
-            it.applicationPerson shouldBe 101L
-            it.yesterdayApplicationPerson shouldBe 101L
         }
     }
 
@@ -276,7 +268,7 @@ class ExpoPersistenceTests {
         trainingProgramRepository.deleteAllInBatch(listOf(trainingBatch))
         standardProgramRepository.deleteAllInBatch(listOf(standardBatch))
         standardProgramRepository.deleteById(standardSingle.id!!)
-        trainingProgramRepository.deleteByExpo(expoRepository.getReferenceById(EXPO_ID))
+        trainingProgramRepository.deleteAll(trainingProgramRepository.findByExpo(expoRepository.getReferenceById(EXPO_ID)))
         entityManager.flush()
         entityManager.clear()
 
@@ -284,7 +276,7 @@ class ExpoPersistenceTests {
         standardProgramRepository.findAll().map { it.id }.toSet() shouldBe setOf(standardUpdateId, standardKeep.id)
         expoRepository.count() shouldBe 2L
 
-        standardProgramRepository.deleteByExpo(expoRepository.getReferenceById(EXPO_ID))
+        standardProgramRepository.deleteAll(standardProgramRepository.findByExpo(expoRepository.getReferenceById(EXPO_ID)))
         entityManager.flush()
         entityManager.clear()
         standardProgramRepository.findAll().map { it.id } shouldBe listOf(standardKeep.id)
@@ -302,6 +294,21 @@ class ExpoPersistenceTests {
         entityManager.clear()
 
         val reloaded = standardProgramRepository.findById(programId).orElseThrow()
+        Hibernate.isInitialized(reloaded.expo) shouldBe false
+        reloaded.expo?.title shouldBe "박람회"
+        Hibernate.isInitialized(reloaded.expo) shouldBe true
+    }
+
+    @Test
+    @Transactional
+    fun `Training의 Expo 관계는 reload 뒤 LAZY proxy로 남는다`() {
+        val expo = expo()
+        expoRepository.saveAndFlush(expo)
+        val program = trainingProgram(expo = expo)
+        trainingProgramRepository.saveAndFlush(program)
+        entityManager.clear()
+
+        val reloaded = trainingProgramRepository.findById(requireNotNull(program.id)).orElseThrow()
         Hibernate.isInitialized(reloaded.expo) shouldBe false
         reloaded.expo?.title shouldBe "박람회"
         Hibernate.isInitialized(reloaded.expo) shouldBe true

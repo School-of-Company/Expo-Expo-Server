@@ -80,8 +80,4 @@ class Expo(
     fun plusApplicationPerson() {
         applicationPerson++
     }
-
-    fun saveYesterdayApplicationPerson(person: Long) {
-        yesterdayApplicationPerson = person
-    }
 }

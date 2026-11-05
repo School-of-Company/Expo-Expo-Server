@@ -2,8 +2,10 @@ package team.startup.expo.domain.expo.service.impl
 
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
+import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.service.AdminAccessSupport
@@ -12,8 +14,10 @@ import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.expo.service.UpdateExpoService
 import team.startup.expo.domain.image.service.ImageAttachmentSupport
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
+import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.global.exception.ExpectedException
+import java.time.LocalDateTime
 
 @Service
 class UpdateExpoServiceImpl(
@@ -45,65 +49,33 @@ class UpdateExpoServiceImpl(
                 validateIds(standardIds, standard.keys)
                 validateIds(trainingIds, training.keys)
                 val mutations = mutableListOf<ProgramMutation>()
-                request.updateStandardProRequestDto.forEach { p ->
-                    if (p.id == null) {
-                        mutations +=
-                            ProgramMutation(
-                                null,
-                                policies.create(
-                                    expoId,
-                                    ProgramType.STANDARD,
-                                    p.title,
-                                    p.startedAt.toString(),
-                                    p.endedAt.toString(),
-                                    null,
-                                    p.policy,
-                                    place = p.place,
-                                ),
-                            )
-                    } else {
-                        policies
-                            .update(
-                                policies.definition(standard.getValue(p.id)),
-                                p.title,
-                                p.startedAt.toString(),
-                                p.endedAt.toString(),
-                                null,
-                                p.policy,
-                                p.revision,
-                                place = p.place,
-                            )?.let(mutations::add)
-                    }
+                request.updateStandardProRequestDto.mapNotNullTo(mutations) { p ->
+                    mutation(
+                        expoId,
+                        ProgramType.STANDARD,
+                        p.id?.let { policies.definition(standard.getValue(it)) },
+                        p.title,
+                        p.startedAt,
+                        p.endedAt,
+                        null,
+                        p.policy,
+                        p.revision,
+                        p.place,
+                    )
                 }
-                request.updateTrainingProRequestDto.forEach { p ->
-                    if (p.id == null) {
-                        mutations +=
-                            ProgramMutation(
-                                null,
-                                policies.create(
-                                    expoId,
-                                    ProgramType.TRAINING,
-                                    p.title,
-                                    p.startedAt.toString(),
-                                    p.endedAt.toString(),
-                                    p.category,
-                                    p.policy,
-                                    place = p.place,
-                                ),
-                            )
-                    } else {
-                        policies
-                            .update(
-                                policies.definition(training.getValue(p.id)),
-                                p.title,
-                                p.startedAt.toString(),
-                                p.endedAt.toString(),
-                                p.category,
-                                p.policy,
-                                p.revision,
-                                place = p.place,
-                            )?.let(mutations::add)
-                    }
+                request.updateTrainingProRequestDto.mapNotNullTo(mutations) { p ->
+                    mutation(
+                        expoId,
+                        ProgramType.TRAINING,
+                        p.id?.let { policies.definition(training.getValue(it)) },
+                        p.title,
+                        p.startedAt,
+                        p.endedAt,
+                        p.category,
+                        p.policy,
+                        p.revision,
+                        p.place,
+                    )
                 }
                 standard.filterKeys { it !in standardIds }.values.forEach { mutations += ProgramMutation(policies.definition(it), null) }
                 training.filterKeys { it !in trainingIds }.values.forEach { mutations += ProgramMutation(policies.definition(it), null) }
@@ -111,6 +83,24 @@ class UpdateExpoServiceImpl(
             } ?: return
         applyChange.execute(expoId, pending.changeId)
     }
+
+    private fun mutation(
+        expoId: String,
+        type: ProgramType,
+        current: ProgramDefinition?,
+        title: String,
+        startedAt: LocalDateTime,
+        endedAt: LocalDateTime,
+        category: Category?,
+        policy: ProgramPolicyRequest?,
+        revision: Long?,
+        place: String?,
+    ): ProgramMutation? =
+        if (current == null) {
+            ProgramMutation(null, policies.create(expoId, type, title, startedAt.toString(), endedAt.toString(), category, policy, place))
+        } else {
+            policies.update(current, title, startedAt.toString(), endedAt.toString(), category, policy, revision, place)
+        }
 
     private fun validateIds(
         requested: List<Long>,

@@ -6,9 +6,12 @@ import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.standard.entity.StandardProgram
 
 interface StandardProgramRepository : JpaRepository<StandardProgram, Long> {
-    fun deleteByExpo(expo: Expo)
-
     fun findByExpo(expo: Expo): List<StandardProgram>
+
+    fun findAllByIdInAndExpoId(
+        ids: List<Long>,
+        expoId: String,
+    ): List<StandardProgram>
 
     fun findByExpoIdOrderByIdAsc(expoId: String): List<StandardProgram>
 

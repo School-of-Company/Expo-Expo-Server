@@ -149,7 +149,7 @@ class ProgramPolicyClient(
         changeId: UUID,
         payload: ProgramChangePayload,
     ) {
-        val guarded = payload.mutations.filter { it.previous != null && (it.previous.policy != null || it.definition?.policy != null) }
+        val guarded = payload.mutations.filter { it.requiresApplicationGuard() }
         if (guarded.isEmpty()) return
         val guardianChange = guarded.any { it.previous?.policy?.guardianPolicy != null || it.definition?.policy?.guardianPolicy != null }
         val schoolValueChange =

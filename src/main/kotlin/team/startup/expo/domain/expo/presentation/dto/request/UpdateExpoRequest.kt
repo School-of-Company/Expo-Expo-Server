@@ -7,10 +7,7 @@ import jakarta.validation.constraints.Positive
 import jakarta.validation.constraints.PositiveOrZero
 import jakarta.validation.constraints.Size
 import org.hibernate.validator.constraints.CodePointLength
-import org.springframework.http.HttpStatus
-import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.training.entity.Category
-import team.startup.expo.global.exception.ExpectedException
 import java.time.LocalDate
 import java.time.LocalDateTime
 
@@ -52,11 +49,7 @@ data class UpdateExpoRequest(
     @field:Schema(description = "새 사전등록 회차의 교사·예비교사 외 대상 정원 기본값", example = "1000")
     val preregisterNonTeacherCapacity: Int? = null,
 ) {
-    fun validatePeriod() {
-        if (finishedDay.isBefore(startedDay)) {
-            throw ExpectedException(HttpStatus.BAD_REQUEST, "박람회 종료일은 시작일보다 빠를 수 없습니다.")
-        }
-    }
+    fun validatePeriod() = validateExpoPeriod(startedDay, finishedDay)
 
     fun validatePreregisterCapacities() = validateTargetCapacities(preregisterTeacherCapacity, preregisterNonTeacherCapacity)
 }
@@ -66,7 +59,7 @@ data class UpdateStandardProgramRequest(
     @field:Positive
     @field:Schema(description = "식별자", example = "1")
     val id: Long? = null,
-    @field:CodePointLength(max = 50)
+    @field:CodePointLength(max = PROGRAM_TITLE_MAX_LENGTH)
     @field:Schema(description = "제목", example = "예시 박람회")
     val title: String,
     @field:JsonFormat(pattern = "yyyy-MM-dd HH:mm")
@@ -81,7 +74,7 @@ data class UpdateStandardProgramRequest(
     @field:jakarta.validation.constraints.Positive
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long? = null,
-    @field:CodePointLength(max = 255)
+    @field:CodePointLength(max = NOTICE_PLACE_MAX_LENGTH)
     @field:Schema(description = "Optional place: omitted/null preserves on update; blank clears; max 255 UTF-16 units, no control chars")
     val place: String? = null,
 )
@@ -91,7 +84,7 @@ data class UpdateTrainingProgramRequest(
     @field:Positive
     @field:Schema(description = "식별자", example = "1")
     val id: Long? = null,
-    @field:CodePointLength(max = 50)
+    @field:CodePointLength(max = PROGRAM_TITLE_MAX_LENGTH)
     @field:Schema(description = "제목", example = "예시 박람회")
     val title: String,
     @field:JsonFormat(pattern = "yyyy-MM-dd HH:mm")
@@ -108,7 +101,7 @@ data class UpdateTrainingProgramRequest(
     @field:jakarta.validation.constraints.Positive
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long? = null,
-    @field:CodePointLength(max = 255)
+    @field:CodePointLength(max = NOTICE_PLACE_MAX_LENGTH)
     @field:Schema(description = "Optional place: omitted/null preserves on update; blank clears; max 255 UTF-16 units, no control chars")
     val place: String? = null,
 )

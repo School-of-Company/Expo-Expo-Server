@@ -3,6 +3,7 @@ package team.startup.expo.domain.expo
 import com.zaxxer.hikari.HikariDataSource
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.`when`
 import org.springframework.beans.factory.annotation.Autowired
@@ -34,10 +35,14 @@ import team.startup.expo.domain.standard.service.GetStandardProgramParticipantsS
 import team.startup.expo.domain.standard.service.StandardDependenciesClient
 import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
+import team.startup.expo.domain.training.presentation.dto.request.TrainingProgramBatchRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
+import team.startup.expo.domain.training.service.GetTrainingProgramBatchService
+import team.startup.expo.domain.training.service.GetTrainingProgramListService
 import team.startup.expo.domain.training.service.GetTrainingProgramTraineesService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
 import team.startup.expo.global.attendance.ProgramAttendanceClient
+import team.startup.expo.global.exception.ExpectedException
 import team.startup.expo.support.TestJwt
 
 @SpringBootTest(properties = ["eureka.client.enabled=false"])
@@ -67,6 +72,10 @@ class ReadServiceTransactionPostgresTests {
     @Autowired private lateinit var participants: GetStandardProgramParticipantsService
 
     @Autowired private lateinit var trainees: GetTrainingProgramTraineesService
+
+    @Autowired private lateinit var trainingList: GetTrainingProgramListService
+
+    @Autowired private lateinit var trainingBatch: GetTrainingProgramBatchService
 
     @MockitoBean private lateinit var authority: AdminAuthorityClient
 
@@ -166,6 +175,41 @@ class ReadServiceTransactionPostgresTests {
         response.programName shouldBe "training"
         response.status shouldBe false
         calls shouldBe listOf("applications", "names", "attendance")
+    }
+
+    @Test
+    fun `training list and batch preserve fields and reject another expo without an outer transaction`() {
+        val expo = saveExpo("training-batch-reads")
+        val other = saveExpo("training-batch-other")
+        val program =
+            trainingPrograms.saveAndFlush(
+                TrainingProgram(
+                    title = "batch training",
+                    startedAt = "2030-01-01 09:00",
+                    endedAt = "2030-01-01 10:00",
+                    category = Category.ESSENTIAL,
+                    expo = expo,
+                    place = "room",
+                    revision = 3,
+                ),
+            )
+        val id = requireNotNull(program.id)
+
+        val listed = trainingList.execute(expo.id).single()
+        val batch = trainingBatch.execute(expo.id, TrainingProgramBatchRequest(listOf(id, id)))
+
+        batch shouldBe listOf(listed)
+        listed.expoId shouldBe expo.id
+        listed.title shouldBe "batch training"
+        listed.startedAt shouldBe "2030-01-01 09:00"
+        listed.endedAt shouldBe "2030-01-01 10:00"
+        listed.category shouldBe Category.ESSENTIAL
+        listed.place shouldBe "room"
+        listed.revision shouldBe 3L
+        assertThrows<ExpectedException> {
+            trainingBatch.execute(other.id, TrainingProgramBatchRequest(listOf(id)))
+        }.message shouldBe "연수 프로그램을 찾지 못했습니다."
+        assertNoDatabaseTransaction()
     }
 
     private fun saveExpo(id: String): Expo =

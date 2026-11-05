@@ -13,7 +13,7 @@ data class ExpoPageRequest(
     val page: String? = null,
     @field:Pattern(regexp = "[0-9]+")
     @field:DecimalMin("1")
-    @field:DecimalMax("100")
+    @field:DecimalMax("$MAX_PAGE_SIZE")
     @field:Schema(description = "페이지 크기. 1~100, 기본 20", example = "20")
     val size: String? = null,
 ) {

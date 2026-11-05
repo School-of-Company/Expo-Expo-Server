@@ -21,7 +21,7 @@ import java.time.temporal.ChronoUnit
 
 data class PreregisterSessionRequest(
     @field:NotBlank
-    @field:CodePointLength(max = 50)
+    @field:CodePointLength(max = PROGRAM_TITLE_MAX_LENGTH)
     @field:Schema(description = "제목", example = "예시 박람회")
     val title: String,
     @field:Schema(description = "시작 일시 (UTC 오프셋 ISO 8601)", example = "2030-01-01T10:00:00Z")

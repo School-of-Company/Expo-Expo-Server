@@ -10,7 +10,7 @@ enum class AdminChangeTargetType { STANDARD, TRAINING, PREREGISTER_SESSION }
 
 data class AdminChangeHistoryRequest(
     @field:Min(0) val page: Int = 0,
-    @field:Min(1) @field:Max(100) val size: Int = 20,
+    @field:Min(1) @field:Max(MAX_PAGE_SIZE.toLong()) val size: Int = 20,
     val type: AdminChangeType? = null,
     val from: Instant? = null,
     val to: Instant? = null,

@@ -21,7 +21,7 @@ class UpdateTrainingProgramServiceImpl(
         trainingProgramId: Long,
         request: UpdateTrainingProgramRequest,
     ) {
-        val expoId = programs.findByIdOrNull(trainingProgramId)?.expo?.id ?: missing()
+        val expoId = programs.findExpoIdById(trainingProgramId) ?: missing()
         val pending =
             policies.stage(expoId, policies.command("UPDATE_TRAINING", trainingProgramId, request)) {
                 val current = programs.findByIdOrNull(trainingProgramId) ?: missing()

@@ -5,13 +5,15 @@ import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotNull
 import org.hibernate.validator.constraints.CodePointLength
+import team.startup.expo.domain.expo.presentation.dto.request.NOTICE_PLACE_MAX_LENGTH
+import team.startup.expo.domain.expo.presentation.dto.request.PROGRAM_TITLE_MAX_LENGTH
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.training.entity.Category
 import java.time.LocalDateTime
 
 data class AddTrainingProgramRequest(
     @field:NotNull
-    @field:CodePointLength(max = 50)
+    @field:CodePointLength(max = PROGRAM_TITLE_MAX_LENGTH)
     @field:Schema(description = "제목", example = "예시 박람회")
     val title: String,
     @field:NotNull
@@ -28,7 +30,7 @@ data class AddTrainingProgramRequest(
     @field:Valid
     @field:Schema(description = "프로그램 모집 정책. 수정 요청에서 null이면 기존 정책 유지")
     val policy: ProgramPolicyRequest? = null,
-    @field:CodePointLength(max = 255)
+    @field:CodePointLength(max = NOTICE_PLACE_MAX_LENGTH)
     @field:Schema(description = "Optional place: omitted/null preserves on update; blank clears; max 255 UTF-16 units, no control chars")
     val place: String? = null,
 )
@@ -38,7 +40,7 @@ data class UpdateTrainingProgramRequest(
     @field:Schema(description = "식별자", example = "1")
     val id: Long,
     @field:NotNull
-    @field:CodePointLength(max = 50)
+    @field:CodePointLength(max = PROGRAM_TITLE_MAX_LENGTH)
     @field:Schema(description = "제목", example = "예시 박람회")
     val title: String,
     @field:NotNull
@@ -58,7 +60,7 @@ data class UpdateTrainingProgramRequest(
     @field:jakarta.validation.constraints.Positive
     @field:Schema(description = "조회한 정의 버전", example = "1")
     val revision: Long? = null,
-    @field:CodePointLength(max = 255)
+    @field:CodePointLength(max = NOTICE_PLACE_MAX_LENGTH)
     @field:Schema(description = "Optional place: omitted/null preserves on update; blank clears; max 255 UTF-16 units, no control chars")
     val place: String? = null,
 )

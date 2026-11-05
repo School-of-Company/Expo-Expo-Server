@@ -29,24 +29,13 @@ class GetTrainingProgramBatchServiceImpl(
         // 중복 ID는 한 번만 반환하고, 없는 ID나 다른 박람회 ID가 하나라도 있으면 일부만 돌려주지 않는다
         policies.ensureAvailable(expoId)
         val programIds = request.programIds.distinct()
-        val programs = trainingProgramRepository.findAllByIdIn(programIds).filter { it.expo?.id == expoId }
+        val programs = trainingProgramRepository.findAllByIdInAndExpoId(programIds, expoId)
         if (programs.size != programIds.size) {
             throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
         }
 
         return programs.sortedBy { it.id }.map { program ->
-            TrainingProgramResponse(
-                id = requireNotNull(program.id),
-                title = program.title,
-                place = program.place,
-                expoId = expoId,
-                groupId = program.groupId,
-                policy = policies.policy(program.policyJson),
-                revision = program.revision,
-                startedAt = program.startedAt,
-                endedAt = program.endedAt,
-                category = program.category,
-            )
+            TrainingProgramResponse.from(program, expoId, policies.policy(program.policyJson))
         }
     }
 }

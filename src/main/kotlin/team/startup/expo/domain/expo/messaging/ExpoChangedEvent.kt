@@ -58,15 +58,8 @@ data class ExpoEventSnapshot(
         ): ExpoEventSnapshot {
             // 진행 중인 프로그램 변경(tb_program_change 행)이 있으면 Expo는 프로그램 조회를 409로 답한다(ProgramPolicySupport.ensureAvailable).
             // 프로그램별 pendingRevision은 관리자 목록 API(ProgramPolicySupport.pendingRevisions)와 같은 값이다.
-            fun pending(type: ProgramType): Map<Long, Long> =
-                programChange
-                    ?.mutations
-                    .orEmpty()
-                    .mapNotNull { it.previous }
-                    .filter { it.programType == type }
-                    .associate { requireNotNull(it.id) to (it.revision + 1) }
-            val pendingStandards = pending(ProgramType.STANDARD)
-            val pendingTrainings = pending(ProgramType.TRAINING)
+            val pendingStandards = programChange?.pendingRevisions(ProgramType.STANDARD).orEmpty()
+            val pendingTrainings = programChange?.pendingRevisions(ProgramType.TRAINING).orEmpty()
             return ExpoEventSnapshot(
                 ExpoState(
                     title = expo.title,
