@@ -21,10 +21,8 @@ interface ExpoImageRepository : JpaRepository<ExpoImage, String> {
         @Param("url") url: String,
     ): ExpoImage?
 
-    fun findByPublicUrl(url: String): ExpoImage?
-
     @Query(
-        "select image.id from ExpoImage image where image.reservedExpoId is null and ((image.status = 'PENDING' and image.createdAt < :cutoff) or (image.status = 'ORPHAN' and image.detachedAt < :cutoff) or image.status = 'DELETING')",
+        "select image.id from ExpoImage image where " + CLEANUP_CONDITION,
     )
     fun findCleanupIds(
         @Param("cutoff") cutoff: Instant,
@@ -34,10 +32,18 @@ interface ExpoImageRepository : JpaRepository<ExpoImage, String> {
     @Transactional
     @Modifying
     @Query(
-        "update ExpoImage image set image.status = 'DELETING' where image.id = :id and image.expoId is null and image.reservedExpoId is null and (image.status = 'DELETING' or (image.status = 'PENDING' and image.createdAt < :cutoff) or (image.status = 'ORPHAN' and image.detachedAt < :cutoff))",
+        "update ExpoImage image set image.status = '${ExpoImage.DELETING}' " +
+            "where image.id = :id and image.expoId is null and " + CLEANUP_CONDITION,
     )
     fun markDeleting(
         @Param("id") id: String,
         @Param("cutoff") cutoff: Instant,
     ): Int
+
+    companion object {
+        private const val CLEANUP_CONDITION =
+            "image.reservedExpoId is null and " +
+                "((image.status = '${ExpoImage.PENDING}' and image.createdAt < :cutoff) or " +
+                "(image.status = '${ExpoImage.ORPHAN}' and image.detachedAt < :cutoff) or image.status = '${ExpoImage.DELETING}')"
+    }
 }

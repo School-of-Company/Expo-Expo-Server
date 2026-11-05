@@ -17,6 +17,7 @@ import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository.
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
 import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import team.startup.expo.domain.training.service.impl.PublishTrainingSmsServiceImpl
+import team.startup.expo.global.kafka.OutboxKafkaConfig
 import tools.jackson.databind.json.JsonMapper
 import java.time.Duration
 import java.time.Instant
@@ -42,7 +43,15 @@ class PublishTrainingSmsServiceImplTests {
         @Suppress("UNCHECKED_CAST")
         val producers = mock(ProducerFactory::class.java) as ProducerFactory<String, String>
         `when`(producers.copyWithConfigurationOverride(anyMap())).thenReturn(MockProducerFactory { producer })
-        val relay = PublishTrainingSmsServiceImpl(outbox, producers, dependencies, JsonMapper.builder().build(), contractVerified = true)
+        val relay =
+            PublishTrainingSmsServiceImpl(
+                outbox,
+                OutboxKafkaConfig().outboxKafkaTemplate(producers),
+                dependencies,
+                JsonMapper.builder().build(),
+                batchSize = 20,
+                contractVerified = true,
+            )
 
         producer.sendException = KafkaException("broker down")
 

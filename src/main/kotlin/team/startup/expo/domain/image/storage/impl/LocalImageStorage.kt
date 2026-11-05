@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.core.io.FileSystemResource
 import org.springframework.core.io.Resource
 import org.springframework.stereotype.Component
+import team.startup.expo.domain.image.storage.ImagePaths
 import team.startup.expo.domain.image.storage.ImageStorage
 import java.io.IOException
 import java.nio.file.Files
@@ -44,11 +45,7 @@ class LocalImageStorage(
     }
 
     private fun pathFor(key: String): Path {
-        require(KEY_PATTERN.matches(key)) { "Invalid image key" }
+        require(ImagePaths.isValidKey(key)) { "Invalid image key" }
         return root.resolve(key)
-    }
-
-    private companion object {
-        val KEY_PATTERN = Regex("img/[0-9a-f-]{36}\\.(jpg|png)")
     }
 }

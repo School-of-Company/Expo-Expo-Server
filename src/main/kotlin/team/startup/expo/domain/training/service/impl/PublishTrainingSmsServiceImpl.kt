@@ -1,11 +1,10 @@
 package team.startup.expo.domain.training.service.impl
 
-import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.kafka.core.KafkaTemplate
-import org.springframework.kafka.core.ProducerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.training.service.HoldReason
@@ -19,28 +18,22 @@ import java.util.concurrent.TimeUnit
 @ConditionalOnProperty(prefix = "expo.training.sms", name = ["enabled"], havingValue = "true")
 class PublishTrainingSmsServiceImpl(
     private val outbox: TrainingSmsOutboxSupport,
-    producers: ProducerFactory<String, String>,
+    @Qualifier("outboxKafkaTemplate") private val kafka: KafkaTemplate<String, String>,
     private val dependencies: TrainingDependenciesClient,
     private val mapper: ObjectMapper,
-    @Value("\${expo.training.sms.batch-size:20}") private val batchSize: Int = 20,
-    @Value("\${expo.training.sms.contract-verified:false}") private val contractVerified: Boolean = false,
+    @Value("\${expo.training.sms.batch-size}") private val batchSize: Int,
+    @Value("\${expo.training.sms.contract-verified}") private val contractVerified: Boolean,
 ) : PublishTrainingSmsService {
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val kafka = KafkaTemplate(producers, mapOf("max.block.ms" to 5000)).apply { setProducerListener(null) }
 
     init {
         require(batchSize in 1..100) { "Training SMS batch size must be between 1 and 100" }
         require(contractVerified) { "Training SMS requires verified Notification deployment and replay contracts" }
     }
 
-    @PreDestroy
-    fun shutdown() {
-        kafka.destroy()
-    }
-
     @Scheduled(
-        fixedDelayString = "\${expo.training.sms.relay-delay-ms:5000}",
-        initialDelayString = "\${expo.training.sms.relay-delay-ms:5000}",
+        fixedDelayString = "\${expo.training.sms.relay-delay-ms}",
+        initialDelayString = "\${expo.training.sms.relay-delay-ms}",
     )
     override fun execute() {
         repeat(batchSize) {
@@ -69,7 +62,7 @@ class PublishTrainingSmsServiceImpl(
                             ),
                         ).also { if (!outbox.savePayload(publication, it)) return@repeat }
                 if (!outbox.beginPublication(publication)) return@repeat
-                kafka.send("notification.sms.requested", publication.eventId, payload).get(10, TimeUnit.SECONDS)
+                kafka.send(SMS_TOPIC, publication.eventId, payload).get(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 acknowledged = true
                 outbox.sent(publication)
             } catch (exception: Exception) {
@@ -102,4 +95,9 @@ class PublishTrainingSmsServiceImpl(
         val senderType: String = "TRAINEE",
         val text: String,
     )
+
+    private companion object {
+        const val PUBLISH_TIMEOUT_SECONDS = 10L
+        const val SMS_TOPIC = "notification.sms.requested"
+    }
 }

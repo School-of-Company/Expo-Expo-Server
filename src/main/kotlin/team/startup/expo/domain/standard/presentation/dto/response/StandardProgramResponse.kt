@@ -40,9 +40,9 @@ data class StandardProgramParticipantResponse(
     val programName: String,
     @field:Schema(description = "출석 여부", example = "true")
     val status: Boolean,
-    @field:Schema(description = "입장 시각 HH:mm:ss", example = "10:00:00")
+    @field:Schema(description = "입장 시각 HH:mm", example = "10:00")
     val entryTime: String?,
-    @field:Schema(description = "퇴장 시각 HH:mm:ss", example = "11:00:00")
+    @field:Schema(description = "퇴장 시각 HH:mm", example = "11:00")
     val leaveTime: String?,
 )
 

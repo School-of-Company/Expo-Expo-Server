@@ -9,6 +9,7 @@ import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.service.TrainingApplicationCommand
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingOperationSupport
 import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.domain.training.service.TrainingProgramReference
 import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
@@ -18,7 +19,7 @@ import java.util.UUID
 
 @Service
 class TrainingApplicationSmsServiceImpl(
-    @Value("\${expo.training.sms.enabled:false}") private val enabled: Boolean,
+    @Value("\${expo.training.sms.enabled}") private val enabled: Boolean,
     private val outbox: TrainingSmsOutboxSupport,
     private val dependencies: TrainingDependenciesClient,
 ) : TrainingApplicationSmsService {
@@ -39,7 +40,7 @@ class TrainingApplicationSmsServiceImpl(
                         compareBy({ it.startedAt }, { it.id }),
                     ).forEach { append("* ${it.startedAt} ~ ${it.endedAt}: ${it.title}\n") }
             }.trimEnd()
-        val text = if (fullText.length <= 2000) fullText else "연수 신청이 완료되었습니다. 신청 내역은 신청 화면에서 확인해 주세요."
+        val text = if (fullText.length <= MAX_SMS_LENGTH) fullText else "연수 신청이 완료되었습니다. 신청 내역은 신청 화면에서 확인해 주세요."
         val command =
             TrainingApplicationCommand(
                 TrainingTraineeReference(traineeId, expo.id),
@@ -62,7 +63,7 @@ class TrainingApplicationSmsServiceImpl(
         } catch (exception: Exception) {
             val definite =
                 exception is ExpectedException &&
-                    exception.status in setOf(HttpStatus.BAD_REQUEST, HttpStatus.NOT_FOUND, HttpStatus.CONFLICT)
+                    TrainingOperationSupport.isDefiniteRejection(exception)
             record(operation.eventId) { outbox.pending(operation, definite) }
             throw exception
         }
@@ -88,5 +89,9 @@ class TrainingApplicationSmsServiceImpl(
         } catch (exception: Exception) {
             logger.warn("Training operation update pending: eventId={}, type={}", eventId, exception.javaClass.simpleName)
         }
+    }
+
+    private companion object {
+        const val MAX_SMS_LENGTH = 2000
     }
 }

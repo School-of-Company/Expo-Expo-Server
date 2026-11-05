@@ -3,12 +3,10 @@ package team.startup.expo.global.security
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
-import org.springframework.http.MediaType
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.filter.OncePerRequestFilter
-import team.startup.expo.global.exception.ErrorResponse
 import tools.jackson.databind.ObjectMapper
 import java.security.MessageDigest
 
@@ -18,7 +16,7 @@ class InternalTokenFilter(
 ) : OncePerRequestFilter() {
     private val expectedTokenBytes = expectedToken.toByteArray(Charsets.UTF_8)
 
-    override fun shouldNotFilter(request: HttpServletRequest): Boolean = !request.servletPath.startsWith("/internal/")
+    override fun shouldNotFilter(request: HttpServletRequest): Boolean = !request.servletPath.startsWith(ApiPaths.INTERNAL_PREFIX)
 
     override fun doFilterInternal(
         request: HttpServletRequest,
@@ -31,10 +29,7 @@ class InternalTokenFilter(
             suppliedToken.isNullOrBlank() ||
             !MessageDigest.isEqual(expectedTokenBytes, suppliedToken.toByteArray(Charsets.UTF_8))
         ) {
-            response.status = HttpServletResponse.SC_UNAUTHORIZED
-            response.characterEncoding = Charsets.UTF_8.name()
-            response.contentType = MediaType.APPLICATION_JSON_VALUE
-            objectMapper.writeValue(response.writer, ErrorResponse(status = response.status, message = "인증이 필요합니다."))
+            SecurityErrorSupport.write(objectMapper, response, HttpServletResponse.SC_UNAUTHORIZED, "인증이 필요합니다.")
             return
         }
 

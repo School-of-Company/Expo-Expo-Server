@@ -33,7 +33,7 @@ import java.sql.SQLTransientException
 @Configuration
 @ConditionalOnProperty(name = ["expo.standard-created.enabled"], havingValue = "true")
 class StandardCreatedKafkaConfig(
-    @Value("\${spring.kafka.bootstrap-servers:}") bootstrapServers: String,
+    @Value("\${spring.kafka.bootstrap-servers}") bootstrapServers: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -50,12 +50,12 @@ class StandardCreatedKafkaConfig(
         consumerFactory: ConsumerFactory<String, String>,
         kafkaTemplate: KafkaTemplate<String, String>,
     ): ConcurrentKafkaListenerContainerFactory<String, String> {
-        val recoverer = DeadLetterPublishingRecoverer(kafkaTemplate) { record, _ -> TopicPartition(record.topic() + ".dlt", -1) }
+        val recoverer = DeadLetterPublishingRecoverer(kafkaTemplate) { record, _ -> TopicPartition(record.topic() + DLT_SUFFIX, -1) }
         recoverer.setFailIfSendResultIsError(true)
         val backOff =
-            ExponentialBackOff(1_000L, 2.0).apply {
-                maxInterval = 10_000L
-                maxAttempts = 5L
+            ExponentialBackOff(RETRY_INITIAL_INTERVAL_MS, RETRY_MULTIPLIER).apply {
+                maxInterval = RETRY_MAX_INTERVAL_MS
+                maxAttempts = RETRY_MAX_ATTEMPTS
             }
         val handler = DefaultErrorHandler(recoverer, backOff)
         val retryable =
@@ -131,5 +131,13 @@ class StandardCreatedKafkaConfig(
     @EventListener
     fun consumerNonResponsive(event: NonResponsiveConsumerEvent) {
         log.error("Kafka consumer poll is unresponsive: elapsedMs={}", event.timeSinceLastPoll)
+    }
+
+    private companion object {
+        const val DLT_SUFFIX = ".dlt"
+        const val RETRY_INITIAL_INTERVAL_MS = 1_000L
+        const val RETRY_MULTIPLIER = 2.0
+        const val RETRY_MAX_INTERVAL_MS = 10_000L
+        const val RETRY_MAX_ATTEMPTS = 5L
     }
 }

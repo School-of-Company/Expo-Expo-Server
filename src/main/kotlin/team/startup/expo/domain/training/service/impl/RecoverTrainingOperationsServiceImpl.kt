@@ -1,12 +1,13 @@
 package team.startup.expo.domain.training.service.impl
 
 import org.slf4j.LoggerFactory
-import org.springframework.http.HttpStatus
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.training.service.HoldReason
 import team.startup.expo.domain.training.service.RecoverTrainingOperationsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingOperationSupport
 import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import team.startup.expo.global.exception.ExpectedException
 
@@ -14,12 +15,13 @@ import team.startup.expo.global.exception.ExpectedException
 class RecoverTrainingOperationsServiceImpl(
     private val outbox: TrainingSmsOutboxSupport,
     private val dependencies: TrainingDependenciesClient,
+    @Value("\${expo.training.operations.batch-size}") private val batchSize: Int,
 ) : RecoverTrainingOperationsService {
     private val logger = LoggerFactory.getLogger(javaClass)
 
     @Scheduled(
-        fixedDelayString = "\${expo.training.operations.recovery-delay-ms:30000}",
-        initialDelayString = "\${expo.training.operations.recovery-delay-ms:30000}",
+        fixedDelayString = "\${expo.training.operations.recovery-delay-ms}",
+        initialDelayString = "\${expo.training.operations.recovery-delay-ms}",
     )
     override fun execute() {
         try {
@@ -28,7 +30,7 @@ class RecoverTrainingOperationsServiceImpl(
             logger.warn("Training operation maintenance pending: type={}", exception.javaClass.simpleName)
             return
         }
-        repeat(20) {
+        repeat(batchSize) {
             val operation =
                 try {
                     outbox.claimRecovery()
@@ -43,7 +45,7 @@ class RecoverTrainingOperationsServiceImpl(
                         dependencies.executeOperation(operation)
                         outbox.responseReceived(operation)
                     } catch (exception: ExpectedException) {
-                        if (exception.status !in setOf(HttpStatus.BAD_REQUEST, HttpStatus.NOT_FOUND, HttpStatus.CONFLICT)) throw exception
+                        if (!TrainingOperationSupport.isDefiniteRejection(exception)) throw exception
                         receipt = dependencies.operationReceipt(operation)
                         if (receipt == null) {
                             outbox.hold(operation, HoldReason.RECOVERY_REJECTED)

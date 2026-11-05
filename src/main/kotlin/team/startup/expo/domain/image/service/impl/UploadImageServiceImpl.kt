@@ -8,6 +8,7 @@ import org.springframework.web.multipart.MultipartFile
 import team.startup.expo.domain.image.entity.ExpoImage
 import team.startup.expo.domain.image.repository.ExpoImageRepository
 import team.startup.expo.domain.image.service.UploadImageService
+import team.startup.expo.domain.image.storage.ImagePaths
 import team.startup.expo.domain.image.storage.ImageStorage
 import team.startup.expo.global.exception.ExpectedException
 import java.io.IOException
@@ -32,8 +33,8 @@ class UploadImageServiceImpl(
     ): String {
         val image = validator.validateAndEncode(file)
         val id = UUID.randomUUID().toString()
-        val key = "img/$id.${image.extension}"
-        val url = "${publicBaseUrl.trimEnd('/')}/image/$id"
+        val key = ImagePaths.objectKey(id, image.extension)
+        val url = ImagePaths.publicUrl(publicBaseUrl, id)
         try {
             activeStorage.put(key, image.bytes, image.contentType)
         } catch (exception: IOException) {

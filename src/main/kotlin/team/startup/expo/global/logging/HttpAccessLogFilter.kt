@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.web.filter.OncePerRequestFilter
 import org.springframework.web.servlet.HandlerMapping
 import org.springframework.web.util.DisconnectedClientHelper
+import team.startup.expo.global.security.ApiPaths
 
 /**
  * 요청마다 접근 로그 한 줄(`GET /expo/{expo_id} status: 200 (12ms)`)을 남긴다. 모든 Expo 서비스가 같은 형식을 쓴다.
@@ -64,7 +65,7 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         private const val CLIENT_CLOSED_REQUEST = 499
         private const val MAX_RAW_PATH_LENGTH = 200
         private val SKIPPED_PATH_PREFIXES =
-            listOf("/actuator", "/expo/v3/api-docs", "/expo/swagger-ui", "/v3/api-docs", "/swagger-ui")
+            listOf("/actuator") + ApiPaths.swaggerLogPrefixes
         private val log: Logger = LoggerFactory.getLogger(LOGGER_NAME)
     }
 }

@@ -53,6 +53,7 @@ import team.startup.expo.domain.training.service.impl.ApplyTrainingProgramListSe
 import team.startup.expo.domain.training.service.impl.PublishTrainingSmsServiceImpl
 import team.startup.expo.domain.training.service.impl.RecoverTrainingOperationsServiceImpl
 import team.startup.expo.global.exception.ExpectedException
+import team.startup.expo.global.kafka.OutboxKafkaConfig
 import team.startup.expo.support.TestJwt
 import team.startup.expo.support.TrainingApplicationStub
 import tools.jackson.databind.ObjectMapper
@@ -409,7 +410,7 @@ class TrainingSmsIntegrationTests {
         jdbc.update(
             "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
         )
-        RecoverTrainingOperationsServiceImpl(outbox, dependencies).execute()
+        RecoverTrainingOperationsServiceImpl(outbox, dependencies, 20).execute()
         state() shouldBe "READY"
         count() shouldBe 1L
         eventId() shouldBe original.eventId
@@ -476,11 +477,12 @@ class TrainingSmsIntegrationTests {
         }
         consumer().use { consumer ->
             jdbc.update("UPDATE tb_training_sms_outbox SET next_attempt_at = CURRENT_TIMESTAMP")
-            val restarted = PublishTrainingSmsServiceImpl(outbox, producers, dependencies, mapper, contractVerified = true)
+            val kafka = OutboxKafkaConfig().outboxKafkaTemplate(producers)
+            val restarted = PublishTrainingSmsServiceImpl(outbox, kafka, dependencies, mapper, 20, contractVerified = true)
             try {
                 restarted.execute()
             } finally {
-                restarted.shutdown()
+                kafka.destroy()
             }
             nextRecord(consumer).key() shouldBe id
             state() shouldBe "SENT"
@@ -870,7 +872,7 @@ class TrainingSmsIntegrationTests {
     fun `복수 복구자도 동일 작업의 신청 버전과 발행 기록을 한 번만 만든다`() {
         val operation = prepare(TrainingOperationType.ADD)
         jdbc.update("UPDATE tb_training_sms_outbox SET lease_until = NULL, recover_after = CURRENT_TIMESTAMP")
-        val workers = (1..8).map { CompletableFuture.runAsync { RecoverTrainingOperationsServiceImpl(outbox, dependencies).execute() } }
+        val workers = (1..8).map { CompletableFuture.runAsync { RecoverTrainingOperationsServiceImpl(outbox, dependencies, 20).execute() } }
         workers.forEach { it.get(20, TimeUnit.SECONDS) }
         applicationStub.version shouldBe 1L
         applicationCalls.get() shouldBe 1
@@ -977,7 +979,14 @@ class TrainingSmsIntegrationTests {
 
     @Test
     fun `Notification 계약 검증 없는 SMS 활성화는 시작 단계에서 거절한다`() {
-        assertThrows(IllegalArgumentException::class.java) { PublishTrainingSmsServiceImpl(outbox, producers, dependencies, mapper) }
+        val kafka = OutboxKafkaConfig().outboxKafkaTemplate(producers)
+        try {
+            assertThrows(IllegalArgumentException::class.java) {
+                PublishTrainingSmsServiceImpl(outbox, kafka, dependencies, mapper, 20, contractVerified = false)
+            }
+        } finally {
+            kafka.destroy()
+        }
     }
 
     private fun applyReplace(ids: String) =

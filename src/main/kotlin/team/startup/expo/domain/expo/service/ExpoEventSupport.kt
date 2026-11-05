@@ -21,7 +21,7 @@ import tools.jackson.databind.ObjectMapper
 // 꺼져 있으면(KAFKA_EXPO_EVENTS_ENABLED=false) 아무것도 쓰지 않는다.
 @Component
 class ExpoEventSupport(
-    @Value("\${expo.events.enabled:false}") private val enabled: Boolean,
+    @Value("\${expo.events.enabled}") private val enabled: Boolean,
     private val expos: ExpoRepository,
     private val standards: StandardProgramRepository,
     private val trainings: TrainingProgramRepository,

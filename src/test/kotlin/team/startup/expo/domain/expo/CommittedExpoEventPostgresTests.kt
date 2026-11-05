@@ -19,9 +19,9 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.Primary
+import org.springframework.kafka.core.DefaultKafkaProducerFactory
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.core.ProducerFactory
-import org.springframework.kafka.mock.MockProducerFactory
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.transaction.support.TransactionTemplate
@@ -217,7 +217,10 @@ class CommittedExpoEventPostgresTests {
         @Suppress("UNCHECKED_CAST")
         fun producers(producer: MockProducer<String, String>): ProducerFactory<String, String> =
             (mock(ProducerFactory::class.java) as ProducerFactory<String, String>).also {
-                `when`(it.copyWithConfigurationOverride(anyMap())).thenReturn(MockProducerFactory { producer })
+                // outboxKafkaTemplate 빈이 복사본을 DefaultKafkaProducerFactory로 다루므로 같은 타입의 mock을 돌려준다.
+                val copy = mock(DefaultKafkaProducerFactory::class.java) as DefaultKafkaProducerFactory<String, String>
+                `when`(copy.createProducer()).thenReturn(producer)
+                `when`(it.copyWithConfigurationOverride(anyMap())).thenReturn(copy)
             }
     }
 

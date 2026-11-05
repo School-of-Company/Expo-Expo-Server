@@ -3,9 +3,9 @@ package team.startup.expo.domain.expo.service.impl
 import io.micrometer.core.instrument.MeterRegistry
 import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.kafka.core.KafkaTemplate
-import org.springframework.kafka.core.ProducerFactory
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.messaging.ExpoChangedEvent
 import team.startup.expo.domain.expo.repository.ExpoEventOutboxRepository
@@ -20,16 +20,21 @@ import java.util.concurrent.TimeUnit
 @ConditionalOnProperty(prefix = "expo.events", name = ["enabled"], havingValue = "true")
 class PublishCommittedExpoEventServiceImpl(
     private val outbox: ExpoEventOutboxRepository,
-    producers: ProducerFactory<String, String>,
+    @Qualifier("outboxKafkaTemplate") private val kafka: KafkaTemplate<String, String>,
     private val mapper: ObjectMapper,
     registry: MeterRegistry,
 ) : PublishCommittedExpoEventService {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val success = registry.counter("expo.events.immediate", "result", "success")
     private val failure = registry.counter("expo.events.immediate", "result", "failure")
-    private val kafka = KafkaTemplate(producers, mapOf("max.block.ms" to 5000)).apply { setProducerListener(null) }
     private val executor =
-        ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue(100)) { task ->
+        ThreadPoolExecutor(
+            IMMEDIATE_THREADS,
+            IMMEDIATE_THREADS,
+            0,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue(IMMEDIATE_QUEUE_CAPACITY),
+        ) { task ->
             Thread(task, "expo-event-immediate").apply { isDaemon = true }
         }
 
@@ -49,7 +54,7 @@ class PublishCommittedExpoEventServiceImpl(
             publication = claimed
             val message =
                 ExpoChangedEvent.message(mapper, claimed.eventId, claimed.sequence, claimed.createdAt, claimed.expoId, claimed.snapshot)
-            kafka.send(ExpoChangedEvent.TOPIC, claimed.expoId, message).get(10, TimeUnit.SECONDS)
+            kafka.send(ExpoChangedEvent.TOPIC, claimed.expoId, message).get(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             outbox.published(claimed)
             success.increment()
         } catch (exception: Exception) {
@@ -69,6 +74,11 @@ class PublishCommittedExpoEventServiceImpl(
     @PreDestroy
     fun shutdown() {
         executor.shutdownNow()
-        kafka.destroy()
+    }
+
+    private companion object {
+        const val PUBLISH_TIMEOUT_SECONDS = 10L
+        const val IMMEDIATE_THREADS = 1
+        const val IMMEDIATE_QUEUE_CAPACITY = 100
     }
 }
