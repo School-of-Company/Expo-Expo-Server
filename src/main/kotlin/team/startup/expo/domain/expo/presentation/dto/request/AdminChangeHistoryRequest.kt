@@ -6,6 +6,8 @@ import java.time.Instant
 
 enum class AdminChangeType { PROGRAM_CREATE, PROGRAM_UPDATE, PROGRAM_DELETE, SESSION_CREATE, SESSION_UPDATE, SESSION_DELETE }
 
+enum class AdminChangeTargetType { STANDARD, TRAINING, PREREGISTER_SESSION }
+
 data class AdminChangeHistoryRequest(
     @field:Min(0) val page: Int = 0,
     @field:Min(1) @field:Max(100) val size: Int = 20,

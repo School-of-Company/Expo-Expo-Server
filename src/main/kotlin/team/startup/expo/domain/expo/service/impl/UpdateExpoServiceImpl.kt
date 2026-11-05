@@ -1,12 +1,12 @@
 package team.startup.expo.domain.expo.service.impl
 
 import org.springframework.http.HttpStatus
-import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.expo.service.ApplyProgramChangeService
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.expo.service.UpdateExpoService
@@ -17,6 +17,7 @@ import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class UpdateExpoServiceImpl(
+    private val admins: AdminAccessSupport,
     private val standards: StandardProgramRepository,
     private val trainings: TrainingProgramRepository,
     private val policies: ProgramPolicySupport,
@@ -30,7 +31,7 @@ class UpdateExpoServiceImpl(
         request.validatePeriod()
         request.validatePreregisterCapacities()
         val uploadedBy =
-            SecurityContextHolder.getContext().authentication?.name
+            admins.currentName()
                 ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
         val pending =
             policies.stage(expoId, policies.command("UPDATE_EXPO", request, uploadedBy)) { expo ->

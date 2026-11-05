@@ -8,16 +8,17 @@ import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.core.ProducerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
-import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
+import team.startup.expo.domain.training.service.HoldReason
 import team.startup.expo.domain.training.service.PublishTrainingSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import tools.jackson.databind.ObjectMapper
 import java.util.concurrent.TimeUnit
 
 @Service
 @ConditionalOnProperty(prefix = "expo.training.sms", name = ["enabled"], havingValue = "true")
 class PublishTrainingSmsServiceImpl(
-    private val outbox: TrainingSmsOutboxRepository,
+    private val outbox: TrainingSmsOutboxSupport,
     producers: ProducerFactory<String, String>,
     private val dependencies: TrainingDependenciesClient,
     private val mapper: ObjectMapper,
@@ -55,7 +56,7 @@ class PublishTrainingSmsServiceImpl(
                 if (publication.firstPublishAttemptAt == null &&
                     dependencies.applicationVersion(publication.traineeId) != publication.receiptVersion
                 ) {
-                    outbox.holdPublication(publication, "STALE_RECEIPT")
+                    outbox.holdPublication(publication, HoldReason.STALE_RECEIPT)
                     return@repeat
                 }
                 val payload =

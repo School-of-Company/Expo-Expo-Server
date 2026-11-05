@@ -5,6 +5,8 @@ import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.training.entity.TrainingProgram
 
 interface TrainingProgramRepository : JpaRepository<TrainingProgram, Long> {
+    fun existsByIdInAndPolicyJsonIsNotNull(ids: List<Long>): Boolean
+
     fun deleteByExpo(expo: Expo)
 
     fun findByExpo(expo: Expo): List<TrainingProgram>

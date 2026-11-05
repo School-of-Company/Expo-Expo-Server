@@ -28,7 +28,6 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
-import team.startup.expo.domain.expo.repository.CommittedExpoEventRepository
 import team.startup.expo.domain.expo.repository.ExpoEventOutboxRepository
 import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.PublishCommittedExpoEventService
@@ -59,8 +58,6 @@ class CommittedExpoEventPostgresTests {
     @Autowired private lateinit var events: ExpoEventSupport
 
     @Autowired private lateinit var immediate: PublishCommittedExpoEventService
-
-    @Autowired private lateinit var committed: CommittedExpoEventRepository
 
     @Autowired private lateinit var outbox: ExpoEventOutboxRepository
 
@@ -144,18 +141,18 @@ class CommittedExpoEventPostgresTests {
                 ).setParameter("id", first)
                 .executeUpdate()
         }
-        committed.claim(later) shouldBe null
-        committed.claim(other)?.eventId shouldBe other
+        outbox.claim(later) shouldBe null
+        outbox.claim(other)?.eventId shouldBe other
         transactions.executeWithoutResult {
             entityManager
                 .createNativeQuery("UPDATE tb_expo_event_outbox SET next_attempt_at = CURRENT_TIMESTAMP WHERE event_id = :id")
                 .setParameter("id", first)
                 .executeUpdate()
         }
-        val claimedFirst = requireNotNull(committed.claim(first))
-        committed.claim(later) shouldBe null
+        val claimedFirst = requireNotNull(outbox.claim(first))
+        outbox.claim(later) shouldBe null
         outbox.published(claimedFirst)
-        committed.claim(later)?.eventId shouldBe later
+        outbox.claim(later)?.eventId shouldBe later
     }
 
     @Test
@@ -166,12 +163,12 @@ class CommittedExpoEventPostgresTests {
                 .createNativeQuery("SELECT sequence FROM tb_expo_event_outbox WHERE event_id = :id FOR UPDATE")
                 .setParameter("id", id)
                 .singleResult
-            CompletableFuture.supplyAsync { committed.claim(id) }.get(5, TimeUnit.SECONDS) shouldBe null
+            CompletableFuture.supplyAsync { outbox.claim(id) }.get(5, TimeUnit.SECONDS) shouldBe null
         }
         val publication = requireNotNull(outbox.claim())
-        committed.claim(id) shouldBe null
+        outbox.claim(id) shouldBe null
         outbox.published(publication)
-        committed.claim(id) shouldBe null
+        outbox.claim(id) shouldBe null
     }
 
     private fun insert(expoId: String): String {

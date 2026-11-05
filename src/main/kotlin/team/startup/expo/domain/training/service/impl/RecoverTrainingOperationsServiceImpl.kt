@@ -4,14 +4,15 @@ import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
-import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
+import team.startup.expo.domain.training.service.HoldReason
 import team.startup.expo.domain.training.service.RecoverTrainingOperationsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class RecoverTrainingOperationsServiceImpl(
-    private val outbox: TrainingSmsOutboxRepository,
+    private val outbox: TrainingSmsOutboxSupport,
     private val dependencies: TrainingDependenciesClient,
 ) : RecoverTrainingOperationsService {
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -45,7 +46,7 @@ class RecoverTrainingOperationsServiceImpl(
                         if (exception.status !in setOf(HttpStatus.BAD_REQUEST, HttpStatus.NOT_FOUND, HttpStatus.CONFLICT)) throw exception
                         receipt = dependencies.operationReceipt(operation)
                         if (receipt == null) {
-                            outbox.hold(operation, "RECOVERY_REJECTED")
+                            outbox.hold(operation, HoldReason.RECOVERY_REJECTED)
                             return@repeat
                         }
                     }

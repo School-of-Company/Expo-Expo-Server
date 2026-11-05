@@ -13,9 +13,9 @@ import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 import org.springframework.kafka.core.ProducerFactory
 import org.springframework.kafka.mock.MockProducerFactory
-import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
 import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository.Publication
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
+import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import team.startup.expo.domain.training.service.impl.PublishTrainingSmsServiceImpl
 import tools.jackson.databind.json.JsonMapper
 import java.time.Duration
@@ -24,7 +24,7 @@ import java.time.Instant
 class PublishTrainingSmsServiceImplTests {
     @Test
     fun `Kafka 발행 실패는 재시도로 미루고 남은 건은 다음 주기에 발행한다`() {
-        val outbox = mock(TrainingSmsOutboxRepository::class.java)
+        val outbox = mock(TrainingSmsOutboxSupport::class.java)
         val dependencies = mock(TrainingDependenciesClient::class.java)
         val first = publication("first")
         val second = publication("second")

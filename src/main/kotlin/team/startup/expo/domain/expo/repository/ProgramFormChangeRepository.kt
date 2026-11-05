@@ -1,155 +1,113 @@
 package team.startup.expo.domain.expo.repository
 
-import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.stereotype.Repository
+import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
+import org.springframework.data.jpa.repository.Query
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import team.startup.expo.domain.expo.entity.ProgramFormChange
+import team.startup.expo.domain.expo.entity.ProgramFormChangeId
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramFormUsageResponse
 import java.time.Instant
 import java.util.UUID
 
-@Repository
-class ProgramFormChangeRepository(
-    private val jdbc: JdbcTemplate,
-) {
+interface ProgramFormChangeRepository : JpaRepository<ProgramFormChange, ProgramFormChangeId> {
     @Transactional(propagation = Propagation.MANDATORY)
-    fun lock() {
-        // One DB row gives all batches the same lock order, including cross-Expo form sharing.
-        jdbc.queryForObject("SELECT id FROM tb_program_form_guard WHERE id=1 FOR UPDATE", Int::class.java)
+    @Query("SELECT id FROM tb_program_form_guard WHERE id=1 FOR UPDATE", nativeQuery = true)
+    fun lock(): Int
+
+    @Query(
+        POLICIES + """SELECT count(*) > 0 AS referenced,
+            min(LEAST((policy->>'applicationStartedAt')::timestamptz, (policy->>'onsiteStartedAt')::timestamptz)) AS started,
+            max(GREATEST((policy->>'applicationEndedAt')::timestamptz, (policy->>'onsiteEndedAt')::timestamptz)) AS ended
+            FROM policies WHERE policy->>'formId' = :formId""",
+        nativeQuery = true,
+    )
+    fun findUsage(formId: String): Usage
+
+    fun usage(formId: UUID): ProgramFormUsageResponse {
+        val row = findUsage(formId.toString())
+        return ProgramFormUsageResponse(formId, row.referenced, row.started, row.ended)
     }
 
-    fun usage(formId: UUID): ProgramFormUsageResponse =
-        jdbc.queryForObject(
-            """
-            WITH policies AS (
-                SELECT policy_json::jsonb AS policy FROM tb_standard_program WHERE policy_json IS NOT NULL
-                UNION ALL
-                SELECT policy_json::jsonb FROM tb_training_program WHERE policy_json IS NOT NULL
-                UNION ALL
-                SELECT mutation->'definition'->'policy'
-                FROM tb_program_change, jsonb_array_elements(payload_json::jsonb->'mutations') mutation
-            )
-            SELECT count(*) > 0 AS referenced,
-                   min(LEAST((policy->>'applicationStartedAt')::timestamptz,
-                             (policy->>'onsiteStartedAt')::timestamptz)) AS started,
-                   max(GREATEST((policy->>'applicationEndedAt')::timestamptz,
-                                (policy->>'onsiteEndedAt')::timestamptz)) AS ended
-            FROM policies WHERE policy->>'formId' = ?
-            """.trimIndent(),
-            { row, _ ->
-                ProgramFormUsageResponse(
-                    formId,
-                    row.getBoolean("referenced"),
-                    row.getTimestamp("started")?.toInstant(),
-                    row.getTimestamp("ended")?.toInstant(),
-                )
-            },
-            formId.toString(),
-        )
+    interface Usage {
+        val referenced: Boolean
+        val started: Instant?
+        val ended: Instant?
+    }
 
-    fun guardianReferenced(formId: UUID): Boolean =
-        jdbc.queryForObject(
-            """
-            WITH policies AS (
-                SELECT policy_json::jsonb AS policy FROM tb_standard_program WHERE policy_json IS NOT NULL
-                UNION ALL
-                SELECT policy_json::jsonb FROM tb_training_program WHERE policy_json IS NOT NULL
-                UNION ALL
-                SELECT mutation->'definition'->'policy'
-                FROM tb_program_change, jsonb_array_elements(payload_json::jsonb->'mutations') mutation
-            )
-            SELECT EXISTS(
-                SELECT 1 FROM policies
-                WHERE policy->>'formId' = ? AND policy->>'guardianPolicy' IS NOT NULL
-            )
-            """.trimIndent(),
-            Boolean::class.java,
-            formId.toString(),
-        )!!
+    @Query(
+        POLICIES + "SELECT EXISTS(SELECT 1 FROM policies WHERE policy->>'formId'=:formId AND policy->>'guardianPolicy' IS NOT NULL)",
+        nativeQuery = true,
+    )
+    fun guardianReferencedById(formId: String): Boolean
 
+    fun guardianReferenced(formId: UUID): Boolean = guardianReferencedById(formId.toString())
+
+    @Query("select change from ProgramFormChange change where change.formId=:formId and change.changeId=:changeId")
     fun find(
         formId: UUID,
         changeId: UUID,
-    ): Receipt? =
-        jdbc
-            .query(
-                "SELECT * FROM tb_program_form_change WHERE form_id=? AND change_id=?",
-                {
-                    row,
-                    _,
-                    ->
-                    Receipt(
-                        row.getString("request_json"),
-                        row.getString("response_json"),
-                        row.getTimestamp("expires_at")?.toInstant(),
-                        row.getBoolean("released"),
-                    )
-                },
-                formId,
-                changeId,
-            ).singleOrNull()
+    ): ProgramFormChange?
 
-    // 해제되지 않았고 만료 전인 예약만 폼을 막는다. 해제 요청이 유실돼 만료된 예약은 막지 않는다(#197).
-    fun blocked(formId: UUID): Boolean =
-        jdbc.queryForObject(
-            "SELECT EXISTS(SELECT 1 FROM tb_program_form_change WHERE form_id=? AND NOT released AND expires_at > clock_timestamp())",
-            Boolean::class.java,
-            formId,
-        )!!
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM tb_program_form_change WHERE form_id=:formId AND NOT released AND expires_at > clock_timestamp())",
+        nativeQuery = true,
+    )
+    fun blocked(formId: UUID): Boolean
 
-    // blocked와 같은 기준으로, 해제되지 않았고 만료 전인 변경이 있으면 null, 없으면 지금까지의 변경 행 수
-    fun version(formId: UUID): Long? =
-        jdbc.queryForObject(
-            "SELECT CASE WHEN bool_or(NOT released AND expires_at > clock_timestamp()) THEN NULL ELSE count(*) END FROM tb_program_form_change WHERE form_id=?",
-            Long::class.javaObjectType,
-            formId,
-        )
+    @Query(
+        """SELECT CASE WHEN bool_or(NOT released AND expires_at > clock_timestamp()) THEN NULL ELSE count(*) END
+            FROM tb_program_form_change WHERE form_id=:formId""",
+        nativeQuery = true,
+    )
+    fun version(formId: UUID): Long?
 
-    // 만료됐지만 해제되지 않은 예약을 해제 처리한다. 폼당 미해제 행은 하나만 허용(ux_program_form_active_change)하므로 새 예약 전에 호출한다.
     @Transactional(propagation = Propagation.MANDATORY)
-    fun releaseExpired(formId: UUID): Int =
-        jdbc.update(
-            "UPDATE tb_program_form_change SET released=TRUE WHERE form_id=? AND NOT released AND expires_at <= clock_timestamp()",
-            formId,
-        )
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+        "UPDATE tb_program_form_change SET released=TRUE WHERE form_id=:formId AND NOT released AND expires_at<=clock_timestamp()",
+        nativeQuery = true,
+    )
+    fun releaseExpired(formId: UUID): Int
 
-    fun now(): Instant = jdbc.queryForObject("SELECT clock_timestamp()", { row, _ -> row.getTimestamp(1).toInstant() })!!
+    @Query("SELECT clock_timestamp()", nativeQuery = true)
+    fun now(): Instant
 
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+        """INSERT INTO tb_program_form_change(form_id,change_id,request_json,response_json,expires_at)
+            VALUES (:formId,:changeId,:request,:response,:expiresAt)""",
+        nativeQuery = true,
+    )
     fun reserve(
         formId: UUID,
         changeId: UUID,
         request: String,
         response: String,
         expiresAt: Instant,
-    ) {
-        jdbc.update(
-            "INSERT INTO tb_program_form_change(form_id,change_id,request_json,response_json,expires_at) VALUES (?,?,?,?,?)",
-            formId,
-            changeId,
-            request,
-            response,
-            java.sql.Timestamp.from(expiresAt),
-        )
-    }
+    ): Int
 
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+        """INSERT INTO tb_program_form_change(form_id,change_id,released) VALUES (:formId,:changeId,TRUE)
+            ON CONFLICT (form_id,change_id) DO UPDATE SET released=TRUE""",
+        nativeQuery = true,
+    )
     fun release(
         formId: UUID,
         changeId: UUID,
-    ) {
-        jdbc.update(
-            """
-            INSERT INTO tb_program_form_change(form_id,change_id,released) VALUES (?,?,TRUE)
-            ON CONFLICT (form_id,change_id) DO UPDATE SET released=TRUE
-            """.trimIndent(),
-            formId,
-            changeId,
-        )
-    }
+    ): Int
 
-    data class Receipt(
-        val request: String?,
-        val response: String?,
-        val expiresAt: Instant?,
-        val released: Boolean,
-    )
+    companion object {
+        private const val POLICIES =
+            """WITH policies AS (
+                SELECT policy_json::jsonb AS policy FROM tb_standard_program WHERE policy_json IS NOT NULL
+                UNION ALL
+                SELECT policy_json::jsonb FROM tb_training_program WHERE policy_json IS NOT NULL
+                UNION ALL
+                SELECT mutation->'definition'->'policy'
+                FROM tb_program_change, jsonb_array_elements(payload_json::jsonb->'mutations') mutation
+            ) """
+    }
 }

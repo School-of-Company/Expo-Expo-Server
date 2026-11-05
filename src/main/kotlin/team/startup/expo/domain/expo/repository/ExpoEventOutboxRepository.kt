@@ -1,103 +1,137 @@
 package team.startup.expo.domain.expo.repository
 
-import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.stereotype.Repository
-import org.springframework.transaction.support.TransactionTemplate
+import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
+import org.springframework.data.jpa.repository.Query
+import org.springframework.transaction.annotation.Propagation
+import org.springframework.transaction.annotation.Transactional
+import team.startup.expo.domain.expo.entity.ExpoEventOutbox
 import java.time.Instant
 import java.util.UUID
 
-@Repository
-class ExpoEventOutboxRepository(
-    private val jdbc: JdbcTemplate,
-    private val transactions: TransactionTemplate,
-) {
-    // 호출한 쪽의 트랜잭션에서 쓴다. snapshot이 null이면 삭제(tombstone)다.
+interface ExpoEventOutboxRepository : JpaRepository<ExpoEventOutbox, Long> {
+    @Modifying(flushAutomatically = true)
+    @Query(
+        "INSERT INTO tb_expo_event_outbox(event_id,expo_id,deleted,snapshot) VALUES (:eventId,:expoId,:deleted,:snapshot)",
+        nativeQuery = true,
+    )
+    fun insertRow(
+        eventId: String,
+        expoId: String,
+        deleted: Boolean,
+        snapshot: String?,
+    ): Int
+
     fun insert(
         expoId: String,
         snapshot: String?,
     ): String {
         val eventId = UUID.randomUUID().toString()
-        jdbc.update(
-            "INSERT INTO tb_expo_event_outbox (event_id, expo_id, deleted, snapshot) VALUES (?, ?, ?, ?)",
-            eventId,
-            expoId,
-            snapshot == null,
-            snapshot,
-        )
+        insertRow(eventId, expoId, snapshot == null, snapshot)
         return eventId
     }
 
-    // 박람회마다 가장 앞선 대기 행만 선점해 한 박람회의 이벤트가 sequence 순서대로 나가게 한다.
-    fun claim(): Publication? =
-        transactions.execute {
-            val token = UUID.randomUUID().toString()
-            jdbc
-                .query(
-                    """WITH candidate AS (
-                    SELECT event.sequence FROM tb_expo_event_outbox AS event
-                    WHERE event.state = 'PENDING' AND event.next_attempt_at <= CURRENT_TIMESTAMP
-                    AND (event.publish_until IS NULL OR event.publish_until <= CURRENT_TIMESTAMP)
-                    AND NOT EXISTS (SELECT 1 FROM tb_expo_event_outbox AS earlier
-                        WHERE earlier.expo_id = event.expo_id AND earlier.state = 'PENDING' AND earlier.sequence < event.sequence)
-                    ORDER BY event.sequence LIMIT 1 FOR UPDATE SKIP LOCKED)
-                    UPDATE tb_expo_event_outbox AS event SET publish_token = ?, publish_until = CURRENT_TIMESTAMP + INTERVAL '30 seconds'
-                    FROM candidate WHERE event.sequence = candidate.sequence
-                    RETURNING event.sequence, event.event_id, event.expo_id, event.snapshot, event.created_at""",
-                    { row, _ ->
-                        Publication(
-                            row.getLong("sequence"),
-                            row.getString("event_id"),
-                            token,
-                            row.getString("expo_id"),
-                            row.getString("snapshot"),
-                            row.getTimestamp("created_at").toInstant(),
-                        )
-                    },
-                    token,
-                ).firstOrNull()
-        }
+    @Query(
+        "WITH candidate AS (SELECT event.sequence FROM tb_expo_event_outbox event WHERE " + CLAIMABLE +
+            " ORDER BY event.sequence LIMIT 1 FOR UPDATE SKIP LOCKED) " +
+            "UPDATE tb_expo_event_outbox event SET publish_token=:token, publish_until=CURRENT_TIMESTAMP + INTERVAL " + LEASE +
+            " FROM candidate WHERE event.sequence=candidate.sequence RETURNING event.*",
+        nativeQuery = true,
+    )
+    fun claimNext(token: String): List<ExpoEventOutbox>
 
+    @Query(
+        "WITH candidate AS (SELECT event.sequence FROM tb_expo_event_outbox event WHERE event.event_id=:eventId AND " + CLAIMABLE +
+            " FOR UPDATE SKIP LOCKED) UPDATE tb_expo_event_outbox event SET publish_token=:token, " +
+            "publish_until=CURRENT_TIMESTAMP + INTERVAL " + LEASE +
+            " FROM candidate WHERE event.sequence=candidate.sequence RETURNING event.*",
+        nativeQuery = true,
+    )
+    fun claimCommitted(
+        eventId: String,
+        token: String,
+    ): List<ExpoEventOutbox>
+
+    @Transactional
+    fun claim(): Publication? {
+        val token = UUID.randomUUID().toString()
+        return claimNext(token).firstOrNull()?.let { Publication(it.sequence, it.eventId, token, it.expoId, it.snapshot, it.createdAt) }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun claim(eventId: String): Publication? {
+        val token = UUID.randomUUID().toString()
+        return claimCommitted(eventId, token).firstOrNull()?.let {
+            Publication(it.sequence, it.eventId, token, it.expoId, it.snapshot, it.createdAt)
+        }
+    }
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+        """UPDATE tb_expo_event_outbox SET state='PUBLISHED', published_at=CURRENT_TIMESTAMP,
+            publish_token=NULL, publish_until=NULL WHERE sequence=:sequence AND publish_token=:token AND state='PENDING'""",
+        nativeQuery = true,
+    )
+    fun markPublished(
+        sequence: Long,
+        token: String,
+    ): Int
+
+    @Transactional
     fun published(publication: Publication) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_expo_event_outbox SET state = 'PUBLISHED', published_at = CURRENT_TIMESTAMP,
-                   publish_token = NULL, publish_until = NULL WHERE sequence = ? AND publish_token = ? AND state = 'PENDING'""",
-                publication.sequence,
-                publication.token,
-            )
-        }
+        markPublished(publication.sequence, publication.token)
     }
 
-    // 1초부터 두 배씩 늘려 최대 5분 뒤에 다시 시도한다.
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+        """UPDATE tb_expo_event_outbox SET attempts=attempts+1,
+            next_attempt_at=CURRENT_TIMESTAMP + make_interval(secs => LEAST(POWER(2, LEAST(attempts, 9)), 300)),
+            publish_token=NULL, publish_until=NULL WHERE sequence=:sequence AND publish_token=:token AND state='PENDING'""",
+        nativeQuery = true,
+    )
+    fun scheduleRetry(
+        sequence: Long,
+        token: String,
+    ): Int
+
+    @Transactional
     fun retry(publication: Publication) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_expo_event_outbox SET attempts = attempts + 1,
-                   next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(POWER(2, LEAST(attempts, 9)), 300)),
-                   publish_token = NULL, publish_until = NULL WHERE sequence = ? AND publish_token = ? AND state = 'PENDING'""",
-                publication.sequence,
-                publication.token,
-            )
-        }
+        scheduleRetry(publication.sequence, publication.token)
     }
 
-    // 선점한 채 멈춘 행의 lease를 풀고, 발행한 지 7일 지난 행을 지운 뒤 10분 넘게 남은 대기 행 수를 돌려준다.
-    fun maintain(): Stuck =
-        requireNotNull(
-            transactions.execute {
-                jdbc.update(
-                    """UPDATE tb_expo_event_outbox SET publish_token = NULL, publish_until = NULL
-                       WHERE state = 'PENDING' AND publish_until <= CURRENT_TIMESTAMP""",
-                )
-                jdbc.update(
-                    "DELETE FROM tb_expo_event_outbox WHERE state = 'PUBLISHED' AND published_at <= CURRENT_TIMESTAMP - INTERVAL '7 days'",
-                )
-                jdbc.queryForObject(
-                    """SELECT count(*), min(sequence) FROM tb_expo_event_outbox
-                       WHERE state = 'PENDING' AND created_at <= CURRENT_TIMESTAMP - INTERVAL '10 minutes'""",
-                ) { row, _ -> Stuck(row.getLong(1), row.getObject(2) as Long?) }
-            },
-        )
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+        "UPDATE tb_expo_event_outbox SET publish_token=NULL,publish_until=NULL WHERE state='PENDING' AND publish_until<=CURRENT_TIMESTAMP",
+        nativeQuery = true,
+    )
+    fun releaseLeases(): Int
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+        "DELETE FROM tb_expo_event_outbox WHERE state='PUBLISHED' AND published_at<=CURRENT_TIMESTAMP - INTERVAL '7 days'",
+        nativeQuery = true,
+    )
+    fun deletePublished(): Int
+
+    @Query(
+        """SELECT count(*) AS count, min(sequence) AS oldestSequence FROM tb_expo_event_outbox
+            WHERE state='PENDING' AND created_at<=CURRENT_TIMESTAMP - INTERVAL '10 minutes'""",
+        nativeQuery = true,
+    )
+    fun findStuck(): StuckRow
+
+    @Transactional
+    fun maintain(): Stuck {
+        releaseLeases()
+        deletePublished()
+        val row = findStuck()
+        return Stuck(row.count, row.oldestSequence)
+    }
+
+    interface StuckRow {
+        val count: Long
+        val oldestSequence: Long?
+    }
 
     data class Publication(
         val sequence: Long,
@@ -112,4 +146,13 @@ class ExpoEventOutboxRepository(
         val count: Long,
         val oldestSequence: Long?,
     )
+
+    companion object {
+        private const val LEASE = "'30 seconds'"
+        private const val CLAIMABLE =
+            "event.state='PENDING' AND event.next_attempt_at<=CURRENT_TIMESTAMP " +
+                "AND (event.publish_until IS NULL OR event.publish_until<=CURRENT_TIMESTAMP) " +
+                "AND NOT EXISTS (SELECT 1 FROM tb_expo_event_outbox earlier WHERE earlier.expo_id=event.expo_id " +
+                "AND earlier.state='PENDING' AND earlier.sequence<event.sequence)"
+    }
 }

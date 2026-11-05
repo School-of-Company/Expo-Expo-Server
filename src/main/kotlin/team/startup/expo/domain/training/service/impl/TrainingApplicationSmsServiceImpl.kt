@@ -6,12 +6,12 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.training.entity.TrainingProgram
-import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
 import team.startup.expo.domain.training.service.TrainingApplicationCommand
 import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
 import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.domain.training.service.TrainingProgramReference
+import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import team.startup.expo.domain.training.service.TrainingTraineeReference
 import team.startup.expo.global.exception.ExpectedException
 import java.util.UUID
@@ -19,7 +19,7 @@ import java.util.UUID
 @Service
 class TrainingApplicationSmsServiceImpl(
     @Value("\${expo.training.sms.enabled:false}") private val enabled: Boolean,
-    private val outbox: TrainingSmsOutboxRepository,
+    private val outbox: TrainingSmsOutboxSupport,
     private val dependencies: TrainingDependenciesClient,
 ) : TrainingApplicationSmsService {
     private val logger = LoggerFactory.getLogger(javaClass)

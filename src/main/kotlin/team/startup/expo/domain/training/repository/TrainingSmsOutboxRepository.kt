@@ -1,336 +1,231 @@
 package team.startup.expo.domain.training.repository
 
-import org.springframework.http.HttpStatus
-import org.springframework.jdbc.core.JdbcTemplate
-import org.springframework.stereotype.Repository
-import org.springframework.transaction.support.TransactionTemplate
+import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
+import org.springframework.data.jpa.repository.Query
+import team.startup.expo.domain.training.entity.TrainingSmsOutbox
 import team.startup.expo.domain.training.service.TrainingApplicationCommand
 import team.startup.expo.domain.training.service.TrainingOperation
-import team.startup.expo.domain.training.service.TrainingOperationReceipt
-import team.startup.expo.domain.training.service.TrainingOperationType
-import team.startup.expo.global.exception.ExpectedException
-import tools.jackson.databind.ObjectMapper
-import java.sql.ResultSet
 import java.time.Instant
-import java.util.UUID
 
-@Repository
-class TrainingSmsOutboxRepository(
-    private val jdbc: JdbcTemplate,
-    private val transactions: TransactionTemplate,
-    private val mapper: ObjectMapper,
-) {
-    fun prepare(
-        command: TrainingApplicationCommand,
-        type: TrainingOperationType,
-        text: String?,
-    ): TrainingOperation =
-        requireNotNull(
-            transactions.execute {
-                val deleting =
-                    jdbc
-                        .query(
-                            "SELECT deleting_at IS NOT NULL FROM tb_expo WHERE id = ? FOR UPDATE",
-                            { row, _ -> row.getBoolean(1) },
-                            command.trainee.expoId,
-                        ).firstOrNull() ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
-                if (deleting) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
-                if (type == TrainingOperationType.REPLACE &&
-                    jdbc.queryForObject(
-                        "SELECT EXISTS (SELECT 1 FROM tb_training_program WHERE expo_id=? AND policy_json IS NOT NULL)",
-                        Boolean::class.java,
-                        command.trainee.expoId,
-                    ) == true
-                ) {
-                    throw ExpectedException(HttpStatus.CONFLICT, "정책이 설정된 프로그램은 기존 일괄 교체 신청을 사용할 수 없습니다.")
-                }
-                if (jdbc.queryForObject(
-                        "SELECT EXISTS (SELECT 1 FROM tb_program_change WHERE expo_id=?)",
-                        Boolean::class.java,
-                        command.trainee.expoId,
-                    ) == true ||
-                    (
-                        command.programs.isNotEmpty() &&
-                            jdbc.queryForObject(
-                                "SELECT EXISTS (SELECT 1 FROM tb_training_program WHERE id IN (" +
-                                    command.programs.joinToString(",") { "?" } + ") AND policy_json IS NOT NULL)",
-                                Boolean::class.java,
-                                *command.programs.map { it.id }.toTypedArray(),
-                            ) == true
-                    )
-                ) {
-                    throw ExpectedException(HttpStatus.CONFLICT, "정책이 설정됐거나 변경 중인 프로그램에는 기존 신청을 사용할 수 없습니다.")
-                }
-                val eventId = command.operationId.toString()
-                val token = UUID.randomUUID().toString()
-                val method = if (type == TrainingOperationType.ADD) "POST" else "PUT"
-                val path =
-                    "/internal/training-program-applications" +
-                        if (type == TrainingOperationType.REPLACE) "/trainee/${command.trainee.id}" else ""
-                val body = mapper.writeValueAsString(command)
-                jdbc.queryForObject(
-                    """INSERT INTO tb_training_sms_outbox
+interface TrainingSmsOutboxRepository : JpaRepository<TrainingSmsOutbox, Long> {
+    @Query(
+        """INSERT INTO tb_training_sms_outbox
                     (event_id,expo_id,trainee_id,fingerprint,state,notification_text,lease_token,lease_until,
                      application_state,command_schema_version,operation_type,request_method,request_path,command_json,expected_version,sms_requested,recover_after)
-                    VALUES (?,?,?,?,'PREPARED',?,?,CURRENT_TIMESTAMP + INTERVAL '30 seconds',
-                            'PENDING',1,?,?,?,?,?,?,CURRENT_TIMESTAMP + INTERVAL '30 seconds') RETURNING *""",
-                    { row, _ -> operation(row) },
-                    eventId,
-                    command.trainee.expoId,
-                    command.trainee.id,
-                    type.name,
-                    text,
-                    token,
-                    type.name,
-                    method,
-                    path,
-                    body,
-                    command.expectedVersion,
-                    text != null,
-                )
-            },
-        )
+                    VALUES (:#{#command.operationId.toString()},:#{#command.trainee.expoId},:#{#command.trainee.id},:type,'$PREPARED',:text,:token,CURRENT_TIMESTAMP + INTERVAL '$LEASE',
+                            '$PENDING',1,:type,:method,:path,:body,:#{#command.expectedVersion},:smsRequested,CURRENT_TIMESTAMP + INTERVAL '$LEASE') RETURNING *""",
+        nativeQuery = true,
+    )
+    fun prepare(
+        command: TrainingApplicationCommand,
+        type: String,
+        text: String?,
+        token: String,
+        method: String,
+        path: String,
+        body: String,
+        smsRequested: Boolean,
+    ): List<OperationRow>
 
-    fun hasUnresolvedApplications(expoId: String): Boolean =
-        jdbc.queryForObject(
-            """SELECT EXISTS (SELECT 1 FROM tb_training_sms_outbox WHERE expo_id = ?
-                AND (application_state IN ('PENDING', 'HELD') OR hold_reason = 'LEGACY_UNCERTAIN'))""",
-            Boolean::class.java,
-            expoId,
-        ) == true
+    @Query(
+        """SELECT EXISTS (SELECT 1 FROM tb_training_sms_outbox WHERE expo_id = :expoId
+                AND (application_state IN ('$PENDING', '$HELD') OR hold_reason = 'LEGACY_UNCERTAIN'))""",
+        nativeQuery = true,
+    )
+    fun hasUnresolvedApplications(expoId: String): Boolean
 
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET application_state = '$SUCCEEDED', receipt_json = :receipt, receipt_version = :version,
+                   state = CASE WHEN sms_requested AND :notify THEN '$READY' ELSE '$SUPPRESSED' END,
+                   notification_text = CASE WHEN sms_requested AND :notify THEN notification_text ELSE NULL END,
+                   terminal_at = CASE WHEN sms_requested AND :notify THEN NULL ELSE CURRENT_TIMESTAMP END,
+                   lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE event_id = :#{#operation.eventId} AND lease_token = :#{#operation.token} AND application_state = '$PENDING'""",
+        nativeQuery = true,
+    )
     fun confirmed(
         operation: TrainingOperation,
-        receipt: TrainingOperationReceipt,
-    ) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET application_state = 'SUCCEEDED', receipt_json = ?, receipt_version = ?,
-                   state = CASE WHEN sms_requested AND ? THEN 'READY' ELSE 'SUPPRESSED' END,
-                   notification_text = CASE WHEN sms_requested AND ? THEN notification_text ELSE NULL END,
-                   terminal_at = CASE WHEN sms_requested AND ? THEN NULL ELSE CURRENT_TIMESTAMP END,
-                   lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
-                   WHERE event_id = ? AND lease_token = ? AND application_state = 'PENDING'""",
-                mapper.writeValueAsString(receipt),
-                receipt.version,
-                receipt.changed && receipt.programIds.isNotEmpty(),
-                receipt.changed && receipt.programIds.isNotEmpty(),
-                receipt.changed && receipt.programIds.isNotEmpty(),
-                operation.eventId,
-                operation.token,
-            )
-        }
-    }
+        receipt: String,
+        version: Long,
+        notify: Boolean,
+    ): Int
 
-    fun responseReceived(operation: TrainingOperation) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                "UPDATE tb_training_sms_outbox SET response_received = TRUE WHERE event_id = ? AND lease_token = ? AND application_state = 'PENDING'",
-                operation.eventId,
-                operation.token,
-            )
-        }
-    }
-
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET state = :state, application_state = :applicationState,
+                   hold_reason = :reason, terminal_at = CASE WHEN :rejected THEN CURRENT_TIMESTAMP ELSE NULL END,
+                   notification_text = CASE WHEN :rejected THEN NULL ELSE notification_text END,
+                   payload = CASE WHEN :rejected THEN NULL ELSE payload END,
+                   lease_token = NULL, lease_until = NULL, recover_after = CURRENT_TIMESTAMP + INTERVAL '$LEASE', updated_at = CURRENT_TIMESTAMP
+                   WHERE event_id = :#{#operation.eventId} AND lease_token = :#{#operation.token} AND application_state = '$PENDING'""",
+        nativeQuery = true,
+    )
     fun pending(
         operation: TrainingOperation,
-        rejected: Boolean = false,
-    ) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET state = ?, application_state = ?,
-                   hold_reason = ?, terminal_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
-                   notification_text = CASE WHEN ? THEN NULL ELSE notification_text END,
-                   payload = CASE WHEN ? THEN NULL ELSE payload END,
-                   lease_token = NULL, lease_until = NULL, recover_after = CURRENT_TIMESTAMP + INTERVAL '30 seconds', updated_at = CURRENT_TIMESTAMP
-                   WHERE event_id = ? AND lease_token = ? AND application_state = 'PENDING'""",
-                if (rejected) "REJECTED" else "UNKNOWN",
-                if (rejected) "REJECTED" else "PENDING",
-                if (rejected) "APPLICATION_REJECTED" else null,
-                rejected,
-                rejected,
-                rejected,
-                operation.eventId,
-                operation.token,
-            )
-        }
-    }
+        state: String,
+        applicationState: String,
+        reason: String?,
+        rejected: Boolean,
+    ): Int
 
-    fun claimRecovery(): TrainingOperation? =
-        transactions.execute {
-            val token = UUID.randomUUID().toString()
-            jdbc
-                .query(
-                    """WITH candidate AS (
-                    SELECT sequence FROM tb_training_sms_outbox WHERE application_state = 'PENDING'
+    @Query(
+        """WITH candidate AS (
+                    SELECT sequence FROM tb_training_sms_outbox WHERE application_state = '$PENDING'
                     AND recover_after <= CURRENT_TIMESTAMP AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)
                     ORDER BY recover_after, sequence LIMIT 1 FOR UPDATE SKIP LOCKED)
-                    UPDATE tb_training_sms_outbox AS sms SET lease_token = ?, lease_until = CURRENT_TIMESTAMP + INTERVAL '30 seconds',
-                    recovery_attempts = recovery_attempts + 1, recover_after = CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+                    UPDATE tb_training_sms_outbox AS sms SET lease_token = :token, lease_until = CURRENT_TIMESTAMP + INTERVAL '$LEASE',
+                    recovery_attempts = recovery_attempts + 1, recover_after = CURRENT_TIMESTAMP + INTERVAL '$LEASE'
                     FROM candidate WHERE sms.sequence = candidate.sequence RETURNING sms.*""",
-                    { row, _ -> operation(row) },
-                    token,
-                ).firstOrNull()
-        }
+        nativeQuery = true,
+    )
+    fun claimRecovery(token: String): List<OperationRow>
 
-    fun canReplay(operation: TrainingOperation): Boolean =
-        jdbc.queryForObject(
-            """SELECT application_state = 'PENDING' AND lease_token = ? AND lease_until > CURRENT_TIMESTAMP
-                AND created_at > CURRENT_TIMESTAMP - INTERVAL '15 minutes' AND recovery_attempts <= 30 AND NOT response_received
-                FROM tb_training_sms_outbox WHERE event_id = ?""",
-            Boolean::class.java,
-            operation.token,
-            operation.eventId,
-        ) == true
+    @Query(
+        """SELECT application_state = '$PENDING' AND lease_token = :#{#operation.token} AND lease_until > CURRENT_TIMESTAMP
+                AND created_at > CURRENT_TIMESTAMP - INTERVAL '${REPLAY_WINDOW}' AND recovery_attempts <= ${RECOVERY_LIMIT} AND NOT response_received
+                FROM tb_training_sms_outbox WHERE event_id = :#{#operation.eventId}""",
+        nativeQuery = true,
+    )
+    fun canReplay(operation: TrainingOperation): Boolean?
 
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET application_state = '$HELD', state = '$HELD', hold_reason = :reason,
+                    payload = NULL, notification_text = NULL, lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
+                    WHERE event_id = :#{#operation.eventId} AND lease_token = :#{#operation.token} AND application_state = '$PENDING'""",
+        nativeQuery = true,
+    )
     fun hold(
         operation: TrainingOperation,
         reason: String,
-    ) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET application_state = 'HELD', state = 'HELD', hold_reason = ?,
-                    payload = NULL, notification_text = NULL, lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
-                    WHERE event_id = ? AND lease_token = ? AND application_state = 'PENDING'""",
-                reason,
-                operation.eventId,
-                operation.token,
-            )
-        }
-    }
+    ): Int
 
-    private fun operation(row: ResultSet) =
-        TrainingOperation(
-            row.getString("event_id"),
-            row.getString("lease_token"),
-            TrainingOperationType.valueOf(row.getString("operation_type")),
-            row.getString("expo_id"),
-            row.getLong("trainee_id"),
-            row.getString("request_method"),
-            row.getString("request_path"),
-            row.getString("command_json"),
-            row.getLong("expected_version"),
-            row.getTimestamp("created_at").toInstant(),
-            row.getBoolean("response_received"),
-        )
-
-    fun claim(): Publication? =
-        transactions.execute {
-            val token = UUID.randomUUID().toString()
-            jdbc
-                .query(
-                    """WITH candidate AS (
-               SELECT sequence FROM tb_training_sms_outbox WHERE state = 'READY' AND application_state = 'SUCCEEDED'
-               AND created_at > CURRENT_TIMESTAMP - INTERVAL '23 hours' AND next_attempt_at <= CURRENT_TIMESTAMP
-               AND (first_publish_attempt_at IS NULL OR first_publish_attempt_at > CURRENT_TIMESTAMP - INTERVAL '23 hours')
+    @Query(
+        """WITH candidate AS (
+               SELECT sequence FROM tb_training_sms_outbox WHERE state = '$READY' AND application_state = '$SUCCEEDED'
+               AND created_at > CURRENT_TIMESTAMP - INTERVAL '${SMS_WINDOW}' AND next_attempt_at <= CURRENT_TIMESTAMP
+               AND (first_publish_attempt_at IS NULL OR first_publish_attempt_at > CURRENT_TIMESTAMP - INTERVAL '${SMS_WINDOW}')
                AND (publish_until IS NULL OR publish_until <= CURRENT_TIMESTAMP) ORDER BY sequence LIMIT 1 FOR UPDATE SKIP LOCKED)
-               UPDATE tb_training_sms_outbox AS sms SET publish_token = ?, publish_until = CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+               UPDATE tb_training_sms_outbox AS sms SET publish_token = :token, publish_until = CURRENT_TIMESTAMP + INTERVAL '$LEASE'
                FROM candidate WHERE sms.sequence = candidate.sequence
-               RETURNING sms.event_id, sms.expo_id, sms.trainee_id, sms.notification_text, sms.payload, sms.receipt_version, sms.first_publish_attempt_at""",
-                    {
-                        row,
-                        _,
-                        ->
-                        Publication(
-                            row.getString("event_id"),
-                            token,
-                            row.getString("expo_id"),
-                            row.getLong("trainee_id"),
-                            row.getString("notification_text"),
-                            row.getString("payload"),
-                            row.getLong("receipt_version"),
-                            row.getTimestamp("first_publish_attempt_at")?.toInstant(),
-                        )
-                    },
-                    token,
-                ).firstOrNull()
-        }
+               RETURNING sms.*""",
+        nativeQuery = true,
+    )
+    fun claim(token: String): List<PublicationRow>
 
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET payload = :payload WHERE event_id = :#{#publication.eventId} AND publish_token = :#{#publication.token} AND state = '$READY'
+                    AND first_publish_attempt_at IS NULL AND created_at > CURRENT_TIMESTAMP - INTERVAL '${SMS_WINDOW}'""",
+        nativeQuery = true,
+    )
     fun savePayload(
         publication: Publication,
         payload: String,
-    ): Boolean =
-        transactions.execute {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET payload = ? WHERE event_id = ? AND publish_token = ? AND state = 'READY'
-                    AND first_publish_attempt_at IS NULL AND created_at > CURRENT_TIMESTAMP - INTERVAL '23 hours'""",
-                payload,
-                publication.eventId,
-                publication.token,
-            ) == 1
-        } == true
+    ): Int
 
-    fun beginPublication(publication: Publication): Boolean =
-        transactions.execute {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET first_publish_attempt_at = COALESCE(first_publish_attempt_at, CURRENT_TIMESTAMP)
-                    WHERE event_id = ? AND publish_token = ? AND publish_until > CURRENT_TIMESTAMP AND state = 'READY'
-                    AND payload IS NOT NULL AND created_at > CURRENT_TIMESTAMP - INTERVAL '23 hours'
-                    AND (first_publish_attempt_at IS NULL OR first_publish_attempt_at > CURRENT_TIMESTAMP - INTERVAL '23 hours')""",
-                publication.eventId,
-                publication.token,
-            ) == 1
-        } == true
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET first_publish_attempt_at = COALESCE(first_publish_attempt_at, CURRENT_TIMESTAMP)
+                    WHERE event_id = :#{#publication.eventId} AND publish_token = :#{#publication.token} AND publish_until > CURRENT_TIMESTAMP AND state = '$READY'
+                    AND payload IS NOT NULL AND created_at > CURRENT_TIMESTAMP - INTERVAL '${SMS_WINDOW}'
+                    AND (first_publish_attempt_at IS NULL OR first_publish_attempt_at > CURRENT_TIMESTAMP - INTERVAL '${SMS_WINDOW}')""",
+        nativeQuery = true,
+    )
+    fun beginPublication(publication: Publication): Int
 
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET state = '$HELD', hold_reason = :reason, payload = NULL, notification_text = NULL,
+                    terminal_at = CURRENT_TIMESTAMP, publish_token = NULL, publish_until = NULL, updated_at = CURRENT_TIMESTAMP
+                    WHERE event_id = :#{#publication.eventId} AND publish_token = :#{#publication.token} AND state = '$READY' AND first_publish_attempt_at IS NULL""",
+        nativeQuery = true,
+    )
     fun holdPublication(
         publication: Publication,
         reason: String,
-    ) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET state = 'HELD', hold_reason = ?, payload = NULL, notification_text = NULL,
-                    terminal_at = CURRENT_TIMESTAMP, publish_token = NULL, publish_until = NULL, updated_at = CURRENT_TIMESTAMP
-                    WHERE event_id = ? AND publish_token = ? AND state = 'READY' AND first_publish_attempt_at IS NULL""",
-                reason,
-                publication.eventId,
-                publication.token,
-            )
-        }
-    }
+    ): Int
 
-    fun maintain() {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET application_state = 'HELD', state = 'HELD', hold_reason = 'RECOVERY_LIMIT',
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET application_state = '$HELD', state = '$HELD', hold_reason = :reason,
                     notification_text = NULL, payload = NULL, lease_token = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
-                    WHERE application_state = 'PENDING' AND (created_at <= CURRENT_TIMESTAMP - INTERVAL '15 minutes' OR recovery_attempts >= 30)
+                    WHERE application_state = '$PENDING' AND (created_at <= CURRENT_TIMESTAMP - INTERVAL '${REPLAY_WINDOW}' OR recovery_attempts >= ${RECOVERY_LIMIT})
                     AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP)""",
-            )
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET state = 'HELD', hold_reason = 'SMS_EXPIRED',
-                    terminal_at = CASE WHEN application_state = 'SUCCEEDED' THEN CURRENT_TIMESTAMP ELSE terminal_at END,
+        nativeQuery = true,
+    )
+    fun holdRecoveryLimit(reason: String): Int
+
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET state = '$HELD', hold_reason = :reason,
+                    terminal_at = CASE WHEN application_state = '$SUCCEEDED' THEN CURRENT_TIMESTAMP ELSE terminal_at END,
                     notification_text = NULL, payload = NULL, publish_token = NULL, publish_until = NULL, updated_at = CURRENT_TIMESTAMP
-                    WHERE created_at <= CURRENT_TIMESTAMP - INTERVAL '23 hours' AND (notification_text IS NOT NULL OR payload IS NOT NULL)
+                    WHERE created_at <= CURRENT_TIMESTAMP - INTERVAL '${SMS_WINDOW}' AND (notification_text IS NOT NULL OR payload IS NOT NULL)
                     AND (publish_until IS NULL OR publish_until <= CURRENT_TIMESTAMP)""",
-            )
-            jdbc.update(
-                "DELETE FROM tb_training_sms_outbox WHERE terminal_at <= CURRENT_TIMESTAMP - INTERVAL '30 days' AND application_state IN ('SUCCEEDED', 'REJECTED', 'LEGACY')",
-            )
-        }
-    }
+        nativeQuery = true,
+    )
+    fun expireSms(reason: String): Int
 
-    fun sent(publication: Publication) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET state = 'SENT', payload = NULL, notification_text = NULL,
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET state = '$SENT', payload = NULL, notification_text = NULL,
                    terminal_at = CURRENT_TIMESTAMP, publish_token = NULL, publish_until = NULL, updated_at = CURRENT_TIMESTAMP
-                   WHERE event_id = ? AND publish_token = ? AND state = 'READY'""",
-                publication.eventId,
-                publication.token,
-            )
-        }
+                   WHERE event_id = :#{#publication.eventId} AND publish_token = :#{#publication.token} AND state = '$READY'""",
+        nativeQuery = true,
+    )
+    fun sent(publication: Publication): Int
+
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP,
+                   publish_token = NULL, publish_until = NULL, next_attempt_at = CURRENT_TIMESTAMP + INTERVAL '$LEASE'
+                   WHERE event_id = :#{#publication.eventId} AND publish_token = :#{#publication.token} AND state = '$READY'""",
+        nativeQuery = true,
+    )
+    fun retry(publication: Publication): Int
+
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """UPDATE tb_training_sms_outbox SET response_received=TRUE
+            WHERE event_id=:#{#operation.eventId} AND lease_token=:#{#operation.token} AND application_state='$PENDING'""",
+        nativeQuery = true,
+    )
+    fun responseReceived(operation: TrainingOperation): Int
+
+    @Modifying(flushAutomatically = true)
+    @Query(
+        """DELETE FROM tb_training_sms_outbox WHERE terminal_at<=CURRENT_TIMESTAMP - INTERVAL '30 days'
+            AND application_state IN ('$SUCCEEDED','$REJECTED','$LEGACY')""",
+        nativeQuery = true,
+    )
+    fun deleteTerminal(): Int
+
+    interface OperationRow {
+        val eventId: String
+        val leaseToken: String
+        val operationType: String
+        val expoId: String
+        val traineeId: Long
+        val requestMethod: String
+        val requestPath: String
+        val commandJson: String
+        val expectedVersion: Long
+        val createdAt: Instant
+        val responseReceived: Boolean
     }
 
-    fun retry(publication: Publication) {
-        transactions.executeWithoutResult {
-            jdbc.update(
-                """UPDATE tb_training_sms_outbox SET attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP,
-                   publish_token = NULL, publish_until = NULL, next_attempt_at = CURRENT_TIMESTAMP + INTERVAL '30 seconds'
-                   WHERE event_id = ? AND publish_token = ? AND state = 'READY'""",
-                publication.eventId,
-                publication.token,
-            )
-        }
+    interface PublicationRow {
+        val eventId: String
+        val publishToken: String
+        val expoId: String
+        val traineeId: Long
+        val notificationText: String?
+        val payload: String?
+        val receiptVersion: Long?
+        val firstPublishAttemptAt: Instant?
     }
 
     data class Publication(
@@ -343,4 +238,20 @@ class TrainingSmsOutboxRepository(
         val receiptVersion: Long,
         val firstPublishAttemptAt: Instant?,
     )
+
+    companion object {
+        private const val LEASE = "30 seconds"
+        private const val SMS_WINDOW = "23 hours"
+        private const val REPLAY_WINDOW = "15 minutes"
+        private const val RECOVERY_LIMIT = 30
+        private const val PREPARED = "PREPARED"
+        private const val REJECTED = "REJECTED"
+        private const val READY = "READY"
+        private const val SENT = "SENT"
+        private const val SUPPRESSED = "SUPPRESSED"
+        private const val HELD = "HELD"
+        private const val LEGACY = "LEGACY"
+        private const val PENDING = "PENDING"
+        private const val SUCCEEDED = "SUCCEEDED"
+    }
 }

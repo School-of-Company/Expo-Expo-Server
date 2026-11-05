@@ -39,7 +39,7 @@ import team.startup.expo.domain.training.entity.Category
 import team.startup.expo.domain.training.entity.TrainingProgram
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
-import team.startup.expo.domain.training.repository.TrainingSmsOutboxRepository
+import team.startup.expo.domain.training.service.HoldReason
 import team.startup.expo.domain.training.service.PublishTrainingSmsService
 import team.startup.expo.domain.training.service.RecoverTrainingOperationsService
 import team.startup.expo.domain.training.service.TrainingApplicationCommand
@@ -47,6 +47,7 @@ import team.startup.expo.domain.training.service.TrainingApplicationSmsService
 import team.startup.expo.domain.training.service.TrainingDependenciesClient
 import team.startup.expo.domain.training.service.TrainingOperationType
 import team.startup.expo.domain.training.service.TrainingProgramReference
+import team.startup.expo.domain.training.service.TrainingSmsOutboxSupport
 import team.startup.expo.domain.training.service.TrainingTraineeReference
 import team.startup.expo.domain.training.service.impl.ApplyTrainingProgramListServiceImpl
 import team.startup.expo.domain.training.service.impl.PublishTrainingSmsServiceImpl
@@ -107,7 +108,7 @@ class TrainingSmsIntegrationTests {
     private lateinit var recovery: RecoverTrainingOperationsService
 
     @Autowired
-    private lateinit var outbox: TrainingSmsOutboxRepository
+    private lateinit var outbox: TrainingSmsOutboxSupport
 
     @Autowired
     private lateinit var dependencies: TrainingDependenciesClient
@@ -626,13 +627,18 @@ class TrainingSmsIntegrationTests {
 
     @Test
     fun `만료된 신청 시도의 늦은 확정은 새 시도의 상태를 덮어쓰지 않는다`() {
-        val first = prepare(TrainingOperationType.REPLACE)
+        val (first, second) =
+            requireNotNull(
+                dbTransactions.execute {
+                    val initial = prepare(TrainingOperationType.REPLACE)
+                    jdbc.update(
+                        "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
+                    )
+                    initial to requireNotNull(outbox.claimRecovery())
+                },
+            )
         dependencies.executeOperation(first)
         val receipt = requireNotNull(dependencies.operationReceipt(first))
-        jdbc.update(
-            "UPDATE tb_training_sms_outbox SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second', recover_after = CURRENT_TIMESTAMP",
-        )
-        val second = requireNotNull(outbox.claimRecovery())
         first.eventId shouldBe second.eventId
         outbox.confirmed(first, receipt)
         state() shouldBe "PREPARED"
@@ -711,7 +717,7 @@ class TrainingSmsIntegrationTests {
     fun `미확정 신청과 수동 확인 보류는 박람회 삭제 표시와 원격 삭제 전에 충돌한다`() {
         val operation = prepare(TrainingOperationType.ADD)
         assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
-        outbox.hold(operation, "RECOVERY_LIMIT")
+        outbox.hold(operation, HoldReason.RECOVERY_LIMIT)
         assertThrows(ExpectedException::class.java) { deleteExpo.execute(EXPO) }.status shouldBe HttpStatus.CONFLICT
         expos.findById(EXPO).orElseThrow().deletingAt shouldBe null
         outbox.hasUnresolvedApplications(EXPO) shouldBe true

@@ -22,7 +22,19 @@ data class TrainingProgramReference(
     val category: Category,
 )
 
-enum class TrainingOperationType { ADD, REPLACE }
+enum class TrainingOperationType(
+    val method: String,
+) {
+    ADD("POST"),
+    REPLACE("PUT"),
+    ;
+
+    fun path(traineeId: Long): String =
+        when (this) {
+            ADD -> "/internal/training-program-applications"
+            REPLACE -> "/internal/training-program-applications/trainee/$traineeId"
+        }
+}
 
 data class TrainingOperation(
     val eventId: String,

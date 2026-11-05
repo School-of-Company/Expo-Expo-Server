@@ -3,9 +3,12 @@ package team.startup.expo.domain.standard.service.impl
 import jakarta.validation.Validator
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.expo.service.ExpoEventSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.standard.entity.StandardProgram
@@ -16,6 +19,7 @@ import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class CreateStandardProgramServiceImpl(
+    private val admins: AdminAccessSupport,
     private val expos: ExpoRepository,
     private val policies: ProgramPolicySupport,
     private val programs: StandardProgramRepository,
@@ -59,7 +63,14 @@ class CreateStandardProgramServiceImpl(
                         place = definition.place,
                     ),
                 ).also {
-                    history.record(expoId, "PROGRAM_CREATE", "STANDARD", requireNotNull(it.id), it.title, history.currentAdminId())
+                    history.record(
+                        expoId,
+                        AdminChangeType.PROGRAM_CREATE,
+                        AdminChangeTargetType.STANDARD,
+                        requireNotNull(it.id),
+                        it.title,
+                        admins.currentAdminId(),
+                    )
                 }
         }
     }

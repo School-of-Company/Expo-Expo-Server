@@ -15,10 +15,10 @@ import team.startup.expo.domain.expo.presentation.dto.response.ProgramMutation
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramPolicyBulkResult
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramPolicyBulkStatus
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
-import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.repository.ProgramChangeRepository
 import team.startup.expo.domain.expo.repository.ProgramFormChangeRepository
+import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.standard.entity.StandardProgram
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
@@ -33,6 +33,7 @@ import java.util.UUID
 
 @Component
 class ProgramPolicySupport(
+    private val admins: AdminAccessSupport,
     private val expos: ExpoRepository,
     private val operations: TrainingSmsOutboxRepository,
     private val changes: ProgramChangeRepository,
@@ -42,7 +43,6 @@ class ProgramPolicySupport(
     private val transactions: TransactionTemplate,
     private val mapper: ObjectMapper,
     private val forms: ProgramFormChangeRepository,
-    private val history: AdminChangeHistoryRepository,
     private val events: ExpoEventSupport,
 ) {
     private val pendingForms = ThreadLocal<MutableList<ProgramDefinition>>()
@@ -216,7 +216,7 @@ class ProgramPolicySupport(
                         expoId,
                         commandJson = command,
                         payloadJson = mapper.writeValueAsString(payload),
-                        adminId = history.currentAdminId(),
+                        adminId = admins.currentAdminId(),
                     ),
                 ).also {
                     // 진행 중인 변경이 생기면 프로그램 조회가 409가 되므로 이벤트로도 알린다(programChangePending).

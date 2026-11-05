@@ -1,65 +1,45 @@
 package team.startup.expo.domain.expo.repository
 
-import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Repository
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramPolicyRequest
 import team.startup.expo.domain.expo.presentation.dto.request.ProgramSessionPageRequest
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
+import team.startup.expo.domain.standard.repository.StandardProgramRepository
 import team.startup.expo.domain.training.entity.Category
 import tools.jackson.databind.ObjectMapper
 import java.util.UUID
 
 @Repository
 class ProgramSessionQueryRepository(
-    private val jdbc: JdbcTemplate,
+    private val programs: StandardProgramRepository,
     private val mapper: ObjectMapper,
 ) {
-    fun version(expoId: String): String =
-        requireNotNull(
-            jdbc.queryForObject(
-                "SELECT md5(COALESCE(string_agg(program_type || ':' || id || ':' || revision, ',' ORDER BY program_type, id), '')) FROM ($SOURCE) programs",
-                String::class.java,
-                expoId,
-                expoId,
-            ),
-        )
+    fun version(expoId: String): String = programs.sessionVersion(expoId)
 
     fun count(
         expoId: String,
         request: ProgramSessionPageRequest,
-    ): Long =
-        requireNotNull(
-            jdbc.queryForObject(
-                "SELECT count(*) FROM ($SOURCE) programs WHERE $FILTER",
-                Long::class.java,
-                *parameters(expoId, request),
-            ),
-        )
+    ): Long = programs.sessionCount(expoId, request.programType?.name, request.groupId, request.programId)
 
     fun page(
         expoId: String,
         request: ProgramSessionPageRequest,
     ): List<ProgramDefinition> =
-        jdbc.query(
-            """
-            WITH page AS MATERIALIZED (
-                SELECT program_type, id FROM ($SOURCE) programs
-                WHERE $FILTER ORDER BY program_type, id LIMIT ? OFFSET ?
-            )
-            SELECT page.program_type,
-                CASE WHEN page.program_type = 'STANDARD' THEN to_jsonb(s) ELSE to_jsonb(t) END::text
-            FROM page
-            LEFT JOIN tb_standard_program s ON page.program_type = 'STANDARD' AND s.id = page.id
-            LEFT JOIN tb_training_program t ON page.program_type = 'TRAINING' AND t.id = page.id
-            ORDER BY page.program_type, page.id
-            """.trimIndent(),
-            { row, _ ->
-                val node = mapper.readTree(row.getString(2))
+        programs
+            .sessionPage(
+                expoId,
+                request.programType?.name,
+                request.groupId,
+                request.programId,
+                request.size,
+                request.page.toLong() * request.size,
+            ).map { row ->
+                val node = mapper.readTree(row.payload)
                 val policy = node.get("policy_json")?.takeUnless { it.isNull }?.asString()
                 ProgramDefinition(
                     expoId = expoId,
-                    programType = ProgramType.valueOf(row.getString(1)),
+                    programType = ProgramType.valueOf(row.programType),
                     id = node.get("id").asLong(),
                     title = node.get("title").asString(),
                     startedAt = node.get("started_at").asString(),
@@ -75,33 +55,5 @@ class ProgramSessionQueryRepository(
                     revision = node.get("revision").asLong(),
                     place = node.get("place")?.takeUnless { it.isNull }?.asString(),
                 )
-            },
-            *parameters(expoId, request),
-            request.size,
-            request.page.toLong() * request.size,
-        )
-
-    private fun parameters(
-        expoId: String,
-        request: ProgramSessionPageRequest,
-    ): Array<Any?> =
-        arrayOf(
-            expoId,
-            expoId,
-            request.programType?.name,
-            request.programType?.name,
-            request.groupId?.toString(),
-            request.groupId?.toString(),
-            request.programId,
-            request.programId,
-        )
-
-    private companion object {
-        const val SOURCE =
-            "SELECT 'STANDARD' AS program_type, id, group_id, revision FROM tb_standard_program WHERE expo_id = ? " +
-                "UNION ALL SELECT 'TRAINING', id, group_id, revision FROM tb_training_program WHERE expo_id = ?"
-        const val FILTER =
-            "(?::text IS NULL OR program_type = ?) AND " +
-                "(?::uuid IS NULL OR group_id = ?::uuid) AND (?::bigint IS NULL OR id = ?)"
-    }
+            }
 }

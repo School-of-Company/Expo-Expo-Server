@@ -4,6 +4,8 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
+import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
@@ -149,8 +151,8 @@ class ApplyProgramChangeServiceImpl(
                                 )
                             history.record(
                                 expoId,
-                                if (definition.id == null) "PROGRAM_CREATE" else "PROGRAM_UPDATE",
-                                definition.programType.name,
+                                if (definition.id == null) AdminChangeType.PROGRAM_CREATE else AdminChangeType.PROGRAM_UPDATE,
+                                AdminChangeTargetType.valueOf(definition.programType.name),
                                 requireNotNull(saved.id),
                                 definition.title,
                                 current.adminId,
@@ -175,8 +177,8 @@ class ApplyProgramChangeServiceImpl(
                                 )
                             history.record(
                                 expoId,
-                                if (definition.id == null) "PROGRAM_CREATE" else "PROGRAM_UPDATE",
-                                definition.programType.name,
+                                if (definition.id == null) AdminChangeType.PROGRAM_CREATE else AdminChangeType.PROGRAM_UPDATE,
+                                AdminChangeTargetType.valueOf(definition.programType.name),
                                 requireNotNull(saved.id),
                                 definition.title,
                                 current.adminId,
@@ -189,8 +191,8 @@ class ApplyProgramChangeServiceImpl(
                 deleted.forEach { previous ->
                     history.record(
                         expoId,
-                        "PROGRAM_DELETE",
-                        previous.programType.name,
+                        AdminChangeType.PROGRAM_DELETE,
+                        AdminChangeTargetType.valueOf(previous.programType.name),
                         requireNotNull(previous.id),
                         previous.title,
                         current.adminId,

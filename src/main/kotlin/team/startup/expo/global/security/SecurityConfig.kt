@@ -228,10 +228,10 @@ class SecurityConfig {
         objectMapper.writeValue(response.writer, ErrorResponse(status = status, message = message))
     }
 
-    private companion object {
-        val SWAGGER_PATHS =
+    companion object {
+        private val SWAGGER_PATHS =
             arrayOf("/expo/v3/api-docs", "/expo/v3/api-docs/**", "/expo/swagger-ui.html", "/expo/swagger-ui/**")
         const val ADMIN_AUTHORITY = "ROLE_ADMIN"
-        val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
+        private val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
     }
 }

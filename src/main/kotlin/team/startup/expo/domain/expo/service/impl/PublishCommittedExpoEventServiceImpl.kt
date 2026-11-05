@@ -8,7 +8,6 @@ import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.core.ProducerFactory
 import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.messaging.ExpoChangedEvent
-import team.startup.expo.domain.expo.repository.CommittedExpoEventRepository
 import team.startup.expo.domain.expo.repository.ExpoEventOutboxRepository
 import team.startup.expo.domain.expo.service.PublishCommittedExpoEventService
 import tools.jackson.databind.ObjectMapper
@@ -20,7 +19,6 @@ import java.util.concurrent.TimeUnit
 @Service
 @ConditionalOnProperty(prefix = "expo.events", name = ["enabled"], havingValue = "true")
 class PublishCommittedExpoEventServiceImpl(
-    private val committed: CommittedExpoEventRepository,
     private val outbox: ExpoEventOutboxRepository,
     producers: ProducerFactory<String, String>,
     private val mapper: ObjectMapper,
@@ -47,7 +45,7 @@ class PublishCommittedExpoEventServiceImpl(
     private fun publish(eventId: String) {
         var publication: ExpoEventOutboxRepository.Publication? = null
         try {
-            val claimed = committed.claim(eventId) ?: return
+            val claimed = outbox.claim(eventId) ?: return
             publication = claimed
             val message =
                 ExpoChangedEvent.message(mapper, claimed.eventId, claimed.sequence, claimed.createdAt, claimed.expoId, claimed.snapshot)
