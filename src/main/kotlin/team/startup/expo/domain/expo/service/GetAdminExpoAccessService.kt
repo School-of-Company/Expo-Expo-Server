@@ -6,5 +6,6 @@ interface GetAdminExpoAccessService {
     fun execute(
         expoId: String,
         authorization: String?,
+        permission: ExpoPermission = ExpoPermission.APPLICATION_READ,
     ): AdminExpoAccessResponse
 }

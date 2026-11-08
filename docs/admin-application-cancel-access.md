@@ -32,7 +32,13 @@ JWT의 서명, 역할, 주체, 발급/만료 및 15분 수명과 User `/admin/my
   권한 저장이 실패하면 행사 생성도 롤백된다. 복제 API는 없으므로 앱 밖에서 만든 행사는 아래 절차를 따른다.
 - 기존 행사, 생성자가 아닌 공동 운영자, 철회: 승인된 DB 작업으로 수행한다. 작업 전후로 대상 행을 조회해 기록한다.
 
-권한 관리 API는 제공하지 않는다. 관리자 등급이 `ROLE_ADMIN` 하나뿐이라 API를 열면 모든 관리자가 자기 자신에게 권한을 줄 수 있기 때문이다.
+이 문서의 기존 허용표 정책은 #256의 단계 배포에서 판정 비활성 상태에만 적용한다.
+`EXPO_MEMBER_ROLES_ENABLED=true` 이후에는 OWNER·MANAGER 또는 User의 최고 관리자만
+취소·수동 확정을 허용한다. 응답·403 문구와 캐시 금지 계약은 유지한다.
+OWNER가 `/expo/{id}/members` 운영진 API로 권한을 관리한다.
+새 행사는 생성자를 OWNER로 저장하며 기존 두 허용표에 중복 저장하지 않는다.
+판정 비활성 상태에서는 기존 허용표와 생성자 OWNER를 함께 허용한다.
+이관과 기존 표 제거 시점은 [역할 배포 절차](expo-member-roles.md)를 따른다.
 
 ```sql
 SELECT admin_id FROM tb_admin_application_cancel_access WHERE expo_id = '행사 ID';

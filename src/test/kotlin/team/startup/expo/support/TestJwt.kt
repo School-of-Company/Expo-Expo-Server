@@ -20,10 +20,12 @@ object TestJwt {
         ttlSeconds: Long = 900,
         issuedAtOffsetSeconds: Long = 0,
         subject: String = "1",
+        expoId: String? = null,
     ): String {
         val now = Instant.now().epochSecond + issuedAtOffsetSeconds
         val header = encode("""{"alg":"RS256","typ":"JWT"}""")
-        val payload = encode("""{"sub":"$subject","role":"$role","iat":$now,"exp":${now + ttlSeconds}}""")
+        val expoClaim = expoId?.let { ""","expoId":"$it"""" } ?: ""
+        val payload = encode("""{"sub":"$subject","role":"$role","iat":$now,"exp":${now + ttlSeconds}$expoClaim}""")
         val content = "$header.$payload"
         val signature =
             Signature

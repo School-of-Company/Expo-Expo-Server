@@ -216,7 +216,7 @@ class ExpoDtoContractTests(
                 coverImage = null,
             ),
         ) shouldBe
-            "{\"id\":\"123456789012-1234-1234-1234-12345678\",\"title\":\"2026 박람회\",\"description\":\"설명\",\"startedDay\":\"2026-09-24\",\"finishedDay\":\"2026-09-25\",\"coverImage\":null}"
+            "{\"id\":\"123456789012-1234-1234-1234-12345678\",\"title\":\"2026 박람회\",\"description\":\"설명\",\"startedDay\":\"2026-09-24\",\"finishedDay\":\"2026-09-25\",\"coverImage\":null,\"myRole\":null}"
 
         objectMapper.writeValueAsString(
             ExpoDetailResponse(

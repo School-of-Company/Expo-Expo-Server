@@ -82,6 +82,8 @@ image:
       directory: ${IMAGE_STORAGE_DIRECTORY:./data/images}
 
 expo:
+  member-roles:
+    enabled: ${EXPO_MEMBER_ROLES_ENABLED:false}
   standard-created:
     enabled: ${KAFKA_STANDARD_CREATED_ENABLED:false}
   # 박람회·프로그램 변경 이벤트(expo.expo.changed) 아웃박스와 릴레이. docs/expo-change-events.md

@@ -6,6 +6,9 @@ import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.standard.entity.StandardProgram
 
 interface StandardProgramRepository : JpaRepository<StandardProgram, Long> {
+    @Query("select program.expo.id from StandardProgram program where program.id = :id")
+    fun findExpoIdById(id: Long): String?
+
     fun findByExpo(expo: Expo): List<StandardProgram>
 
     fun findAllByIdInAndExpoId(

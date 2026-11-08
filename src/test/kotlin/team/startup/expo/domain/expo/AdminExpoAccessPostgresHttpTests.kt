@@ -3,6 +3,7 @@ package team.startup.expo.domain.expo
 import com.sun.net.httpserver.HttpServer
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -48,10 +49,15 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
-@SpringBootTest(webEnvironment = RANDOM_PORT, properties = ["eureka.client.enabled=false", "EXPO_INTERNAL_TOKEN=contract-service-token"])
+@SpringBootTest(
+    webEnvironment = RANDOM_PORT,
+    properties = ["eureka.client.enabled=false", "EXPO_INTERNAL_TOKEN=contract-service-token", "swagger.enabled=true"],
+)
 @EntityScan("team.startup.expo.domain")
 @Testcontainers
 class AdminExpoAccessPostgresHttpTests {
+    @Autowired private lateinit var roles: team.startup.expo.domain.expo.service.ExpoRoleSupport
+
     @LocalServerPort private var port = 0
 
     @Autowired private lateinit var jdbc: JdbcTemplate
@@ -79,6 +85,8 @@ class AdminExpoAccessPostgresHttpTests {
 
     @BeforeEach
     fun seed() {
+        ReflectionTestUtils.setField(roles, "enabled", false)
+        superAdmin = false
         userStatus = 200
         userCalls.set(0)
         forwardedOriginalJwt = false
@@ -102,6 +110,11 @@ class AdminExpoAccessPostgresHttpTests {
                 UUID.randomUUID(),
             )
         }
+    }
+
+    @AfterEach
+    fun resetRoles() {
+        ReflectionTestUtils.setField(roles, "enabled", false)
     }
 
     @Test
@@ -435,6 +448,145 @@ class AdminExpoAccessPostgresHttpTests {
             .asLong() shouldBe 2L
     }
 
+    private fun enableRoles() {
+        ReflectionTestUtils.setField(roles, "enabled", true)
+        listOf(1L to "OWNER", 2L to "MANAGER", 3L to "VIEWER").forEach { (id, role) ->
+            jdbc.update("INSERT INTO tb_expo_member(expo_id,admin_id,role) VALUES (?,?,?)", EXPO, id, role)
+        }
+    }
+
+    @Test
+    fun `member matrix filters lists and protects participant reads writes and legacy responses`() {
+        enableRoles()
+
+        fun admin(
+            path: String,
+            id: Long,
+            method: String = "GET",
+            body: String? = null,
+        ) = request(path, TestJwt.token("ROLE_ADMIN", subject = id.toString()), null, method, body)
+        admin("/expo/$OTHER", 1).statusCode() shouldBe 403
+        request("/expo/v3/api-docs", token = null).statusCode() shouldBe 200
+        admin("/expo/$EXPO", 3).statusCode() shouldBe 200
+        admin(
+            "/expo/$EXPO/participant-phone-verification",
+            2,
+            "PATCH",
+            """{"participantPhoneVerificationRequired":false}""",
+        ).statusCode() shouldBe
+            200
+        listOf("/standard/1", "/training/1", "/standard/2", "/training/2").forEach {
+            admin(it, 3).statusCode() shouldBe 403
+        }
+        admin("/expo/$EXPO", 3, "PATCH", "{}").statusCode() shouldBe 403
+        admin("/expo/$EXPO", 2, "DELETE").statusCode() shouldBe 403
+        admin("/expo/$EXPO/members", 2).statusCode() shouldBe 403
+        admin("/expo/$EXPO/staff-invites", 3).statusCode() shouldBe 403
+        val list = mapper.readTree(admin("/expo", 3).body())
+        list.size() shouldBe 1
+        list[0].get("myRole").asString() shouldBe "VIEWER"
+        val page = mapper.readTree(admin("/expo?page=0&size=1", 2).body())
+        page.get("totalElements").asLong() shouldBe 1L
+        page.get("content")[0].get("myRole").asString() shouldBe "MANAGER"
+        mapper.readTree(admin("/expo", 4).body()).size() shouldBe 0
+        val valid = mapper.readTree(admin("/expo/valid", 3).body()).get("expoValid")
+        valid.size() shouldBe 1
+        valid[0].get("expoId").asString() shouldBe EXPO
+        valid[0].get("myRole").asString() shouldBe "VIEWER"
+        listOf(1L, 2L, 3L, 4L).forEach { id ->
+            val jwt = TestJwt.token("ROLE_ADMIN", subject = id.toString())
+            access(jwt = jwt).statusCode() shouldBe if (id <= 2) 200 else 403
+            listOf("CHECKIN", "STATS_READ").forEach {
+                val allowed = if (it == "CHECKIN") id <= 2 else id <= 3
+                access(jwt = jwt, query = "?permission=$it").statusCode() shouldBe if (allowed) 200 else 403
+            }
+            listOf("cancel", "promote").forEach {
+                request("/internal/expo/$EXPO/admin-application-$it-access", jwt).statusCode() shouldBe if (id <= 2) 200 else 403
+            }
+        }
+        val legacy = mapper.readTree(access().body())
+        legacy.get("policyVersion").asString() shouldBe "GLOBAL_ADMIN_APPLICATION_READ_V1"
+        legacy.get("scope").asString() shouldBe "GLOBAL_ADMIN"
+        access(query = "?permission=UNKNOWN").statusCode() shouldBe 400
+        superAdmin = true
+        admin("/expo/$OTHER", 4).statusCode() shouldBe 200
+        mapper.readTree(admin("/expo", 4).body()).size() shouldBe 2
+        userStatus = 403
+        admin("/expo/$EXPO", 1).statusCode() shouldBe 403
+    }
+
+    @Test
+    fun `owner mutations serialize owner limit and reject last owner removal`() {
+        enableRoles()
+        val jwt = TestJwt.token("ROLE_ADMIN")
+        val path = "/expo/$EXPO/members"
+
+        fun change(
+            id: Long,
+            role: String,
+        ) = request("$path/$id", jwt, null, "PATCH", """{"role":"$role"}""")
+        request(path, jwt, null).statusCode() shouldBe 200
+        change(1, "VIEWER").statusCode() shouldBe 409
+        request("$path/1", jwt, null, "DELETE").statusCode() shouldBe 409
+        request(path, jwt, null, "POST", """{"adminId":4,"role":"VIEWER"}""").statusCode() shouldBe 201
+        request(path, jwt, null, "POST", """{"adminId":4,"role":"MANAGER"}""").statusCode() shouldBe 409
+        request(path, jwt, null, "POST", """{"adminId":0,"role":"MANAGER"}""").statusCode() shouldBe 400
+        request(path, jwt, null, "POST", """{"adminId":5,"role":"STAFF"}""").statusCode() shouldBe 400
+        change(2, "OWNER").statusCode() shouldBe 200
+        val concurrent = listOf(3L, 4L).map { id -> CompletableFuture.supplyAsync { change(id, "OWNER").statusCode() } }
+        concurrent.map { it.get(10, TimeUnit.SECONDS) }.sorted() shouldBe listOf(200, 409)
+        jdbc.queryForObject("SELECT count(*) FROM tb_expo_member WHERE expo_id=? AND role='OWNER'", Long::class.java, EXPO) shouldBe 3L
+        change(2, "MANAGER").statusCode() shouldBe 200
+        request("$path/2", jwt, null, "DELETE").statusCode() shouldBe 204
+        access(jwt = TestJwt.token("ROLE_ADMIN", subject = "2")).statusCode() shouldBe 403
+        request("/expo/$OTHER/members", jwt, null).statusCode() shouldBe 403
+    }
+
+    @Test
+    fun `staff exchange scan revocation expiration scope and cascading deletion`() {
+        enableRoles()
+        val owner = TestJwt.token("ROLE_ADMIN")
+        val path = "/expo/$EXPO/staff-invites"
+        val created = request(path, owner, null, "POST", """{"label":"test desk","expiresAt":"2099-01-01T00:00:00Z"}""")
+        created.statusCode() shouldBe 201
+        created.headers().firstValue("Cache-Control").orElse("") shouldBe "no-store"
+        val body = mapper.readTree(created.body())
+        val id = body.get("inviteId").asString()
+        val secret = body.get("secret").asString()
+        val hash = jdbc.queryForObject("SELECT secret_hash FROM tb_expo_staff_invite WHERE id=?", String::class.java, UUID.fromString(id))
+        (hash == secret) shouldBe false
+        mapper.readTree(request(path, owner, null).body())[0].get("secret").isNull shouldBe true
+        val exchangePath = "/internal/staff-invites/exchange"
+        val payload = """{"secret":"$secret"}"""
+        request(exchangePath, method = "POST", body = payload, token = null).statusCode() shouldBe 401
+        request(exchangePath, method = "POST", body = """{"secret":"invalid"}""").statusCode() shouldBe 403
+        val exchanged = request(exchangePath, method = "POST", body = payload)
+        exchanged.statusCode() shouldBe 200
+        mapper.readTree(exchanged.body()).get("expoId").asString() shouldBe EXPO
+        val staff = TestJwt.token("ROLE_STAFF", subject = "staff:$id", expoId = EXPO)
+        val before = userCalls.get()
+        access(jwt = staff).statusCode() shouldBe 403
+        access(jwt = staff, query = "?permission=CHECKIN").statusCode() shouldBe 200
+        access(jwt = staff, query = "?permission=STATS_READ").statusCode() shouldBe 200
+        access(expo = OTHER, jwt = staff, query = "?permission=CHECKIN").statusCode() shouldBe 403
+        request("/expo/$EXPO", staff, null).statusCode() shouldBe 403
+        userCalls.get() shouldBe before
+        access(jwt = TestJwt.token("ROLE_STAFF", subject = "1", expoId = EXPO), query = "?permission=CHECKIN").statusCode() shouldBe 401
+        access(jwt = TestJwt.token("ROLE_STAFF", subject = "staff:$id"), query = "?permission=CHECKIN").statusCode() shouldBe 401
+        request("$path/$id", owner, null, "DELETE").statusCode() shouldBe 204
+        access(jwt = staff, query = "?permission=CHECKIN").statusCode() shouldBe 403
+        request(exchangePath, method = "POST", body = payload).statusCode() shouldBe 403
+        jdbc.update(
+            "UPDATE tb_expo_staff_invite SET revoked_at=NULL,expires_at=clock_timestamp()-interval '1 second' WHERE id=?",
+            UUID.fromString(id),
+        )
+        access(jwt = staff, query = "?permission=STATS_READ").statusCode() shouldBe 403
+        request(exchangePath, method = "POST", body = payload).statusCode() shouldBe 403
+        expos.deleteById(EXPO)
+        jdbc.queryForObject("SELECT count(*) FROM tb_expo_member WHERE expo_id=?", Long::class.java, EXPO) shouldBe 0L
+        jdbc.queryForObject("SELECT count(*) FROM tb_expo_staff_invite WHERE expo_id=?", Long::class.java, EXPO) shouldBe 0L
+    }
+
     private fun access(
         expo: String = EXPO,
         jwt: String? = TestJwt.token("ROLE_ADMIN"),
@@ -446,8 +598,14 @@ class AdminExpoAccessPostgresHttpTests {
         path: String,
         jwt: String? = null,
         token: String? = "contract-service-token",
+        method: String = "GET",
+        body: String? = null,
     ): HttpResponse<String> {
-        val builder = HttpRequest.newBuilder(URI.create("http://localhost:$port$path")).GET()
+        val builder =
+            HttpRequest
+                .newBuilder(URI.create("http://localhost:$port$path"))
+                .method(method, body?.let { HttpRequest.BodyPublishers.ofString(it) } ?: HttpRequest.BodyPublishers.noBody())
+        if (body != null) builder.header("Content-Type", "application/json")
         jwt?.let { builder.header("Authorization", "Bearer $it") }
         token?.let { builder.header("X-Internal-Token", it) }
         builder.header("X-User-Id", "999").header("X-User-Role", "ROLE_ADMIN")
@@ -463,6 +621,8 @@ class AdminExpoAccessPostgresHttpTests {
 
         @Volatile private var userStatus = 200
 
+        @Volatile private var superAdmin = false
+
         @Volatile private var forwardedOriginalJwt = false
         private val user =
             HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
@@ -472,7 +632,14 @@ class AdminExpoAccessPostgresHttpTests {
                         exchange.requestHeaders.getFirst("Authorization")?.startsWith("Bearer ey") == true &&
                         exchange.requestHeaders.getFirst("X-Internal-Token") == null &&
                         exchange.requestHeaders.getFirst("X-User-Id") == null
-                    exchange.sendResponseHeaders(userStatus, -1)
+                    val body = """{"superAdmin":$superAdmin}""".toByteArray()
+                    exchange.responseHeaders.add("Content-Type", "application/json")
+                    exchange.sendResponseHeaders(userStatus, body.size.toLong())
+                    exchange.responseBody.use { it.write(body) }
+                    exchange.close()
+                }
+                createContext("/") { exchange ->
+                    exchange.sendResponseHeaders(404, -1)
                     exchange.close()
                 }
                 start()
@@ -482,6 +649,7 @@ class AdminExpoAccessPostgresHttpTests {
         fun properties(registry: DynamicPropertyRegistry) {
             registry.add("JWT_PUBLIC_KEY") { TestJwt.publicKeyPem }
             registry.add("expo.standard.user-service-url") { "http://127.0.0.1:${user.address.port}" }
+            registry.add("expo.form-service-url") { "http://127.0.0.1:${user.address.port}" }
         }
 
         @JvmStatic @AfterAll

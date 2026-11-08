@@ -13,6 +13,16 @@ import org.springframework.data.repository.query.Param
 import team.startup.expo.domain.expo.entity.Expo
 
 interface ExpoRepository : JpaRepository<Expo, String> {
+    fun findAllByIdIn(
+        ids: Collection<String>,
+        sort: org.springframework.data.domain.Sort,
+    ): List<Expo>
+
+    fun findAllByIdIn(
+        ids: Collection<String>,
+        pageable: Pageable,
+    ): org.springframework.data.domain.Page<Expo>
+
     @Query("SELECT id FROM tb_expo WHERE id=:expoId FOR UPDATE", nativeQuery = true)
     fun lockEventId(expoId: String): String?
 

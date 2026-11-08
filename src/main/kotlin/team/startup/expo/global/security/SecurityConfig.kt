@@ -47,7 +47,7 @@ class SecurityConfig {
                         val issuedAt = jwt.issuedAt
                         val expiresAt = jwt.expiresAt
                         if (
-                            jwt.subject?.toLongOrNull()?.let { it > 0 } == true &&
+                            validSubject(jwt) &&
                             issuedAt != null &&
                             expiresAt != null &&
                             Duration.between(issuedAt, expiresAt) > Duration.ZERO &&
@@ -97,6 +97,14 @@ class SecurityConfig {
                         .permitAll()
                 }
                 requests
+                    .requestMatchers(HttpMethod.POST, "/internal/staff-invites/exchange")
+                    .hasAuthority(InternalTokenFilter.INTERNAL_AUTHORITY)
+                    .requestMatchers(
+                        "/expo/{expo_id}/members",
+                        "/expo/{expo_id}/members/{adminId}",
+                        "/expo/{expo_id}/staff-invites",
+                        "/expo/{expo_id}/staff-invites/{inviteId}",
+                    ).hasAuthority(ADMIN_AUTHORITY)
                     .requestMatchers(*ApiPaths.swaggerPaths)
                     .denyAll()
                     .requestMatchers(HttpMethod.GET, *ApiPaths.healthGetPaths)
@@ -209,6 +217,20 @@ class SecurityConfig {
     }
 
     companion object {
+        fun validSubject(jwt: Jwt): Boolean =
+            if (jwt.getClaim<Any>("role") == "ROLE_STAFF") {
+                val id = jwt.subject?.removePrefix("staff:")
+                jwt.subject?.startsWith("staff:") == true &&
+                    runCatching {
+                        java.util.UUID
+                            .fromString(id)
+                            .toString() == id
+                    }.getOrDefault(false) &&
+                    (jwt.getClaim<Any>("expoId") as? String)?.isNotBlank() == true
+            } else {
+                jwt.subject?.toLongOrNull()?.let { it > 0 } == true
+            }
+
         const val ADMIN_AUTHORITY = "ROLE_ADMIN"
         private val logger = LoggerFactory.getLogger(SecurityConfig::class.java)
     }
