@@ -1,6 +1,7 @@
 package team.startup.expo.domain.expo.presentation.dto.request
 
 import org.springframework.http.HttpStatus
+import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.global.exception.ExpectedException
 import java.time.Instant
 import java.time.LocalDate
@@ -18,20 +19,28 @@ fun validateExpoPeriod(
     }
 }
 
-// #258: 프로그램 일정은 박람회 기간(날짜 단위) 안이어야 한다. named면 기간 밖 프로그램 제목을 문구에 덧붙인다.
+data class ProgramSchedule(
+    val title: String,
+    val startedAt: LocalDateTime,
+    val endedAt: LocalDateTime,
+)
+
+// #258: 프로그램 일정은 박람회 기간(날짜 단위) 안이어야 한다. 기간 밖 프로그램 제목을 문구에 덧붙인다.
 fun validateProgramPeriod(
     startedDay: LocalDate,
     finishedDay: LocalDate,
-    programs: List<Triple<String, LocalDateTime, LocalDateTime>>,
-    named: Boolean = false,
+    programs: List<ProgramSchedule>,
 ) {
-    val outside = programs.filter { (_, start, end) -> start.toLocalDate() < startedDay || end.toLocalDate() > finishedDay }
+    val outside = programs.filter { it.startedAt.toLocalDate() < startedDay || it.endedAt.toLocalDate() > finishedDay }
     if (outside.isEmpty()) return
-    val message = "프로그램 일정은 박람회 기간($startedDay ~ $finishedDay) 안이어야 합니다."
     throw ExpectedException(
         HttpStatus.BAD_REQUEST,
-        if (named) "$message (${outside.joinToString { it.first }})" else message,
+        "프로그램 일정은 박람회 기간($startedDay ~ $finishedDay) 안이어야 합니다. (${outside.joinToString { it.title }})",
     )
 }
+
+// 저장된 기간은 박람회 생성·수정이 LocalDate.toString()으로만 쓴다.
+fun Expo.validateProgramPeriod(programs: List<ProgramSchedule>) =
+    validateProgramPeriod(LocalDate.parse(startedDay), LocalDate.parse(finishedDay), programs)
 
 fun Iterable<Instant>.hasMicrosecondPrecision(): Boolean = all { it.nano % 1000 == 0 }

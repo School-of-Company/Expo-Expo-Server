@@ -155,7 +155,7 @@ class StandardApiPostgresHttpTests {
         for (body in listOf(before, after)) {
             val response = request("POST", "/standard/$expoId", body)
             response.statusCode() shouldBe 400
-            mapper.readTree(response.body()).get("message").asString() shouldBe "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-25) 안이어야 합니다."
+            mapper.readTree(response.body()).get("message").asString() shouldBe "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-25) 안이어야 합니다. (일반)"
             request("POST", "/standard/list/$expoId", "[$program,$body]").statusCode() shouldBe 400
         }
         standards.count() shouldBe 0L

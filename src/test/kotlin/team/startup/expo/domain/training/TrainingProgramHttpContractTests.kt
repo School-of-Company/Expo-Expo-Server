@@ -131,7 +131,7 @@ class TrainingProgramHttpContractTests {
         val outside = PROGRAM.replace("2026-09-24 10:00", "2026-09-23 10:00")
         val response = request("POST", "/training/training-test-expo", outside)
         response.statusCode() shouldBe 400
-        objectMapper.readTree(response.body()).get("message").asString() shouldBe "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-25) 안이어야 합니다."
+        objectMapper.readTree(response.body()).get("message").asString() shouldBe "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-25) 안이어야 합니다. (연수)"
         request("POST", "/training/list/training-test-expo", "[$PROGRAM,$outside]").statusCode() shouldBe 400
         trainingProgramRepository.count() shouldBe 0
 

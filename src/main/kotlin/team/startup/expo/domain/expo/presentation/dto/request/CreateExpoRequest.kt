@@ -53,9 +53,8 @@ data class CreateExpoRequest(
         validateProgramPeriod(
             startedDay,
             finishedDay,
-            addStandardProRequestDto.map { Triple(it.title, it.startedAt, it.endedAt) } +
-                addTrainingProRequestDto.map { Triple(it.title, it.startedAt, it.endedAt) },
-            named = true,
+            addStandardProRequestDto.map { ProgramSchedule(it.title, it.startedAt, it.endedAt) } +
+                addTrainingProRequestDto.map { ProgramSchedule(it.title, it.startedAt, it.endedAt) },
         )
     }
 
