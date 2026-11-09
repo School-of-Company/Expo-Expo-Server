@@ -127,6 +127,21 @@ class TrainingProgramHttpContractTests {
     }
 
     @Test
+    fun `연수 일정은 저장된 박람회 기간 안이어야 하고 경계일은 허용한다`() {
+        val outside = PROGRAM.replace("2026-09-24 10:00", "2026-09-23 10:00")
+        val response = request("POST", "/training/training-test-expo", outside)
+        response.statusCode() shouldBe 400
+        objectMapper.readTree(response.body()).get("message").asString() shouldBe "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-25) 안이어야 합니다."
+        request("POST", "/training/list/training-test-expo", "[$PROGRAM,$outside]").statusCode() shouldBe 400
+        trainingProgramRepository.count() shouldBe 0
+
+        val boundary = PROGRAM.replace("2026-09-24 10:00", "2026-09-24 00:00").replace("2026-09-24 11:00", "2026-09-25 23:59")
+        request("POST", "/training/list/training-test-expo", "[$boundary]").statusCode() shouldBe 201
+        request("PATCH", "/training/1", PROGRAM.replace("2026-09-24 11:00", "2026-09-26 00:00")).statusCode() shouldBe 400
+        trainingProgramRepository.findById(1).orElseThrow().endedAt shouldBe "2026-09-25T23:59"
+    }
+
+    @Test
     fun `빈 일괄 목록은 허용하고 잘못된 배열 요소는 저장하지 않는다`() {
         request("POST", "/training/list/training-test-expo", "[]").statusCode() shouldBe 201
         request("POST", "/training/list/training-test-expo", "[$PROGRAM,${PROGRAM.replace("ESSENTIAL", "INVALID")}]")

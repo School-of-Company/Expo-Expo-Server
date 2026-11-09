@@ -149,6 +149,28 @@ class StandardApiPostgresHttpTests {
     }
 
     @Test
+    fun `프로그램 일정은 저장된 박람회 기간 안이어야 하고 시작일 0시와 종료일 23시 59분은 허용한다`() {
+        val before = program.replace("2026-09-24 09:00", "2026-09-23 23:59")
+        val after = program.replace("2026-09-24 10:00", "2026-09-26 00:00")
+        for (body in listOf(before, after)) {
+            val response = request("POST", "/standard/$expoId", body)
+            response.statusCode() shouldBe 400
+            mapper.readTree(response.body()).get("message").asString() shouldBe "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-25) 안이어야 합니다."
+            request("POST", "/standard/list/$expoId", "[$program,$body]").statusCode() shouldBe 400
+        }
+        standards.count() shouldBe 0L
+
+        val boundary = program.replace("2026-09-24 09:00", "2026-09-24 00:00").replace("2026-09-24 10:00", "2026-09-25 23:59")
+        request("POST", "/standard/$expoId", boundary).statusCode() shouldBe 201
+        request("POST", "/standard/list/$expoId", "[$boundary]").statusCode() shouldBe 201
+        request("PATCH", "/standard/1", after.dropLast(1) + ""","id":1}""").statusCode() shouldBe 400
+        request("PATCH", "/standard/1", before.dropLast(1) + ""","id":1}""").statusCode() shouldBe 400
+        request("PATCH", "/standard/1", program.dropLast(1) + ""","id":1}""").statusCode() shouldBe 204
+        standards.findById(1).orElseThrow().endedAt shouldBe "2026-09-24T10:00"
+        standards.findById(2).orElseThrow().endedAt shouldBe "2026-09-25T23:59"
+    }
+
+    @Test
     fun `Application 신청의 입력 오류와 없는 프로그램은 400과 404를 보존한다`() {
         request("POST", "/standard/$expoId", program).statusCode() shouldBe 201
         for (status in listOf(400, 404, 409, 500)) {

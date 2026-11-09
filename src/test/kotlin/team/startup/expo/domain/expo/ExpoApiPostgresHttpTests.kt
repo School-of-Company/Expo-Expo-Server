@@ -476,6 +476,59 @@ class ExpoApiPostgresHttpTests {
     }
 
     @Test
+    fun `박람회 생성과 수정은 요청의 모든 프로그램을 요청 기간과 비교하고 기간을 줄여 밖으로 밀리는 수정은 400이다`() {
+        assertError(
+            postExpo(VALID_REQUEST_JSON.replace("2026-09-24 09:00", "2026-09-23 23:59"), "ROLE_ADMIN"),
+            400,
+            "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-25) 안이어야 합니다. (일반 프로그램)",
+        )
+        expoRepository.count() shouldBe 0L
+
+        val expoId = createExpo()
+        val expo = expoRepository.findById(expoId).orElseThrow()
+        val standardId = standardProgramRepository.findByExpo(expo).single().id!!
+        val trainingId = trainingProgramRepository.findByExpo(expo).single().id!!
+        val unchanged =
+            """
+            {
+              "title": "2026 박람회",
+              "description": "설명",
+              "startedDay": "2026-09-25",
+              "finishedDay": "2026-09-25",
+              "location": "서울",
+              "coverImage": "https://example.com/cover.png",
+              "x": "127.123",
+              "y": "37.456",
+              "updateStandardProRequestDto": [${STANDARD_PROGRAM_JSON.replaceFirst("{", "{\"id\": $standardId,")}],
+              "updateTrainingProRequestDto": [${TRAINING_PROGRAM_JSON.replaceFirst("{", "{\"id\": $trainingId,")}]
+            }
+            """.trimIndent()
+        assertError(
+            request("/expo/$expoId", "PATCH", unchanged),
+            400,
+            "프로그램 일정은 박람회 기간(2026-09-25 ~ 2026-09-25) 안이어야 합니다. (일반 프로그램, 연수 프로그램)",
+        )
+        expoRepository.findById(expoId).orElseThrow().finishedDay shouldBe "2026-09-25"
+        expoRepository.findById(expoId).orElseThrow().startedDay shouldBe "2026-09-24"
+
+        val boundary =
+            updateRequest(standardId, trainingId)
+                .replace("\"finishedDay\": \"2026-09-26\"", "\"finishedDay\": \"2026-09-25\"")
+                .replace("2026-09-24 09:30", "2026-09-24 00:00")
+                .replace("2026-09-25 11:00", "2026-09-25 23:59")
+        request("/expo/$expoId", "PATCH", boundary).statusCode() shouldBe 204
+        assertError(
+            request(
+                "/expo/$expoId",
+                "PATCH",
+                updateRequest(standardId, trainingId).replace("2026-09-25 11:00\", \"category", "2026-09-27 11:00\", \"category"),
+            ),
+            400,
+            "프로그램 일정은 박람회 기간(2026-09-24 ~ 2026-09-26) 안이어야 합니다. (신규 연수)",
+        )
+    }
+
+    @Test
     fun `삭제는 세 소유 서비스를 순서대로 정리한 뒤 로컬 프로그램까지 삭제하고 빈 204를 반환한다`() {
         val expoId = createExpo()
         val expo = expoRepository.findById(expoId).orElseThrow()

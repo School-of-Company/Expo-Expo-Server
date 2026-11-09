@@ -205,7 +205,7 @@ class ProgramPoliciesPostgresHttpTests {
         jdbc.execute("TRUNCATE test_admission, test_change_receipt")
         expos.saveAll(
             listOf(EXPO, OTHER).map { id ->
-                Expo(id, "expo", "description", "2026-10-11", "2026-10-12", "place", "", "127", "37", 0, 0)
+                Expo(id, "expo", "description", "2026-10-11", "2026-10-14", "place", "", "127", "37", 0, 0)
             },
         )
     }
@@ -1928,7 +1928,7 @@ class ProgramPoliciesPostgresHttpTests {
         standard: String?,
         training: String?,
     ): String =
-        """{"title":"expo","description":"description","startedDay":"2026-10-11","finishedDay":"2026-10-12","location":"place","coverImage":"","x":"127","y":"37","updateStandardProRequestDto":[${standard ?: ""}],"updateTrainingProRequestDto":[${training ?: ""}]}"""
+        """{"title":"expo","description":"description","startedDay":"2026-10-11","finishedDay":"2026-10-14","location":"place","coverImage":"","x":"127","y":"37","updateStandardProRequestDto":[${standard ?: ""}],"updateTrainingProRequestDto":[${training ?: ""}]}"""
 
     private fun request(
         path: String,

@@ -3,6 +3,7 @@ package team.startup.expo.domain.training.service.impl
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import team.startup.expo.domain.expo.presentation.dto.request.validateProgramPeriod
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.service.ApplyProgramChangeService
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
@@ -10,6 +11,7 @@ import team.startup.expo.domain.training.presentation.dto.request.UpdateTraining
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
 import team.startup.expo.domain.training.service.UpdateTrainingProgramService
 import team.startup.expo.global.exception.ExpectedException
+import java.time.LocalDate
 
 @Service
 class UpdateTrainingProgramServiceImpl(
@@ -23,7 +25,12 @@ class UpdateTrainingProgramServiceImpl(
     ) {
         val expoId = programs.findExpoIdById(trainingProgramId) ?: missing()
         val pending =
-            policies.stage(expoId, policies.command("UPDATE_TRAINING", trainingProgramId, request)) {
+            policies.stage(expoId, policies.command("UPDATE_TRAINING", trainingProgramId, request)) { expo ->
+                validateProgramPeriod(
+                    LocalDate.parse(expo.startedDay),
+                    LocalDate.parse(expo.finishedDay),
+                    listOf(Triple(request.title, request.startedAt, request.endedAt)),
+                )
                 val current = programs.findByIdOrNull(trainingProgramId) ?: missing()
                 val mutation =
                     policies.update(
