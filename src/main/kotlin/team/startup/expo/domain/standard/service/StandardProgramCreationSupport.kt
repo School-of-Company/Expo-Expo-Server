@@ -6,6 +6,8 @@ import org.springframework.stereotype.Component
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeTargetType
 import team.startup.expo.domain.expo.presentation.dto.request.AdminChangeType
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramSchedule
+import team.startup.expo.domain.expo.presentation.dto.request.validateProgramPeriod
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramDefinition
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.AdminChangeHistoryRepository
@@ -40,6 +42,7 @@ class StandardProgramCreationSupport(
                 expos.findLockedById(expoId)
                     ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
             if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
+            expo.validateProgramPeriod(requests.map { ProgramSchedule(it.title, it.startedAt, it.endedAt) })
             events.changed(expoId)
             programs
                 .saveAll(

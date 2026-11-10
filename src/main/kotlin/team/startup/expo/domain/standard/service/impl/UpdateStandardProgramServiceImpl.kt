@@ -3,6 +3,8 @@ package team.startup.expo.domain.standard.service.impl
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import team.startup.expo.domain.expo.presentation.dto.request.ProgramSchedule
+import team.startup.expo.domain.expo.presentation.dto.request.validateProgramPeriod
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.service.ApplyProgramChangeService
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
@@ -23,7 +25,8 @@ class UpdateStandardProgramServiceImpl(
     ) {
         val expoId = programs.findByIdOrNull(programId)?.expo?.id ?: missing()
         val pending =
-            policies.stage(expoId, policies.command("UPDATE_STANDARD", programId, request)) {
+            policies.stage(expoId, policies.command("UPDATE_STANDARD", programId, request)) { expo ->
+                expo.validateProgramPeriod(listOf(ProgramSchedule(request.title, request.startedAt, request.endedAt)))
                 val current = programs.findByIdOrNull(programId) ?: missing()
                 val mutation =
                     policies.update(

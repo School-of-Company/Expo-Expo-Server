@@ -49,7 +49,15 @@ data class UpdateExpoRequest(
     @field:Schema(description = "새 사전등록 회차의 교사·예비교사 외 대상 정원 기본값", example = "1000")
     val preregisterNonTeacherCapacity: Int? = null,
 ) {
-    fun validatePeriod() = validateExpoPeriod(startedDay, finishedDay)
+    fun validatePeriod() {
+        validateExpoPeriod(startedDay, finishedDay)
+        validateProgramPeriod(
+            startedDay,
+            finishedDay,
+            updateStandardProRequestDto.map { ProgramSchedule(it.title, it.startedAt, it.endedAt) } +
+                updateTrainingProRequestDto.map { ProgramSchedule(it.title, it.startedAt, it.endedAt) },
+        )
+    }
 
     fun validatePreregisterCapacities() = validateTargetCapacities(preregisterTeacherCapacity, preregisterNonTeacherCapacity)
 }
