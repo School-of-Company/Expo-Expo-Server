@@ -25,7 +25,7 @@ data class ProgramSchedule(
     val endedAt: LocalDateTime,
 )
 
-// #258: 프로그램 일정은 박람회 기간(날짜 단위) 안이어야 한다. 기간 밖 프로그램 제목을 문구에 덧붙인다.
+// 프로그램 일정은 날짜 단위로 박람회 기간 안이어야 하고, 오류 문구에는 기간 밖 프로그램 제목을 덧붙인다.
 fun validateProgramPeriod(
     startedDay: LocalDate,
     finishedDay: LocalDate,
