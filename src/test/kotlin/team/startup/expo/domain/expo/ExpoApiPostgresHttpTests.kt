@@ -88,6 +88,9 @@ import javax.imageio.ImageIO
 @EntityScan("team.startup.expo.domain")
 @Testcontainers
 class ExpoApiPostgresHttpTests {
+    @Autowired
+    private lateinit var members: team.startup.expo.domain.expo.repository.ExpoMemberRepository
+
     @LocalServerPort
     private var port: Int = 0
 
@@ -217,8 +220,9 @@ class ExpoApiPostgresHttpTests {
             program.expo?.id shouldBe expoId
         }
         // 생성자(JWT 주체 1)에게만 신청 취소·수동 확정 권한을 기본 부여한다.
-        cancelAccessRepository.findAll().map { it.expoId to it.adminId } shouldBe listOf(expoId to 1L)
-        promoteAccessRepository.findAll().map { it.expoId to it.adminId } shouldBe listOf(expoId to 1L)
+        members.findByExpoIdAndAdminId(expoId, 1L)?.role shouldBe team.startup.expo.domain.expo.entity.ExpoMemberRole.OWNER
+        cancelAccessRepository.count() shouldBe 0L
+        promoteAccessRepository.count() shouldBe 0L
     }
 
     @Test
@@ -812,7 +816,7 @@ class ExpoApiPostgresHttpTests {
             statistics.entityLoadCount shouldBe 0L
             objectMapper.readTree(response.body()) shouldBe
                 objectMapper.readTree(
-                    """{"expoValid":[{"expoId":"$expoId","preStandardFormCreatedStatus":true,"siteStandardFormCreatedStatus":false,"traineeFormCreatedStatus":true,"standardSurveyCreatedStatus":true,"traineeSurveyCreatedStatus":false}]}""",
+                    """{"expoValid":[{"expoId":"$expoId","preStandardFormCreatedStatus":true,"siteStandardFormCreatedStatus":false,"traineeFormCreatedStatus":true,"standardSurveyCreatedStatus":true,"traineeSurveyCreatedStatus":false,"myRole":null}]}""",
                 )
             (maxActiveRequests.get() > 1) shouldBe true
         } finally {

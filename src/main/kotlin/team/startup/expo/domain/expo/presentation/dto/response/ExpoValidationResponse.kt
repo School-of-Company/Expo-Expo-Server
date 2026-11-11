@@ -20,4 +20,5 @@ data class ExpoValidResponse(
     val standardSurveyCreatedStatus: Boolean,
     @field:Schema(description = "연수 설문 생성 여부", example = "false")
     val traineeSurveyCreatedStatus: Boolean,
+    val myRole: team.startup.expo.domain.expo.entity.ExpoMemberRole? = null,
 )

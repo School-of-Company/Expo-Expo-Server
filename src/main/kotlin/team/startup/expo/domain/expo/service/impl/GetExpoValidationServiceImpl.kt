@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationResponse
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoRoleSupport
 import team.startup.expo.domain.expo.service.FormLookupClient
 import team.startup.expo.domain.expo.service.GetExpoValidationService
 import team.startup.expo.global.exception.ExpectedException
@@ -15,9 +16,12 @@ import java.util.concurrent.CompletionException
 class GetExpoValidationServiceImpl(
     private val expoRepository: ExpoRepository,
     private val forms: FormLookupClient,
+    private val roles: ExpoRoleSupport,
 ) : GetExpoValidationService {
     override fun execute(): ExpoValidationResponse {
-        val expoIds = expoRepository.findAllIds()
+        val visible = roles.visibleRoles()
+        val myRoles = if (roles.enabled) visible ?: roles.currentRoles() else emptyMap()
+        val expoIds = if (visible == null) expoRepository.findAllIds() else visible.keys.toList()
         if (expoIds.isNotEmpty()) forms.requireConfiguration()
 
         val results =
@@ -33,6 +37,7 @@ class GetExpoValidationServiceImpl(
                     .thenApply {
                         ExpoValidResponse(
                             expoId = expoId,
+                            myRole = myRoles[expoId],
                             preStandardFormCreatedStatus = preStandard.join(),
                             siteStandardFormCreatedStatus = siteStandard.join(),
                             traineeFormCreatedStatus = preTrainee.join() || fieldTrainee.join(),

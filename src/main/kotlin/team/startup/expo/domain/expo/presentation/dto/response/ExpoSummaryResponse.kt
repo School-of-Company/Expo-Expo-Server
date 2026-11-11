@@ -15,4 +15,5 @@ data class ExpoSummaryResponse(
     val finishedDay: String,
     @field:Schema(description = "업로드한 대표 이미지 URL", example = "https://example.invalid/image/sample")
     val coverImage: String?,
+    val myRole: team.startup.expo.domain.expo.entity.ExpoMemberRole? = null,
 )

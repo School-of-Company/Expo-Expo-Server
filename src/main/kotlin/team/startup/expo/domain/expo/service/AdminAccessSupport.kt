@@ -4,6 +4,7 @@ import org.springframework.dao.DataAccessException
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.context.SecurityContextHolder
+import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.security.oauth2.jwt.JwtDecoder
 import org.springframework.security.oauth2.jwt.JwtException
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
@@ -29,15 +30,7 @@ class AdminAccessSupport(
     fun currentName(): String? = SecurityContextHolder.getContext().authentication?.name
 
     fun authenticate(authorization: String?): Long {
-        val token =
-            authorization?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")?.takeIf { it.isNotBlank() }
-                ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
-        val jwt =
-            try {
-                decoder.decode(token)
-            } catch (exception: JwtException) {
-                throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
-            }
+        val jwt = decode(authorization)
         val adminId =
             jwt.subject?.toLongOrNull()?.takeIf { it > 0 }
                 ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
@@ -46,6 +39,17 @@ class AdminAccessSupport(
         }
         authority.requireCurrentAdmin(requireNotNull(authorization))
         return adminId
+    }
+
+    fun decode(authorization: String?): Jwt {
+        val token =
+            authorization?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")?.takeIf { it.isNotBlank() }
+                ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+        return try {
+            decoder.decode(token)
+        } catch (exception: JwtException) {
+            throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")
+        }
     }
 
     fun requireGrant(
