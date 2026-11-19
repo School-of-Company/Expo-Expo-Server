@@ -190,7 +190,7 @@ class StandardApiPostgresHttpTests {
         list[0].get("id").asLong() shouldBe 1L
         list[0].get("startedAt").asString() shouldBe "2026-09-24T09:00"
         list[0].get("endedAt").asString() shouldBe "2026-09-24T10:00"
-        list[0].size() shouldBe 11
+        list[0].size() shouldBe 12
         list[0].get("programType").asString() shouldBe "STANDARD"
         list[0].get("revision").asLong() shouldBe 1L
         list[0].get("policy").isNull shouldBe true

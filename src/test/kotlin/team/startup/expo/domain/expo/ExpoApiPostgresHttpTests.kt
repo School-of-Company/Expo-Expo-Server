@@ -977,7 +977,7 @@ class ExpoApiPostgresHttpTests {
             tree.get("title").asString() shouldBe "2026 박람회"
             tree.get("location").asString() shouldBe "서울"
             tree.propertyNames().asSequence().toSet() shouldBe
-                setOf("title", "description", "location", "startedDay", "finishedDay", "participantPhoneVerificationRequired")
+                setOf("title", "description", "location", "startedDay", "finishedDay", "participantPhoneVerificationRequired", "features")
             tree.get("participantPhoneVerificationRequired").asBoolean() shouldBe true
         }
         request("/expo/$expoId/public", "GET", authority = "ROLE_USER").statusCode() shouldBe 200
@@ -1013,7 +1013,9 @@ class ExpoApiPostgresHttpTests {
         val period = objectMapper.readTree(response.body())
 
         response.statusCode() shouldBe 200
-        period.size() shouldBe 6
+        period.size() shouldBe 8
+        period.get("featureRevision").asLong() shouldBe 0L
+        period.get("features").size() shouldBe 13
         period.get("participantPhoneVerificationRequired").asBoolean() shouldBe true
         period.get("participantPhoneVerificationRevision").asLong() shouldBe 0L
         period.get("title").asString() shouldBe "2026 박람회"
@@ -1392,11 +1394,12 @@ class ExpoApiPostgresHttpTests {
 
         val statistics = entityManagerFactory.unwrap(SessionFactory::class.java).statistics
         statistics.clear()
+        // 기존 3개 + 기능 설정 1개(tb_expo_feature, featureEnabled). 회차 수와 무관하다.
         val standardResponse = request("/standard/program/$expoId", "GET")
-        statistics.prepareStatementCount shouldBe 3L
+        statistics.prepareStatementCount shouldBe 4L
         statistics.clear()
         val trainingResponse = request("/training/program/$expoId", "GET")
-        statistics.prepareStatementCount shouldBe 3L
+        statistics.prepareStatementCount shouldBe 4L
 
         standardResponse.statusCode() shouldBe 200
         trainingResponse.statusCode() shouldBe 200
@@ -1961,7 +1964,17 @@ class ExpoApiPostgresHttpTests {
             copy.get("pendingRevision").isNull shouldBe true
             copy.get("place").isNull shouldBe true
             UUID.fromString(copy.get("groupId").asString()).toString() shouldBe copy.get("groupId").asString()
-            listOf("expoId", "programType", "groupId", "policy", "revision", "pendingRevision", "place").forEach { copy.remove(it) }
+            copy.get("featureEnabled")?.let { if (!it.isNull) it.asBoolean() shouldBe true }
+            listOf(
+                "expoId",
+                "programType",
+                "groupId",
+                "policy",
+                "revision",
+                "pendingRevision",
+                "place",
+                "featureEnabled",
+            ).forEach { copy.remove(it) }
             if (titleOnly) listOf("startedAt", "endedAt").forEach { copy.remove(it) }
             return copy
         }

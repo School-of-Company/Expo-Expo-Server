@@ -32,6 +32,14 @@ data class TrainingProgramResponse(
     val pendingRevision: Long? = null,
     @field:Schema(description = "Session place; null means location to be announced")
     val place: String? = null,
+    @field:Schema(
+        description =
+            "이 프로그램 종류 기능(STANDARD_PROGRAM/TRAINING_PROGRAM)의 실효 값. false면 신규 신청을 받지 않으며(FEATURE_DISABLED) " +
+                "빈 목록·없는 프로그램과 다릅니다. 목록·내부 조회에서만 채웁니다.",
+        example = "true",
+        nullable = true,
+    )
+    val featureEnabled: Boolean? = null,
 ) {
     companion object {
         fun from(
@@ -39,6 +47,7 @@ data class TrainingProgramResponse(
             expoId: String,
             policy: ProgramPolicyRequest?,
             pendingRevision: Long? = null,
+            featureEnabled: Boolean? = null,
         ): TrainingProgramResponse =
             TrainingProgramResponse(
                 id = requireNotNull(program.id),
@@ -52,6 +61,7 @@ data class TrainingProgramResponse(
                 startedAt = program.startedAt,
                 endedAt = program.endedAt,
                 category = program.category,
+                featureEnabled = featureEnabled,
             )
     }
 }

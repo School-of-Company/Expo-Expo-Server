@@ -118,6 +118,9 @@ class TrainingSmsIntegrationTests {
     private lateinit var expos: ExpoRepository
 
     @Autowired
+    private lateinit var features: team.startup.expo.domain.expo.service.ExpoFeatureSupport
+
+    @Autowired
     private lateinit var programs: TrainingProgramRepository
 
     @Autowired
@@ -680,7 +683,7 @@ class TrainingSmsIntegrationTests {
                     .feignClient<team.startup.expo.global.client.PublicFormClient>(""),
                 breakers,
             )
-        val service = ApplyTrainingProgramListServiceImpl(expos, policies, programs, missing, applicationSms, dbTransactions)
+        val service = ApplyTrainingProgramListServiceImpl(expos, policies, features, programs, missing, applicationSms, dbTransactions)
         val error = assertThrows(ExpectedException::class.java) { service.execute(ApplyTrainingProgramsRequest("training-1", listOf(1))) }
         error.status shouldBe HttpStatus.SERVICE_UNAVAILABLE
         count() shouldBe 0L

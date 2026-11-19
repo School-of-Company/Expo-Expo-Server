@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoFeatureSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsWithTraineeRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
@@ -23,6 +24,7 @@ import java.time.ZoneId
 class ApplyTrainingProgramsWithTraineeServiceImpl(
     private val expos: ExpoRepository,
     private val policies: ProgramPolicySupport,
+    private val features: ExpoFeatureSupport,
     private val programs: TrainingProgramRepository,
     private val dependencies: TrainingDependenciesClient,
     private val sms: TrainingApplicationSmsService,
@@ -46,6 +48,8 @@ class ApplyTrainingProgramsWithTraineeServiceImpl(
                         throw ExpectedException(HttpStatus.BAD_REQUEST, "해당 박람회는 진행 중인 상태가 아닙니다.")
                     }
                     policies.ensureAvailable(expoId)
+                    // 빈 목록 교체는 기존 신청 철회이므로 기능 OFF여도 허용한다.
+                    if (ids.isNotEmpty()) features.ensureEnabled(expoId, "TRAINING_PROGRAM")
                     if (programs.existsByExpoIdAndPolicyJsonIsNotNull(expoId)) {
                         throw ExpectedException(HttpStatus.CONFLICT, "정책이 설정된 프로그램은 기존 일괄 교체 신청을 사용할 수 없습니다.")
                     }
