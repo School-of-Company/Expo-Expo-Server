@@ -28,6 +28,7 @@ class ExpoEventSupport(
     private val sessions: PreregisterSessionRepository,
     private val programChanges: ProgramChangeRepository,
     private val outbox: ExpoEventOutboxRepository,
+    private val features: ExpoFeatureSupport,
     private val mapper: ObjectMapper,
     private val immediatePublisher: ObjectProvider<PublishCommittedExpoEventService>,
 ) {
@@ -81,7 +82,12 @@ class ExpoEventSupport(
                     sessions.findAllByExpoIdOrderByStartedAtAscIdAsc(expoId),
                     mapper,
                     programChanges.findByIdOrNull(expoId)?.let { mapper.readValue(it.payloadJson, ProgramChangePayload::class.java) },
-                ).copy(expo = mapper.readValue(requireNotNull(state), ExpoState::class.java))
+                ).copy(
+                    expo =
+                        mapper
+                            .readValue(requireNotNull(state), ExpoState::class.java)
+                            .copy(features = features.states(expoId)),
+                )
         return outbox.insert(expoId, mapper.writeValueAsString(snapshot))
     }
 

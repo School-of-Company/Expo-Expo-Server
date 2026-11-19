@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoFeatureSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.presentation.dto.request.ApplyTrainingProgramsRequest
 import team.startup.expo.domain.training.repository.TrainingProgramRepository
@@ -17,6 +18,7 @@ import team.startup.expo.global.exception.ExpectedException
 class ApplyTrainingProgramListServiceImpl(
     private val expos: ExpoRepository,
     private val policies: ProgramPolicySupport,
+    private val features: ExpoFeatureSupport,
     private val programs: TrainingProgramRepository,
     private val dependencies: TrainingDependenciesClient,
     private val sms: TrainingApplicationSmsService,
@@ -38,6 +40,7 @@ class ApplyTrainingProgramListServiceImpl(
                     if (matching.size != ids.size) throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
                     val expo = expos.findLockedById(expoId) ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
                     if (expo.deletingAt != null) throw ExpectedException(HttpStatus.CONFLICT, "삭제 중인 박람회입니다.")
+                    features.ensureEnabled(expo.id, "TRAINING_PROGRAM")
                     expo to matching
                 },
             )

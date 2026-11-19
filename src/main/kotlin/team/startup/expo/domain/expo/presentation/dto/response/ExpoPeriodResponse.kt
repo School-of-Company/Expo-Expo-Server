@@ -15,4 +15,12 @@ data class ExpoPeriodResponse(
     val participantPhoneVerificationRevision: Long,
     @field:Schema(description = "박람회 장소", example = "광주 김대중컨벤션센터", nullable = true)
     val location: String? = null,
+    @field:Schema(
+        description =
+            "모든 기능의 상태(카탈로그 순서, key/configuredEnabled/effectiveEnabled). 정책 검사는 effectiveEnabled만 씁니다. " +
+                "이 필드나 필요한 키가 없으면 소비 서버는 신규 쓰기를 503으로 막습니다(docs/expo-feature-settings.md).",
+    )
+    val features: List<ExpoFeatureStateResponse>,
+    @field:Schema(description = "기능 설정 revision", example = "0", minimum = "0")
+    val featureRevision: Long,
 )

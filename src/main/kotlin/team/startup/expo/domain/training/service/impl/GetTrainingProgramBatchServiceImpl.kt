@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoFeatureSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.training.presentation.dto.request.TrainingProgramBatchRequest
 import team.startup.expo.domain.training.presentation.dto.response.TrainingProgramResponse
@@ -16,6 +17,7 @@ import team.startup.expo.global.exception.ExpectedException
 class GetTrainingProgramBatchServiceImpl(
     private val expoRepository: ExpoRepository,
     private val policies: ProgramPolicySupport,
+    private val features: ExpoFeatureSupport,
     private val trainingProgramRepository: TrainingProgramRepository,
 ) : GetTrainingProgramBatchService {
     @Transactional(readOnly = true)
@@ -34,8 +36,9 @@ class GetTrainingProgramBatchServiceImpl(
             throw ExpectedException(HttpStatus.NOT_FOUND, "연수 프로그램을 찾지 못했습니다.")
         }
 
+        val enabled = features.enabled(expoId, "TRAINING_PROGRAM")
         return programs.sortedBy { it.id }.map { program ->
-            TrainingProgramResponse.from(program, expoId, policies.policy(program.policyJson))
+            TrainingProgramResponse.from(program, expoId, policies.policy(program.policyJson), featureEnabled = enabled)
         }
     }
 }

@@ -84,6 +84,9 @@ image:
 expo:
   member-roles:
     enabled: ${EXPO_MEMBER_ROLES_ENABLED:false}
+  # 새 박람회 기능 기본값(사전등록만 ON). 기능 설정 화면 공개 전까지 false로 두면 새 박람회도 모든 기능 ON. docs/expo-feature-settings.md
+  features:
+    new-expo-defaults-enabled: ${EXPO_FEATURE_NEW_DEFAULTS_ENABLED:false}
   standard-created:
     enabled: ${KAFKA_STANDARD_CREATED_ENABLED:false}
   # 박람회·프로그램 변경 이벤트(expo.expo.changed) 아웃박스와 릴레이. docs/expo-change-events.md

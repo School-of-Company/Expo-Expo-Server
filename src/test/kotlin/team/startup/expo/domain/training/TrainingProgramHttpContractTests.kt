@@ -101,7 +101,10 @@ class TrainingProgramHttpContractTests {
         java.util.UUID
             .fromString(program.get("groupId").asString())
             .toString() shouldBe program.get("groupId").asString()
-        listOf("expoId", "programType", "groupId", "policy", "revision", "pendingRevision", "place").forEach { program.remove(it) }
+        program.get("featureEnabled").asBoolean() shouldBe true
+        listOf("expoId", "programType", "groupId", "policy", "revision", "pendingRevision", "place", "featureEnabled").forEach {
+            program.remove(it)
+        }
         program.toString() shouldBe
             """{"id":1,"title":"연수","startedAt":"2026-09-24T10:00","endedAt":"2026-09-24T11:00","category":"ESSENTIAL"}"""
     }

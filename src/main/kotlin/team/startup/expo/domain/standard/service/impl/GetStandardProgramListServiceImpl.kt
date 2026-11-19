@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoFeatureSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.standard.presentation.dto.response.StandardProgramResponse
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
@@ -16,6 +17,7 @@ import team.startup.expo.global.exception.ExpectedException
 class GetStandardProgramListServiceImpl(
     private val expoRepository: ExpoRepository,
     private val policies: ProgramPolicySupport,
+    private val features: ExpoFeatureSupport,
     private val standardProgramRepository: StandardProgramRepository,
 ) : GetStandardProgramListService {
     @Transactional(readOnly = true)
@@ -24,6 +26,7 @@ class GetStandardProgramListServiceImpl(
             ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾지 못 했습니다.")
 
         val pending = policies.pendingRevisions(expoId, ProgramType.STANDARD)
+        val enabled = features.enabled(expoId, "STANDARD_PROGRAM")
         return standardProgramRepository.findByExpoIdOrderByIdAsc(expoId).map { program ->
             StandardProgramResponse(
                 id = requireNotNull(program.id),
@@ -36,6 +39,7 @@ class GetStandardProgramListServiceImpl(
                 pendingRevision = pending[program.id],
                 startedAt = program.startedAt,
                 endedAt = program.endedAt,
+                featureEnabled = enabled,
             )
         }
     }

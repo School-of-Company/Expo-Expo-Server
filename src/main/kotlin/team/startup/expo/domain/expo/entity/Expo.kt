@@ -61,6 +61,15 @@ class Expo(
         }
     }
 
+    // 기능 설정(tb_expo_feature) 저장마다 하나씩 늘린다. 전화 인증은 위 revision을 따로 쓴다.
+    @field:Column(name = "feature_revision", nullable = false)
+    var featureRevision: Long = 0
+        protected set
+
+    fun increaseFeatureRevision() {
+        featureRevision++
+    }
+
     @field:Column(name = "application_person", nullable = false)
     var applicationPerson: Long = applicationPerson
         protected set

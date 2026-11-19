@@ -396,7 +396,7 @@ class ProgramPolicySupport(
     }
 
     // Form 검증 결과는 행사·유형·정책으로만 정해진다. 묶음 ID는 생성할 때마다 새로 정해지므로 뺀다.
-    private fun formKey(definition: ProgramDefinition): Any =
+    fun formKey(definition: ProgramDefinition): Any =
         Triple(definition.expoId, definition.programType, definition.policy?.copy(groupId = null))
 
     data class FormCheck(

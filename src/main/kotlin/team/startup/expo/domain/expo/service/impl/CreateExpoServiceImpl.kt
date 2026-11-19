@@ -16,6 +16,7 @@ import team.startup.expo.domain.expo.repository.ExpoRepository
 import team.startup.expo.domain.expo.service.AdminAccessSupport
 import team.startup.expo.domain.expo.service.CreateExpoService
 import team.startup.expo.domain.expo.service.ExpoEventSupport
+import team.startup.expo.domain.expo.service.ExpoFeatureSupport
 import team.startup.expo.domain.expo.service.ProgramPolicySupport
 import team.startup.expo.domain.image.service.AttachExpoImageService
 import team.startup.expo.domain.standard.repository.StandardProgramRepository
@@ -39,6 +40,7 @@ class CreateExpoServiceImpl(
     private val history: AdminChangeHistoryRepository,
     private val members: ExpoMemberRepository,
     private val events: ExpoEventSupport,
+    private val features: ExpoFeatureSupport,
 ) : CreateExpoService {
     override fun execute(request: CreateExpoRequest): CreateExpoResponse {
         // 폼 검증을 트랜잭션 밖에서 먼저 하도록 ID를 미리 만든다.
@@ -67,6 +69,11 @@ class CreateExpoServiceImpl(
                         preregisterNonTeacherCapacity = request.preregisterNonTeacherCapacity,
                     )
                 expoRepository.saveAndFlush(expo)
+                features.initialize(
+                    expo.id,
+                    request.addStandardProRequestDto.isNotEmpty(),
+                    request.addTrainingProRequestDto.isNotEmpty(),
+                )
                 events.changed(expo.id)
                 val creatorId =
                     admins.currentAdminId() ?: throw ExpectedException(HttpStatus.UNAUTHORIZED, "인증이 필요합니다.")

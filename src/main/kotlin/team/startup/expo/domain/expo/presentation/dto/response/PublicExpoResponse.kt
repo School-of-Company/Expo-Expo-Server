@@ -15,4 +15,6 @@ data class PublicExpoResponse(
     val finishedDay: String,
     @field:Schema(description = "참가자 전화번호 인증 필요 여부", example = "true")
     val participantPhoneVerificationRequired: Boolean,
+    @field:Schema(description = "참가자용 기능의 실효 값(카탈로그 순서, key/effectiveEnabled)")
+    val features: List<ExpoFeatureStateResponse>,
 )
