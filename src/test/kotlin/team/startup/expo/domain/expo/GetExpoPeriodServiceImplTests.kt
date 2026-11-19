@@ -7,14 +7,17 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 import org.springframework.http.HttpStatus
 import team.startup.expo.domain.expo.entity.Expo
+import team.startup.expo.domain.expo.repository.ExpoFeatureSettingRepository
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoFeatureCatalog
+import team.startup.expo.domain.expo.service.ExpoFeatureSupport
 import team.startup.expo.domain.expo.service.impl.GetExpoPeriodServiceImpl
 import team.startup.expo.global.exception.ExpectedException
 import java.util.Optional
 
 class GetExpoPeriodServiceImplTests {
     private val repository = mock(ExpoRepository::class.java)
-    private val service = GetExpoPeriodServiceImpl(repository)
+    private val service = GetExpoPeriodServiceImpl(repository, ExpoFeatureSupport(mock(ExpoFeatureSettingRepository::class.java), false))
 
     @Test
     fun `응답에 박람회 장소가 포함된다`() {
@@ -27,6 +30,10 @@ class GetExpoPeriodServiceImplTests {
         response.title shouldBe "제목"
         response.startedDay shouldBe "2030-01-01"
         response.finishedDay shouldBe "2030-01-02"
+        // 설정 행이 없는 기존 박람회는 종전처럼 모든 기능이 실효 ON이다.
+        response.features.map { it.key } shouldBe ExpoFeatureCatalog.definitions.map { it.key }
+        response.features.all { it.configuredEnabled == true && it.effectiveEnabled } shouldBe true
+        response.featureRevision shouldBe 0L
     }
 
     @Test

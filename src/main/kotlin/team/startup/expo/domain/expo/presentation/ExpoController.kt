@@ -19,19 +19,23 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import team.startup.expo.domain.expo.presentation.dto.request.CreateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.request.ExpoPageRequest
+import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoFeatureSettingsRequest
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateExpoRequest
 import team.startup.expo.domain.expo.presentation.dto.request.UpdateParticipantPhoneVerificationRequest
 import team.startup.expo.domain.expo.presentation.dto.response.CreateExpoResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoDetailResponse
+import team.startup.expo.domain.expo.presentation.dto.response.ExpoFeatureSettingsResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoValidationResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ParticipantPhoneVerificationResponse
 import team.startup.expo.domain.expo.presentation.dto.response.PublicExpoResponse
 import team.startup.expo.domain.expo.service.CreateExpoService
 import team.startup.expo.domain.expo.service.DeleteExpoService
 import team.startup.expo.domain.expo.service.GetExpoDetailService
+import team.startup.expo.domain.expo.service.GetExpoFeatureSettingsService
 import team.startup.expo.domain.expo.service.GetExpoListService
 import team.startup.expo.domain.expo.service.GetExpoValidationService
 import team.startup.expo.domain.expo.service.GetPublicExpoService
+import team.startup.expo.domain.expo.service.UpdateExpoFeatureSettingsService
 import team.startup.expo.domain.expo.service.UpdateExpoService
 import team.startup.expo.domain.expo.service.UpdateParticipantPhoneVerificationService
 import team.startup.expo.global.swagger.ApiConflictError
@@ -51,7 +55,31 @@ class ExpoController(
     private val deleteExpoService: DeleteExpoService,
     private val getExpoValidationService: GetExpoValidationService,
     private val updateParticipantPhoneVerificationService: UpdateParticipantPhoneVerificationService,
+    private val getExpoFeatureSettingsService: GetExpoFeatureSettingsService,
+    private val updateExpoFeatureSettingsService: UpdateExpoFeatureSettingsService,
 ) {
+    @GetMapping("/{expo_id}/features")
+    @Operation(summary = "박람회 기능 설정 조회", description = "기능 목록, 선택값·실효 값·준비 상태, revision과 전화번호 인증 설정을 반환합니다.")
+    @ApiResponse(responseCode = "200", description = "처리 성공")
+    @ApiNotFoundError
+    fun getExpoFeatureSettings(
+        @PathVariable("expo_id") expoId: String,
+    ): ResponseEntity<ExpoFeatureSettingsResponse> = ResponseEntity.ok(getExpoFeatureSettingsService.execute(expoId))
+
+    @PatchMapping("/{expo_id}/features")
+    @Operation(
+        summary = "박람회 기능 설정 일괄 변경",
+        description = "바꿀 기능과 expectedRevision을 받아 한 번에 저장합니다. 자식 기능을 켜면 선행 기능도 켭니다. revision이 다르면 아무것도 저장하지 않고 409입니다.",
+    )
+    @ApiResponse(responseCode = "200", description = "처리 성공")
+    @ApiInputError
+    @ApiNotFoundError
+    @ApiConflictError
+    fun updateExpoFeatureSettings(
+        @PathVariable("expo_id") expoId: String,
+        @Valid @RequestBody request: UpdateExpoFeatureSettingsRequest,
+    ): ResponseEntity<ExpoFeatureSettingsResponse> = ResponseEntity.ok(updateExpoFeatureSettingsService.execute(expoId, request))
+
     @PatchMapping("/{expo_id}/participant-phone-verification")
     @Operation(summary = "참가자 전화번호 인증 설정 변경", description = "실제 값이 바뀔 때만 revision을 증가시킵니다.")
     @ApiResponse(responseCode = "200", description = "처리 성공")
@@ -106,7 +134,7 @@ class ExpoController(
     ): ResponseEntity<ExpoDetailResponse> = ResponseEntity.ok(getExpoDetailService.execute(expoId))
 
     @GetMapping("/{expo_id}/public")
-    @Operation(summary = "참가자용 박람회 공개 조회", description = "로그인 없이 조회하며 제목·설명·장소·시작일·종료일과 참가자 전화번호 인증 필요 여부만 반환합니다.")
+    @Operation(summary = "참가자용 박람회 공개 조회", description = "로그인 없이 조회하며 제목·설명·장소·시작일·종료일, 참가자 전화번호 인증 필요 여부와 참가자용 기능의 실효 값만 반환합니다.")
     @ApiResponse(responseCode = "200", description = "처리 성공")
     @ApiNotFoundError
     fun getPublicExpo(

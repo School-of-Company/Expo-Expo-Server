@@ -2,6 +2,7 @@ package team.startup.expo.domain.expo.messaging
 
 import team.startup.expo.domain.expo.entity.Expo
 import team.startup.expo.domain.expo.entity.PreregisterSession
+import team.startup.expo.domain.expo.presentation.dto.response.ExpoFeatureStateResponse
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramChangePayload
 import team.startup.expo.domain.expo.presentation.dto.response.ProgramType
 import team.startup.expo.domain.standard.entity.StandardProgram
@@ -76,6 +77,7 @@ data class ExpoEventSnapshot(
                     participantPhoneVerificationRevision = expo.participantPhoneVerificationRevision,
                     deleting = expo.deletingAt != null,
                     programChangePending = programChange != null,
+                    featureRevision = expo.featureRevision,
                 ),
                 standards.sortedBy { it.id }.map {
                     StandardProgramState(
@@ -143,6 +145,9 @@ data class ExpoState(
     val participantPhoneVerificationRevision: Long,
     val deleting: Boolean,
     val programChangePending: Boolean,
+    val featureRevision: Long = 0,
+    // 기능 상태(카탈로그 순서, key/configuredEnabled/effectiveEnabled). ExpoEventSupport.enqueue가 같은 트랜잭션에서 채운다.
+    val features: List<ExpoFeatureStateResponse> = emptyList(),
 )
 
 data class StandardProgramState(

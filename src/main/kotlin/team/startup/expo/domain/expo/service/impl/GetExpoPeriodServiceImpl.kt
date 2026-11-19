@@ -6,12 +6,14 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import team.startup.expo.domain.expo.presentation.dto.response.ExpoPeriodResponse
 import team.startup.expo.domain.expo.repository.ExpoRepository
+import team.startup.expo.domain.expo.service.ExpoFeatureSupport
 import team.startup.expo.domain.expo.service.GetExpoPeriodService
 import team.startup.expo.global.exception.ExpectedException
 
 @Service
 class GetExpoPeriodServiceImpl(
     private val expoRepository: ExpoRepository,
+    private val features: ExpoFeatureSupport,
 ) : GetExpoPeriodService {
     @Transactional(readOnly = true)
     override fun execute(expoId: String): ExpoPeriodResponse {
@@ -25,6 +27,8 @@ class GetExpoPeriodServiceImpl(
             participantPhoneVerificationRequired = expo.participantPhoneVerificationRequired,
             participantPhoneVerificationRevision = expo.participantPhoneVerificationRevision,
             location = expo.location,
+            features = features.states(expoId),
+            featureRevision = expo.featureRevision,
         )
     }
 }

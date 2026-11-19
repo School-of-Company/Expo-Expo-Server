@@ -52,6 +52,22 @@ class ProgramPolicyClient(
         }
     }
 
+    // Form의 박람회 설문 요약. 실패는 ExpectedException(5xx)으로 던진다. 트랜잭션·락 밖에서 부른다.
+    fun surveySummaries(expoId: String): JsonNode {
+        val response =
+            call(Downstream.FORM, formUrl, formToken, idempotent = true) {
+                forms.surveySummaries(mapper.writeValueAsString(mapOf("expoIds" to listOf(expoId))))
+            }
+        if (response.status() != 200) badResponse()
+        return try {
+            mapper.readTree(response.bodyText()).takeIf { it.isArray } ?: badResponse()
+        } catch (exception: ExpectedException) {
+            throw exception
+        } catch (exception: Exception) {
+            badResponse()
+        }
+    }
+
     private fun fetchForm(formId: UUID): ProgramForm {
         val response = call(Downstream.FORM, formUrl, formToken, idempotent = true) { forms.byId(formId.toString()) }
         if (response.status() == 404) throw ExpectedException(HttpStatus.NOT_FOUND, "프로그램 폼을 찾지 못 했습니다.")

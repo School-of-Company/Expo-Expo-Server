@@ -37,6 +37,7 @@ interface ExpoRepository : JpaRepository<Expo, String> {
             'participantPhoneVerificationRequired',participant_phone_verification_required,
             'participantPhoneVerificationRevision',participant_phone_verification_revision,
             'deleting',deleting_at IS NOT NULL,
+            'featureRevision',feature_revision,
             'programChangePending',EXISTS(SELECT 1 FROM tb_program_change WHERE expo_id=:expoId)
         )::text FROM tb_expo WHERE id=:expoId""",
         nativeQuery = true,

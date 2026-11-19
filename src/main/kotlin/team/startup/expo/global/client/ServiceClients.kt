@@ -184,6 +184,12 @@ interface FormClient {
     fun deleteExpo(
         @PathVariable expoId: String,
     ): Response
+
+    // 박람회별 설문과 추첨 운영 준비(lotteryEnabled, lotteryNumbersConfigured). 기능 설정 준비 상태에 쓴다.
+    @PostMapping("/internal/surveys/summaries", consumes = [MediaType.APPLICATION_JSON_VALUE])
+    fun surveySummaries(
+        @RequestBody body: String,
+    ): Response
 }
 
 @FeignClient(name = "publicForm", url = "\${expo.form-service-url:}", configuration = [PublicClientConfiguration::class])

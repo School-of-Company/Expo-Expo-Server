@@ -29,6 +29,9 @@ class UpdateParticipantPhoneVerificationServiceImpl(
             expoRepository.findLockedById(expoId)
                 ?: throw ExpectedException(HttpStatus.NOT_FOUND, "박람회를 찾을 수 없습니다.")
         policies.ensureAvailable(expoId)
+        if (request.expectedRevision != null && request.expectedRevision != expo.participantPhoneVerificationRevision) {
+            throw ExpectedException(HttpStatus.CONFLICT, "다른 곳에서 전화번호 인증 설정이 먼저 바뀌었습니다. 새로 불러온 뒤 다시 저장해 주세요.")
+        }
         if (expo.participantPhoneVerificationRequired != required) events.changed(expoId)
         expo.updateParticipantPhoneVerification(required)
         return ParticipantPhoneVerificationResponse(
