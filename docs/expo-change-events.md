@@ -40,7 +40,14 @@
     "participantPhoneVerificationRequired": true,
     "participantPhoneVerificationRevision": 0,
     "deleting": false,
-    "programChangePending": false
+    "programChangePending": false,
+    "featureRevision": 3,
+    "features": [
+      { "key": "PRE_REGISTRATION", "configuredEnabled": true, "effectiveEnabled": true },
+      { "key": "QR_ADMISSION", "configuredEnabled": false, "effectiveEnabled": false },
+      { "key": "PAPER_QR", "configuredEnabled": true, "effectiveEnabled": false },
+      { "key": "SURVEY", "configuredEnabled": true, "effectiveEnabled": true }
+    ]
   },
   "standardPrograms": [
     {
@@ -101,6 +108,8 @@
 | 회차 일시                      | UTC ISO 8601 (`/internal/expo/{id}/preregister-sessions`와 같다).                                                                       |
 | `revision`                     | 프로그램·회차 정의 버전. `/internal/**` 응답의 revision과 같다.                                                                         |
 | `expo.programChangePending`    | 진행 중인 프로그램 변경(`tb_program_change` 행)이 있다. 이 동안 Expo는 프로그램 조회(`GET .../standard-programs/{id}`, `POST .../training-programs/batch`)를 409로 답한다(`ProgramPolicySupport.ensureAvailable`). 박람회 단위라 바뀌는 프로그램이 없는 변경(박람회 수정, 새 프로그램 추가)도 `true`다. 필드가 없는 예전 메시지는 `false`로 읽는다. |
+| `expo.features`                | 모든 기능 키를 카탈로그 순서로 담은 배열 `{key, configuredEnabled, effectiveEnabled}`(위 예시는 일부만 보인다). `/internal/expo/{id}`의 `features`와 같은 모양이며 정책 판단은 `effectiveEnabled`만 쓴다. 같은 트랜잭션의 커밋 직전 값이다. 키 목록과 의미는 [기능 설정](expo-feature-settings.md). 필드가 없는 예전 메시지는 "알 수 없음"으로 읽고 OFF·ON 어느 쪽으로도 채우지 않는다. 신규 쓰기 허용 판단에는 이 projection이 아니라 `GET /internal/expo/{id}`를 쓴다. |
+| `expo.featureRevision`         | 기능 설정 revision. 기능 선택값이 실제로 바뀔 때만 1 늘어난다. 필드가 없는 예전 메시지는 `0`으로 읽는다. |
 | 프로그램 `pendingRevision`     | 진행 중 변경이 이 프로그램을 수정·삭제하면 그 다음 revision, 아니면 `null`. 관리자 목록 API의 `pendingRevision`과 같다. 409 판단에는 `expo.programChangePending`을 쓴다. |
 
 배열은 프로그램은 id 순, 회차는 시작 일시·id 순이다. 메시지 하나가 그 박람회의 전부이므로 배열에 없는 프로그램·회차는 지워진 것이다. 신청 인원 집계(`applicationPerson`)는 싣지 않는다.
@@ -140,6 +149,7 @@
 - 일반·연수 프로그램 단건·목록 생성
 - 사전등록 회차 생성(`CreatePreregisterSessionServiceImpl`)과 수정·삭제 적용(`ApplyPreregisterSessionChangeServiceImpl`)
 - 참가자 전화번호 인증 설정 변경(값이 실제로 바뀔 때)
+- 기능 설정 일괄 변경(`UpdateExpoFeatureSettingsServiceImpl`, 기능 선택값이나 전화 인증 값이 실제로 바뀔 때만. 같은 값 재저장은 이벤트를 쌓지 않는다)
 - 박람회 삭제 시작(`deleting: true`)과 삭제 완료(tombstone)
 - 진행 중인 프로그램 변경의 생성과 해제(`programChangePending`): 생성은 `ProgramPolicySupport.stage`, 해제는 `ApplyProgramChangeServiceImpl`의 적용 완료, Application 거절(409)·적용 실패로 인한 해제, 삭제 프로그램의 원격 정리 완료. 그래서 프로그램 수정 한 번은 예약과 적용 두 건을 쌓는다.
 
